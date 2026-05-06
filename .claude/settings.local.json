@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/alwaysking/.claude/plugins/cache/superpowers-marketplace/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh --project-dir /Users/alwaysking/Desktop/outline-main)",
+      "Bash(mkdir -p /tmp/brainstorm-test)",
+      "Bash(env BRAINSTORM_DIR=\"/tmp/brainstorm-test\" BRAINSTORM_HOST=\"127.0.0.1\" BRAINSTORM_URL_HOST=\"localhost\" node server.cjs)",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "WebSearch",
+      "Bash(xxd)",
+      "Skill(superpowers-chrome:browsing)",
+      "Skill(superpowers-chrome:browsing:*)",
+      "Skill(browsing)",
+      "Skill(browsing:*)"
+    ]
+  }
+}
