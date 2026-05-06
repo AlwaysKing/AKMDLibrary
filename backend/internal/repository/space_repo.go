@@ -41,10 +41,18 @@ func (r *SpaceRepository) GetByID(id int) (*model.Space, error) {
 	`
 
 	var space model.Space
+	var icon, description sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
-		&space.ID, &space.Name, &space.Slug, &space.Icon,
-		&space.Description, &space.CreatedAt, &space.UpdatedAt,
+		&space.ID, &space.Name, &space.Slug, &icon,
+		&description, &space.CreatedAt, &space.UpdatedAt,
 	)
+
+	if icon.Valid {
+		space.Icon = icon.String
+	}
+	if description.Valid {
+		space.Description = description.String
+	}
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("space not found")
@@ -63,9 +71,10 @@ func (r *SpaceRepository) GetBySlug(slug string) (*model.Space, error) {
 	`
 
 	var space model.Space
+	var icon, description sql.NullString
 	err := r.db.QueryRow(query, slug).Scan(
-		&space.ID, &space.Name, &space.Slug, &space.Icon,
-		&space.Description, &space.CreatedAt, &space.UpdatedAt,
+		&space.ID, &space.Name, &space.Slug, &icon,
+		&description, &space.CreatedAt, &space.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -73,6 +82,13 @@ func (r *SpaceRepository) GetBySlug(slug string) (*model.Space, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get space: %w", err)
+	}
+
+	if icon.Valid {
+		space.Icon = icon.String
+	}
+	if description.Valid {
+		space.Description = description.String
 	}
 
 	return &space, nil
@@ -107,12 +123,21 @@ func (r *SpaceRepository) ListByUserID(userID int) ([]*model.Space, error) {
 	var spaces []*model.Space
 	for rows.Next() {
 		var space model.Space
+		var icon, description sql.NullString
 		if err := rows.Scan(
-			&space.ID, &space.Name, &space.Slug, &space.Icon,
-			&space.Description, &space.CreatedAt, &space.UpdatedAt,
+			&space.ID, &space.Name, &space.Slug, &icon,
+			&description, &space.CreatedAt, &space.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan space: %w", err)
 		}
+
+		if icon.Valid {
+			space.Icon = icon.String
+		}
+		if description.Valid {
+			space.Description = description.String
+		}
+
 		spaces = append(spaces, &space)
 	}
 

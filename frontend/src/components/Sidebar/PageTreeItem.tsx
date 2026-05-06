@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ChevronRight, FileText, ChevronDown } from 'lucide-react';
 import { Page } from '../../api/pages';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 
 interface PageTreeItemProps {
   page: Page;
@@ -12,11 +12,12 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
+  const { spaceSlug } = useParams<{ spaceSlug: string }>();
   const hasChildren = page.children && page.children.length > 0;
   const isActive = location.pathname.includes(`/p/${page.id}`);
 
   const handleClick = () => {
-    navigate(`/s/${page.space_id}/p/${page.id}`);
+    navigate(`/s/${spaceSlug}/p/${page.id}`);
   };
 
   return (

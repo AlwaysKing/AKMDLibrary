@@ -22,6 +22,7 @@ func main() {
 	docsDir := getEnv("DOCS_DIR", filepath.Join("..", "docs"))
 	dataDir := getEnv("DATA_DIR", filepath.Join("..", "data"))
 	jwtSecret := getEnv("JWT_SECRET", "dev-secret-change-me")
+	frontendDist := getEnv("FRONTEND_DIST", filepath.Join("..", "frontend", "dist"))
 
 	// Ensure directories exist
 	os.MkdirAll(docsDir, 0755)
@@ -47,6 +48,11 @@ func main() {
 	userService := service.NewUserService(userRepo, authService)
 	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageRepo, docsDir)
 	pageService := service.NewPageService(pageRepo, docsDir)
+
+	// Sync spaces from filesystem on startup
+	if err := spaceService.SyncFromFS(); err != nil {
+		log.Printf("Warning: failed to sync spaces from filesystem: %v", err)
+	}
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
@@ -120,17 +126,31 @@ func main() {
 	// Public upload files
 	r.Get("/api/upload/{filename}", uploadHandler.ServeUpload)
 
-	// Serve frontend static files
-	frontendDist := filepath.Join("..", "frontend", "dist")
-	if _, err := os.Stat(frontendDist); err == nil {
-		FileServer(r, "/", http.Dir(frontendDist))
-		log.Printf("Serving frontend from %s", frontendDist)
-	} else {
-		// SPA fallback
-		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, filepath.Join(frontendDist, "index.html"))
-		})
-	}
+	// Serve frontend static files + SPA fallback
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Clean the path
+		cleanPath := strings.TrimPrefix(r.URL.Path, "/")
+		if cleanPath == "" {
+			cleanPath = "index.html"
+		}
+
+		// Try to serve the exact file first
+		filePath := filepath.Join(frontendDist, cleanPath)
+		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+			http.ServeFile(w, r, filePath)
+			return
+		}
+
+		// SPA fallback: serve index.html for client-side routing
+		indexPath := filepath.Join(frontendDist, "index.html")
+		if _, err := os.Stat(indexPath); err == nil {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+
+		http.NotFound(w, r)
+	})
+	log.Printf("Serving frontend from %s", frontendDist)
 
 	log.Printf("Server starting on :%s", port)
 	log.Printf("Docs dir: %s", docsDir)

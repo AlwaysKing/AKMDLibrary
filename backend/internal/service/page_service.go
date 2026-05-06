@@ -31,6 +31,47 @@ func (s *PageService) GetTree(spaceSlug string) ([]*model.PageNode, error) {
 	return scanner.ScanPageTree(spaceSlug)
 }
 
+func (s *PageService) EnrichTreeWithDB(nodes []*model.PageNode, spaceID int) {
+	// Get all pages from database for this space
+	dbPages, err := s.pageRepo.ListBySpaceID(spaceID)
+	if err != nil {
+		return
+	}
+
+	// Build a lookup map by file_path
+	pathMap := make(map[string]*model.Page)
+	for _, p := range dbPages {
+		pathMap[p.FilePath] = p
+	}
+
+	// Enrich nodes recursively using exact path matching
+	s.enrichNodes(nodes, pathMap)
+}
+
+func (s *PageService) enrichNodes(nodes []*model.PageNode, pathMap map[string]*model.Page) {
+	for _, node := range nodes {
+		// Use exact file path matching if available
+		if node.FilePath != "" {
+			if page, ok := pathMap[node.FilePath]; ok {
+				node.ID = page.ID
+				if page.Icon != "" {
+					node.Icon = page.Icon
+				}
+				if page.SortOrder != 0 {
+					node.SortOrder = page.SortOrder
+				}
+				if page.Title != "" {
+					node.Title = page.Title
+				}
+			}
+		}
+
+		if len(node.Children) > 0 {
+			s.enrichNodes(node.Children, pathMap)
+		}
+	}
+}
+
 func (s *PageService) GetByID(spaceSlug string, pageID int) (*model.Page, error) {
 	page, err := s.pageRepo.GetByID(pageID)
 	if err != nil {

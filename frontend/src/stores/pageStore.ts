@@ -26,10 +26,11 @@ export const usePageStore = create<PageState>((set) => ({
   fetchPage: async (spaceSlug, pageId) => {
     set({ isLoading: true, error: null });
     try {
-      const pageContent = await pagesApi.get(spaceSlug, pageId);
+      const page = await pagesApi.get(spaceSlug, pageId);
+      const content = page.content || '';
       set({
-        currentPage: pageContent.page,
-        currentContent: pageContent.content,
+        currentPage: page,
+        currentContent: content,
         isLoading: false,
       });
     } catch (error: any) {

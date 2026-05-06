@@ -42,9 +42,10 @@ func (r *UserRepository) GetByID(id int) (*model.User, error) {
 	`
 
 	var user model.User
+	var avatarURL sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
 		&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
-		&user.AvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
+		&avatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -52,6 +53,10 @@ func (r *UserRepository) GetByID(id int) (*model.User, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if avatarURL.Valid {
+		user.AvatarURL = avatarURL.String
 	}
 
 	return &user, nil
@@ -64,9 +69,10 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 	`
 
 	var user model.User
+	var avatarURL sql.NullString
 	err := r.db.QueryRow(query, username).Scan(
 		&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
-		&user.AvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
+		&avatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -74,6 +80,10 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if avatarURL.Valid {
+		user.AvatarURL = avatarURL.String
 	}
 
 	return &user, nil
@@ -94,12 +104,18 @@ func (r *UserRepository) List() ([]*model.User, error) {
 	var users []*model.User
 	for rows.Next() {
 		var user model.User
+		var avatarURL sql.NullString
 		if err := rows.Scan(
 			&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
-			&user.AvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
+			&avatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
+
+		if avatarURL.Valid {
+			user.AvatarURL = avatarURL.String
+		}
+
 		users = append(users, &user)
 	}
 

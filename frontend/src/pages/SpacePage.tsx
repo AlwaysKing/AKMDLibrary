@@ -4,28 +4,28 @@ import { useSpaceStore } from '../stores/spaceStore';
 import { usePageStore } from '../stores/pageStore';
 
 export default function SpacePage() {
-  const { slug } = useParams<{ slug: string }>();
+  const { spaceSlug } = useParams<{ spaceSlug: string }>();
   const navigate = useNavigate();
   const { currentSpace, setCurrentSpace, pageTree } = useSpaceStore();
   const { createPage } = usePageStore();
 
   useEffect(() => {
-    if (slug && (!currentSpace || currentSpace.slug !== slug)) {
+    if (spaceSlug && (!currentSpace || currentSpace.slug !== spaceSlug)) {
       useSpaceStore.getState().fetchSpaces().then(() => {
         const spaces = useSpaceStore.getState().spaces;
-        const space = spaces.find((s) => s.slug === slug);
+        const space = spaces.find((s) => s.slug === spaceSlug);
         if (space) {
           setCurrentSpace(space);
         }
       });
     }
-  }, [slug, currentSpace, setCurrentSpace]);
+  }, [spaceSlug, currentSpace, setCurrentSpace]);
 
   const handleCreateFirstPage = async () => {
-    if (!slug) return;
+    if (!spaceSlug) return;
     try {
-      const newPage = await createPage(slug, 'Welcome');
-      navigate(`/s/${slug}/p/${newPage.id}`);
+      const newPage = await createPage(spaceSlug, 'Welcome');
+      navigate(`/s/${spaceSlug}/p/${newPage.id}`);
     } catch (error) {
       console.error('Failed to create page:', error);
     }
@@ -63,7 +63,7 @@ export default function SpacePage() {
               {pageTree.map((page) => (
                 <button
                   key={page.id}
-                  onClick={() => navigate(`/s/${slug}/p/${page.id}`)}
+                  onClick={() => navigate(`/s/${spaceSlug}/p/${page.id}`)}
                   className="w-full text-left px-4 py-3 rounded-lg hover:bg-notion-hover transition-colors"
                 >
                   <div className="flex items-center gap-2">

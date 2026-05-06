@@ -6,5 +6,9 @@ data/data.db
 frontend/node_modules/
 frontend/dist/
 backend/backend
+mdlibrary
+backend/mdlibrary
+*.png
+test-*.cjs
 .env
 *.exe

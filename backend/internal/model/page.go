@@ -17,10 +17,11 @@ type Page struct {
 }
 
 type PageNode struct {
-	ID        int        `json:"id"`
-	Title     string     `json:"title"`
-	Icon      string     `json:"icon"`
-	SortOrder float64    `json:"sort_order"`
+	ID        int         `json:"id"`
+	Title     string      `json:"title"`
+	Icon      string      `json:"icon"`
+	SortOrder float64     `json:"sort_order"`
+	FilePath  string      `json:"-"` // Internal: used for DB enrichment, not exposed in JSON
 	Children  []*PageNode `json:"children,omitempty"`
 }
 

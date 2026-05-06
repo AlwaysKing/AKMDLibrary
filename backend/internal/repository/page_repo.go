@@ -42,11 +42,19 @@ func (r *PageRepository) GetByID(id int) (*model.Page, error) {
 	`
 
 	var page model.Page
+	var icon, coverURL sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
 		&page.ID, &page.SpaceID, &page.Title, &page.FilePath,
-		&page.Icon, &page.CoverURL, &page.SortOrder,
+		&icon, &coverURL, &page.SortOrder,
 		&page.CreatedAt, &page.UpdatedAt,
 	)
+
+	if icon.Valid {
+		page.Icon = icon.String
+	}
+	if coverURL.Valid {
+		page.CoverURL = coverURL.String
+	}
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("page not found")
@@ -65,9 +73,10 @@ func (r *PageRepository) GetBySpaceAndPath(spaceID int, filePath string) (*model
 	`
 
 	var page model.Page
+	var icon, coverURL sql.NullString
 	err := r.db.QueryRow(query, spaceID, filePath).Scan(
 		&page.ID, &page.SpaceID, &page.Title, &page.FilePath,
-		&page.Icon, &page.CoverURL, &page.SortOrder,
+		&icon, &coverURL, &page.SortOrder,
 		&page.CreatedAt, &page.UpdatedAt,
 	)
 
@@ -76,6 +85,13 @@ func (r *PageRepository) GetBySpaceAndPath(spaceID int, filePath string) (*model
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page: %w", err)
+	}
+
+	if icon.Valid {
+		page.Icon = icon.String
+	}
+	if coverURL.Valid {
+		page.CoverURL = coverURL.String
 	}
 
 	return &page, nil
@@ -97,13 +113,22 @@ func (r *PageRepository) ListBySpaceID(spaceID int) ([]*model.Page, error) {
 	var pages []*model.Page
 	for rows.Next() {
 		var page model.Page
+		var icon, coverURL sql.NullString
 		if err := rows.Scan(
 			&page.ID, &page.SpaceID, &page.Title, &page.FilePath,
-			&page.Icon, &page.CoverURL, &page.SortOrder,
+			&icon, &coverURL, &page.SortOrder,
 			&page.CreatedAt, &page.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan page: %w", err)
 		}
+
+		if icon.Valid {
+			page.Icon = icon.String
+		}
+		if coverURL.Valid {
+			page.CoverURL = coverURL.String
+		}
+
 		pages = append(pages, &page)
 	}
 
@@ -111,12 +136,16 @@ func (r *PageRepository) ListBySpaceID(spaceID int) ([]*model.Page, error) {
 }
 
 func (r *PageRepository) Update(id int, page *model.UpdatePageRequest) (*model.Page, error) {
-	query := `
-		UPDATE pages SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-	`
-
-	if _, err := r.db.Exec(query, page.Title, id); err != nil {
-		return nil, fmt.Errorf("failed to update page: %w", err)
+	if page.Title != "" {
+		query := `UPDATE pages SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+		if _, err := r.db.Exec(query, page.Title, id); err != nil {
+			return nil, fmt.Errorf("failed to update page: %w", err)
+		}
+	} else {
+		query := `UPDATE pages SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+		if _, err := r.db.Exec(query, id); err != nil {
+			return nil, fmt.Errorf("failed to update page: %w", err)
+		}
 	}
 
 	return r.GetByID(id)

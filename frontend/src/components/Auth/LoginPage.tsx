@@ -17,7 +17,14 @@ export default function LoginPage() {
 
     try {
       await login({ username, password });
-      navigate('/s/default');
+      // Fetch spaces to find first available
+      const { useSpaceStore } = await import('../../stores/spaceStore');
+      const spaces = await useSpaceStore.getState().fetchSpaces().then(() => useSpaceStore.getState().spaces);
+      if (spaces.length > 0) {
+        navigate(`/s/${spaces[0].slug}`);
+      } else {
+        navigate('/');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');
       setIsLoading(false);

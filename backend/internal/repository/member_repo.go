@@ -45,10 +45,11 @@ func (r *MemberRepository) GetByID(id int) (*model.SpaceMember, error) {
 
 	var member model.SpaceMember
 	var user model.User
+	var userAvatarURL sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
 		&member.ID, &member.SpaceID, &member.UserID, &member.Role, &member.CreatedAt,
 		&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
-		&user.AvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
+		&userAvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -56,6 +57,10 @@ func (r *MemberRepository) GetByID(id int) (*model.SpaceMember, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get member: %w", err)
+	}
+
+	if userAvatarURL.Valid {
+		user.AvatarURL = userAvatarURL.String
 	}
 
 	member.User = &user
@@ -104,13 +109,19 @@ func (r *MemberRepository) ListBySpaceID(spaceID int) ([]*model.SpaceMember, err
 	for rows.Next() {
 		var member model.SpaceMember
 		var user model.User
+		var userAvatarURL sql.NullString
 		if err := rows.Scan(
 			&member.ID, &member.SpaceID, &member.UserID, &member.Role, &member.CreatedAt,
 			&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
-			&user.AvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
+			&userAvatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
+
+		if userAvatarURL.Valid {
+			user.AvatarURL = userAvatarURL.String
+		}
+
 		member.User = &user
 		members = append(members, &member)
 	}

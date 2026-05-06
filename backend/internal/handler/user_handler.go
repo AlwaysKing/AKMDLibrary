@@ -7,6 +7,7 @@ import (
 
 	"github.com/alwaysking/mdlibrary/internal/model"
 	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/go-chi/chi/v5"
 )
 
 type UserHandler struct {
@@ -61,11 +62,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/api/users/"):]
-	if idStr == "" {
-		http.Error(w, "User ID required", http.StatusBadRequest)
-		return
-	}
+	idStr := chi.URLParam(r, "id")
 
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -86,11 +83,7 @@ func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/api/users/"):]
-	if idStr == "" {
-		http.Error(w, "User ID required", http.StatusBadRequest)
-		return
-	}
+	idStr := chi.URLParam(r, "id")
 
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -117,11 +110,7 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/api/users/"):]
-	if idStr == "" {
-		http.Error(w, "User ID required", http.StatusBadRequest)
-		return
-	}
+	idStr := chi.URLParam(r, "id")
 
 	id, err := strconv.Atoi(idStr)
 	if err != nil {

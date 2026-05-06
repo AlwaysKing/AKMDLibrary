@@ -10,6 +10,7 @@ export interface Page {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  content?: string;
   children?: Page[];
 }
 
@@ -31,8 +32,8 @@ export const pagesApi = {
     return response.data;
   },
 
-  get: async (spaceSlug: string, pageId: number): Promise<PageContent> => {
-    const response = await apiClient.get<PageContent>(`/spaces/${spaceSlug}/pages/${pageId}`);
+  get: async (spaceSlug: string, pageId: number): Promise<Page> => {
+    const response = await apiClient.get<Page>(`/spaces/${spaceSlug}/pages/${pageId}`);
     return response.data;
   },
 

@@ -1,0 +1,11 @@
+node_modules
+frontend/node_modules
+frontend/dist
+data
+*.db
+*.png
+test-*.cjs
+test-*.png
+mdlibrary
+.git
+.claude

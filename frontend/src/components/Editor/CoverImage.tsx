@@ -34,7 +34,8 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
       if (!response.ok) throw new Error('Upload failed');
 
       const data = await response.json();
-      await updateMetadata(spaceSlug, pageId, { cover_url: data.url });
+      const coverUrl = data.url || `/api/upload/${data.path}`;
+      await updateMetadata(spaceSlug, pageId, { cover_url: coverUrl });
     } catch (error) {
       console.error('Failed to upload cover:', error);
     } finally {

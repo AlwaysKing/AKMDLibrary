@@ -77,38 +77,49 @@ func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
 				Title:     title,
 				Icon:      "",
 				SortOrder: 0,
+				FilePath:  spaceSlug + "/" + entry.Name(),
 				Children:  nil,
 			})
 			continue
 		}
 
-		// If it's a directory, check for corresponding .md file
+		// If it's a directory
 		if entry.IsDir() {
-			mdFile := filepath.Join(spacePath, entry.Name()+".md")
-			if _, err := os.Stat(mdFile); err == nil {
-				// .md file exists - this is a page with children
-				children, _ := s.scanDirectory(filepath.Join(spacePath, entry.Name()), 0)
-				nodes = append(nodes, &model.PageNode{
-					ID:        generateID(entry.Name()),
-					Title:     entry.Name(),
-					Icon:      "",
-					SortOrder: 0,
-					Children:  children,
-				})
-			} else {
-				// No .md file - might be a child directory without a parent page
-				// Skip for now, or treat as a page
-				children, _ := s.scanDirectory(filepath.Join(spacePath, entry.Name()), 0)
-				if len(children) > 0 {
-					nodes = append(nodes, &model.PageNode{
-						ID:        generateID(entry.Name()),
-						Title:     entry.Name(),
-						Icon:      "",
-						SortOrder: 0,
-						Children:  children,
-					})
-				}
+			// Check if the directory contains a same-name .md file (e.g., Getting Started/Getting Started.md)
+			internalMD := filepath.Join(spacePath, entry.Name(), entry.Name()+".md")
+			hasInternalMD := false
+			if _, err := os.Stat(internalMD); err == nil {
+				hasInternalMD = true
 			}
+
+			// Check for sibling .md file at root level (e.g., Getting Started.md alongside Getting Started/)
+			siblingMD := filepath.Join(spacePath, entry.Name()+".md")
+			hasSiblingMD := false
+			if _, err := os.Stat(siblingMD); err == nil {
+				hasSiblingMD = true
+			}
+
+			// Determine file path for this page
+			var pageFilePath string
+			if hasInternalMD {
+				// Directory contains same-name .md: path is spaceSlug/DirName/DirName.md
+				pageFilePath = spaceSlug + "/" + entry.Name() + "/" + entry.Name() + ".md"
+			} else if hasSiblingMD {
+				// Sibling .md file: path is spaceSlug/DirName.md
+				pageFilePath = spaceSlug + "/" + entry.Name() + ".md"
+			}
+
+			// Scan for children, skipping the same-name .md file
+			children := s.scanDirectorySkipSelf(filepath.Join(spacePath, entry.Name()), entry.Name(), spaceSlug+"/"+entry.Name())
+
+			nodes = append(nodes, &model.PageNode{
+				ID:        generateID(entry.Name()),
+				Title:     entry.Name(),
+				Icon:      "",
+				SortOrder: 0,
+				FilePath:  pageFilePath,
+				Children:  children,
+			})
 		}
 	}
 
@@ -120,20 +131,26 @@ func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
 	return nodes, nil
 }
 
-func (s *Scanner) scanDirectory(dirPath string, depth int) ([]*model.PageNode, error) {
-	if depth > 10 { // Prevent infinite recursion
-		return nil, nil
-	}
-
+// scanDirectorySkipSelf scans a directory for child pages, skipping the .md file
+// that matches the parent directory name (since it represents the parent page itself).
+// parentName is the name of the parent directory (e.g., "Getting Started").
+// pathPrefix is the relative path prefix for building FilePath (e.g., "spaceSlug/Getting Started").
+func (s *Scanner) scanDirectorySkipSelf(dirPath string, parentName string, pathPrefix string) []*model.PageNode {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
 	var nodes []*model.PageNode
 	for _, entry := range entries {
 		// Skip hidden files and public directory
 		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "public" {
+			continue
+		}
+
+		// Skip the .md file that matches the parent directory name
+		// (it represents the parent page content, not a child)
+		if entry.Name() == parentName+".md" {
 			continue
 		}
 
@@ -145,23 +162,45 @@ func (s *Scanner) scanDirectory(dirPath string, depth int) ([]*model.PageNode, e
 				Title:     title,
 				Icon:      "",
 				SortOrder: 0,
+				FilePath:  pathPrefix + "/" + entry.Name(),
 				Children:  nil,
 			})
 			continue
 		}
 
-		// If it's a directory, check for children
+		// If it's a directory
 		if entry.IsDir() {
-			children, _ := s.scanDirectory(filepath.Join(dirPath, entry.Name()), depth+1)
-			if len(children) > 0 {
-				nodes = append(nodes, &model.PageNode{
-					ID:        generateID(entry.Name()),
-					Title:     entry.Name(),
-					Icon:      "",
-					SortOrder: 0,
-					Children:  children,
-				})
+			// Check for internal same-name .md
+			internalMD := filepath.Join(dirPath, entry.Name(), entry.Name()+".md")
+			hasInternalMD := false
+			if _, err := os.Stat(internalMD); err == nil {
+				hasInternalMD = true
 			}
+
+			// Check for sibling .md
+			siblingMD := filepath.Join(dirPath, entry.Name()+".md")
+			hasSiblingMD := false
+			if _, err := os.Stat(siblingMD); err == nil {
+				hasSiblingMD = true
+			}
+
+			var pageFilePath string
+			if hasInternalMD {
+				pageFilePath = pathPrefix + "/" + entry.Name() + "/" + entry.Name() + ".md"
+			} else if hasSiblingMD {
+				pageFilePath = pathPrefix + "/" + entry.Name() + ".md"
+			}
+
+			children := s.scanDirectorySkipSelf(filepath.Join(dirPath, entry.Name()), entry.Name(), pathPrefix+"/"+entry.Name())
+
+			nodes = append(nodes, &model.PageNode{
+				ID:        generateID(entry.Name()),
+				Title:     entry.Name(),
+				Icon:      "",
+				SortOrder: 0,
+				FilePath:  pageFilePath,
+				Children:  children,
+			})
 		}
 	}
 
@@ -170,7 +209,7 @@ func (s *Scanner) scanDirectory(dirPath string, depth int) ([]*model.PageNode, e
 		return nodes[i].Title < nodes[j].Title
 	})
 
-	return nodes, nil
+	return nodes
 }
 
 func generateSlug(name string) string {

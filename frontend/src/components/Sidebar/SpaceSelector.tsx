@@ -2,22 +2,29 @@ import { useEffect, useState } from 'react';
 import { ChevronDown, MoreHorizontal } from 'lucide-react';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { Space } from '../../api/spaces';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 export default function SpaceSelector() {
   const [isOpen, setIsOpen] = useState(false);
   const { spaces, currentSpace, fetchSpaces, setCurrentSpace } = useSpaceStore();
   const navigate = useNavigate();
+  const { spaceSlug } = useParams<{ spaceSlug: string }>();
 
   useEffect(() => {
     fetchSpaces();
   }, [fetchSpaces]);
 
+  // Set current space based on URL slug
   useEffect(() => {
-    if (spaces.length > 0 && !currentSpace) {
+    if (spaces.length > 0 && spaceSlug) {
+      const spaceFromUrl = spaces.find(s => s.slug === spaceSlug);
+      if (spaceFromUrl && (!currentSpace || currentSpace.slug !== spaceSlug)) {
+        setCurrentSpace(spaceFromUrl);
+      }
+    } else if (spaces.length > 0 && !currentSpace && !spaceSlug) {
       setCurrentSpace(spaces[0]);
     }
-  }, [spaces, currentSpace, setCurrentSpace]);
+  }, [spaces, spaceSlug, currentSpace, setCurrentSpace]);
 
   const handleSelectSpace = (space: Space) => {
     setCurrentSpace(space);

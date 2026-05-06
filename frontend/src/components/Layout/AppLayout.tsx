@@ -8,11 +8,7 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen bg-notion-bg">
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
-      <main
-        className={`flex-1 overflow-auto transition-all duration-200 ${
-          sidebarCollapsed ? 'ml-0' : 'ml-60'
-        }`}
-      >
+      <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
     </div>

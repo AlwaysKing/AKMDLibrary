@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/alwaysking/mdlibrary/internal/middleware"
 	"github.com/alwaysking/mdlibrary/internal/model"
 	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/go-chi/chi/v5"
 )
 
 type SpaceHandler struct {
@@ -33,11 +33,7 @@ func (h *SpaceHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) Get(w http.ResponseWriter, r *http.Request) {
-	slug := r.URL.Path[len("/api/spaces/"):]
-	if slug == "" {
-		http.Error(w, "Space slug required", http.StatusBadRequest)
-		return
-	}
+	slug := chi.URLParam(r, "slug")
 
 	space, err := h.spaceService.GetBySlug(slug)
 	if err != nil {
@@ -74,11 +70,7 @@ func (h *SpaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) Update(w http.ResponseWriter, r *http.Request) {
-	slug := r.URL.Path[len("/api/spaces/"):]
-	if slug == "" {
-		http.Error(w, "Space slug required", http.StatusBadRequest)
-		return
-	}
+	slug := chi.URLParam(r, "slug")
 
 	var req model.UpdateSpaceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -97,11 +89,7 @@ func (h *SpaceHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	slug := r.URL.Path[len("/api/spaces/"):]
-	if slug == "" {
-		http.Error(w, "Space slug required", http.StatusBadRequest)
-		return
-	}
+	slug := chi.URLParam(r, "slug")
 
 	if err := h.spaceService.Delete(slug); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -112,11 +100,7 @@ func (h *SpaceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
-	slug := r.URL.Path[len("/api/spaces/"):]
-	if slug == "" {
-		http.Error(w, "Space slug required", http.StatusBadRequest)
-		return
-	}
+	slug := chi.URLParam(r, "slug")
 
 	space, err := h.spaceService.GetBySlug(slug)
 	if err != nil {
@@ -135,11 +119,7 @@ func (h *SpaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) AddMember(w http.ResponseWriter, r *http.Request) {
-	slug := r.URL.Path[len("/api/spaces/"):]
-	if slug == "" {
-		http.Error(w, "Space slug required", http.StatusBadRequest)
-		return
-	}
+	slug := chi.URLParam(r, "slug")
 
 	var req model.AddMemberRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -165,15 +145,8 @@ func (h *SpaceHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) UpdateMember(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /api/spaces/:slug/members/:id
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 5 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	memberIDStr := parts[4]
+	slug := chi.URLParam(r, "slug")
+	memberIDStr := chi.URLParam(r, "id")
 
 	memberID, err := strconv.Atoi(memberIDStr)
 	if err != nil {
@@ -204,15 +177,8 @@ func (h *SpaceHandler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SpaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /api/spaces/:slug/members/:id
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 5 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	memberIDStr := parts[4]
+	slug := chi.URLParam(r, "slug")
+	memberIDStr := chi.URLParam(r, "id")
 
 	memberID, err := strconv.Atoi(memberIDStr)
 	if err != nil {
@@ -232,8 +198,4 @@ func (h *SpaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func splitPath(path string) []string {
-	return strings.Split(strings.Trim(path, "/"), "/")
 }

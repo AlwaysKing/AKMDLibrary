@@ -8,6 +8,7 @@ import (
 
 	"github.com/alwaysking/mdlibrary/internal/model"
 	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/go-chi/chi/v5"
 )
 
 type PageHandler struct {
@@ -23,14 +24,7 @@ func NewPageHandler(pageService *service.PageService, spaceService *service.Spac
 }
 
 func (h *PageHandler) GetTree(w http.ResponseWriter, r *http.Request) {
-	// Extract slug from path: /api/spaces/:slug/pages
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
+	slug := chi.URLParam(r, "slug")
 
 	tree, err := h.pageService.GetTree(slug)
 	if err != nil {
@@ -38,20 +32,19 @@ func (h *PageHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich tree with database IDs and metadata
+	space, err := h.spaceService.GetBySlug(slug)
+	if err == nil {
+		h.pageService.EnrichTreeWithDB(tree, space.ID)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tree)
 }
 
 func (h *PageHandler) GetByID(w http.ResponseWriter, r *http.Request) {
-	// Extract slug and id from path: /api/spaces/:slug/pages/:id
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 5 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	pageIDStr := parts[4]
+	slug := chi.URLParam(r, "slug")
+	pageIDStr := chi.URLParam(r, "id")
 
 	pageID, err := strconv.Atoi(pageIDStr)
 	if err != nil {
@@ -70,14 +63,7 @@ func (h *PageHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PageHandler) Create(w http.ResponseWriter, r *http.Request) {
-	// Extract slug from path: /api/spaces/:slug/pages
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
+	slug := chi.URLParam(r, "slug")
 
 	var req model.CreatePageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -109,15 +95,8 @@ func (h *PageHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PageHandler) Update(w http.ResponseWriter, r *http.Request) {
-	// Extract slug and id from path: /api/spaces/:slug/pages/:id
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 5 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	pageIDStr := parts[4]
+	slug := chi.URLParam(r, "slug")
+	pageIDStr := chi.URLParam(r, "id")
 
 	pageID, err := strconv.Atoi(pageIDStr)
 	if err != nil {
@@ -142,15 +121,8 @@ func (h *PageHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PageHandler) UpdateMeta(w http.ResponseWriter, r *http.Request) {
-	// Extract slug and id from path: /api/spaces/:slug/pages/:id/meta
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 6 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	pageIDStr := parts[4]
+	slug := chi.URLParam(r, "slug")
+	pageIDStr := chi.URLParam(r, "id")
 
 	pageID, err := strconv.Atoi(pageIDStr)
 	if err != nil {
@@ -175,15 +147,8 @@ func (h *PageHandler) UpdateMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PageHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	// Extract slug and id from path: /api/spaces/:slug/pages/:id
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 5 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	pageIDStr := parts[4]
+	slug := chi.URLParam(r, "slug")
+	pageIDStr := chi.URLParam(r, "id")
 
 	pageID, err := strconv.Atoi(pageIDStr)
 	if err != nil {
@@ -200,22 +165,30 @@ func (h *PageHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PageHandler) ServeAsset(w http.ResponseWriter, r *http.Request) {
-	// Extract slug, id, and asset path: /api/spaces/:slug/pages/:id/assets/*
-	parts := splitPath(r.URL.Path)
-	if len(parts) < 7 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	slug := parts[3]
-	pageIDStr := parts[4]
-	assetPath := strings.Join(parts[6:], "/")
+	slug := chi.URLParam(r, "slug")
+	pageIDStr := chi.URLParam(r, "id")
 
 	pageID, err := strconv.Atoi(pageIDStr)
 	if err != nil {
 		http.Error(w, "Invalid page ID", http.StatusBadRequest)
 		return
 	}
+
+	// Extract asset path from the wildcard: /api/spaces/:slug/pages/:id/assets/*
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// Find "assets" in the path and take everything after it
+	assetIdx := -1
+	for i, p := range parts {
+		if p == "assets" {
+			assetIdx = i
+			break
+		}
+	}
+	if assetIdx == -1 || assetIdx+1 >= len(parts) {
+		http.Error(w, "Invalid asset path", http.StatusBadRequest)
+		return
+	}
+	assetPath := strings.Join(parts[assetIdx+1:], "/")
 
 	filePath, err := h.pageService.GetAssetPath(slug, pageID, assetPath)
 	if err != nil {
