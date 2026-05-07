@@ -36,7 +36,7 @@ export default function PageIcon({ icon, spaceSlug, pageId }: PageIconProps) {
           onClick={() => setIsOpen(true)}
           className="text-sm text-notion-textSecondary hover:text-notion-text hover:bg-notion-hover px-2 py-1 rounded transition-colors"
         >
-          Add icon
+          添加图标
         </button>
       ) : (
         <button
@@ -52,7 +52,7 @@ export default function PageIcon({ icon, spaceSlug, pageId }: PageIconProps) {
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
           <div className="absolute left-0 top-full mt-2 bg-white border border-notion-border rounded-xl shadow-xl z-50 w-72 overflow-hidden">
             <div className="p-3 border-b border-notion-border">
-              <p className="text-xs font-medium text-notion-textSecondary uppercase tracking-wider">Choose icon</p>
+              <p className="text-xs font-medium text-notion-textSecondary uppercase tracking-wider">选择图标</p>
             </div>
             <div className="p-3 max-h-64 overflow-y-auto">
               {Object.entries(EMOJI_CATEGORIES).map(([category, emojis]) => (
@@ -79,7 +79,7 @@ export default function PageIcon({ icon, spaceSlug, pageId }: PageIconProps) {
                   className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                 >
                   <X className="w-4 h-4" />
-                  Remove icon
+                  移除图标
                 </button>
               </div>
             )}

@@ -32,7 +32,7 @@ export default function SpacePage() {
   const handleCreateFirstPage = async () => {
     if (!spaceSlug) return;
     try {
-      const newPage = await createPage(spaceSlug, 'Getting Started');
+      const newPage = await createPage(spaceSlug, '快速开始');
       navigate(`/s/${spaceSlug}/p/${newPage.id}`);
     } catch (error) {
       console.error('Failed to create page:', error);
@@ -50,7 +50,7 @@ export default function SpacePage() {
             {currentSpace?.name || 'Space'}
           </h1>
           <p className="text-notion-textSecondary text-sm">
-            This workspace is empty
+            此工作区暂无内容
           </p>
         </div>
 
@@ -59,7 +59,7 @@ export default function SpacePage() {
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-notion-text text-white rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium"
         >
           <Plus className="w-4 h-4" />
-          Create your first page
+          创建第一个页面
         </button>
       </div>
     </div>

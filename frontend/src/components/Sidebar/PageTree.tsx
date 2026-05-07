@@ -7,7 +7,7 @@ export default function PageTree() {
   if (!currentSpace) {
     return (
       <div className="text-notion-textSecondary text-sm px-2 py-4">
-        Select a space to view pages
+        选择一个空间以查看页面
       </div>
     );
   }
@@ -15,7 +15,7 @@ export default function PageTree() {
   if (pageTree.length === 0) {
     return (
       <div className="text-notion-textSecondary text-sm px-2 py-4">
-        No pages yet. Create your first page!
+        暂无页面，创建你的第一个页面吧！
       </div>
     );
   }

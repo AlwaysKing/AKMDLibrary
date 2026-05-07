@@ -12,7 +12,7 @@ export default function NewPageButton() {
     if (!currentSpace) return;
 
     try {
-      const newPage = await createPage(currentSpace.slug, 'Untitled');
+      const newPage = await createPage(currentSpace.slug, '未命名页面');
       navigate(`/s/${currentSpace.slug}/p/${newPage.id}`);
     } catch (error) {
       console.error('Failed to create page:', error);
@@ -26,7 +26,7 @@ export default function NewPageButton() {
       className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-notion-hover transition-colors text-left text-notion-textSecondary disabled:opacity-50 disabled:cursor-not-allowed"
     >
       <Plus className="w-4 h-4" />
-      <span className="text-sm">New page</span>
+      <span className="text-sm">新建页面</span>
     </button>
   );
 }

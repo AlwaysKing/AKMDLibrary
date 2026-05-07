@@ -51,7 +51,7 @@ export default function AdminPage() {
 
   const handleDeleteUser = async (id: number) => {
     if (id === currentUser?.id) {
-      setError('You cannot delete your own account');
+      setError('不能删除自己的账号');
       return;
     }
     try {
@@ -87,15 +87,15 @@ export default function AdminPage() {
     <div className="max-w-6xl mx-auto py-8 px-4">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-semibold text-notion-text">Admin Panel</h1>
-          <p className="text-notion-textSecondary mt-1">Manage users and permissions</p>
+          <h1 className="text-3xl font-semibold text-notion-text">管理面板</h1>
+          <p className="text-notion-textSecondary mt-1">管理用户和权限</p>
         </div>
         <button
           onClick={() => setIsCreating(!isCreating)}
           className="flex items-center gap-2 px-4 py-2 bg-notion-text text-white rounded-lg hover:bg-gray-700 transition-colors"
         >
           <Plus className="w-4 h-4" />
-          Add User
+          添加用户
         </button>
       </div>
 
@@ -107,10 +107,10 @@ export default function AdminPage() {
 
       {isCreating && (
         <form onSubmit={handleCreateUser} className="bg-notion-sidebarBg rounded-lg p-6 mb-6">
-          <h3 className="text-lg font-medium text-notion-text mb-4">Create New User</h3>
+          <h3 className="text-lg font-medium text-notion-text mb-4">创建新用户</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-notion-text mb-1">Username</label>
+              <label className="block text-sm font-medium text-notion-text mb-1">用户名</label>
               <input
                 type="text"
                 value={newUser.username}
@@ -120,7 +120,7 @@ export default function AdminPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-notion-text mb-1">Password</label>
+              <label className="block text-sm font-medium text-notion-text mb-1">密码</label>
               <input
                 type="password"
                 value={newUser.password}
@@ -130,7 +130,7 @@ export default function AdminPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-notion-text mb-1">Display Name</label>
+              <label className="block text-sm font-medium text-notion-text mb-1">显示名称</label>
               <input
                 type="text"
                 value={newUser.display_name}
@@ -140,14 +140,14 @@ export default function AdminPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-notion-text mb-1">Role</label>
+              <label className="block text-sm font-medium text-notion-text mb-1">角色</label>
               <select
                 value={newUser.role}
                 onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
                 className="w-full px-3 py-2 border border-notion-border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
               </select>
             </div>
           </div>
@@ -156,14 +156,14 @@ export default function AdminPage() {
               type="submit"
               className="px-4 py-2 bg-notion-text text-white rounded hover:bg-gray-700 transition-colors"
             >
-              Create User
+              创建用户
             </button>
             <button
               type="button"
               onClick={() => setIsCreating(false)}
               className="px-4 py-2 border border-notion-border rounded hover:bg-notion-hover transition-colors"
             >
-              Cancel
+              取消
             </button>
           </div>
         </form>
@@ -174,19 +174,18 @@ export default function AdminPage() {
           <thead className="bg-notion-sidebarBg">
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">
-                User
+                用户
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">
-                Username
+                用户名              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">
+                角色
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">
-                Role
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">
-                Created
+                创建时间
               </th>
               <th className="px-6 py-3 text-right text-xs font-medium text-notion-textSecondary uppercase tracking-wider">
-                Actions
+                操作
               </th>
             </tr>
           </thead>
@@ -210,8 +209,8 @@ export default function AdminPage() {
                         onChange={(e) => handleUpdateUser(user.id, { role: e.target.value as 'admin' | 'user' })}
                         className="px-2 py-1 border border-notion-border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
-                        <option value="user">User</option>
-                        <option value="admin">Admin</option>
+                        <option value="user">普通用户</option>
+                        <option value="admin">管理员</option>
                       </select>
                     </td>
                     <td className="px-6 py-4 text-notion-textSecondary">

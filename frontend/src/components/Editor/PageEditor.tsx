@@ -66,10 +66,10 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
           {isSaving ? (
             <span className="flex items-center gap-2 text-gray-600">
               <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-gray-600" />
-              Saving...
+              保存中...
             </span>
           ) : (
-            <span className="text-gray-500">Unsaved changes...</span>
+            <span className="text-gray-500">未保存的更改...</span>
           )}
         </div>
       )}

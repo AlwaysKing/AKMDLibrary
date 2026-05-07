@@ -40,7 +40,7 @@ export default function SpaceSelector() {
       >
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {currentSpace?.icon && <span className="text-lg">{currentSpace.icon}</span>}
-          <span className="font-medium text-notion-text truncate">{currentSpace?.name || 'Select a space'}</span>
+          <span className="font-medium text-notion-text truncate">{currentSpace?.name || '选择空间'}</span>
         </div>
         <ChevronDown className="w-4 h-4 text-notion-textSecondary flex-shrink-0" />
       </button>
@@ -67,7 +67,7 @@ export default function SpaceSelector() {
               className="w-full flex items-center gap-2 px-3 py-2 hover:bg-notion-hover transition-colors text-left text-notion-textSecondary"
             >
               <MoreHorizontal className="w-4 h-4" />
-              <span>Manage spaces</span>
+              <span>管理空间</span>
             </button>
           </div>
         </>

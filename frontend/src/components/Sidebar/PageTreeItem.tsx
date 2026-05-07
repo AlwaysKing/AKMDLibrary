@@ -60,7 +60,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
     if (!spaceSlug) return;
     setShowMenu(false);
     try {
-      const newPage = await createPage(spaceSlug, 'Untitled', page.id);
+      const newPage = await createPage(spaceSlug, '未命名页面', page.id);
       await refreshPageTree();
       navigate(`/s/${spaceSlug}/p/${newPage.id}`);
     } catch (err) {
@@ -142,7 +142,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
             onClick={handleClick}
             className="text-sm text-notion-text truncate flex-1 cursor-pointer hover:underline decoration-notion-textSecondary/30"
           >
-            {page.title || 'Untitled'}
+            {page.title || '未命名页面'}
           </span>
         )}
 
@@ -168,14 +168,14 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
             className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
           >
             <Plus className="w-4 h-4 text-notion-textSecondary" />
-            Add sub-page
+            添加子页面
           </button>
           <button
             onClick={() => { setShowMenu(false); setIsRenaming(true); }}
             className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
           >
             <Edit3 className="w-4 h-4 text-notion-textSecondary" />
-            Rename
+            重命名
           </button>
           <hr className="my-1 border-notion-border" />
           <button
@@ -183,7 +183,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
             className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
           >
             <Trash2 className="w-4 h-4" />
-            Delete
+            删除
           </button>
         </div>
       )}

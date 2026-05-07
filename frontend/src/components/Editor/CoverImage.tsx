@@ -55,7 +55,7 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
           className="flex items-center gap-2 px-3 py-1.5 text-sm text-notion-textSecondary hover:bg-notion-hover rounded transition-colors"
         >
           <ImageIcon className="w-4 h-4" />
-          Add cover
+          添加封面
         </button>
         <input
           ref={fileInputRef}
@@ -82,14 +82,14 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
             className="flex items-center gap-2 px-4 py-2 bg-white rounded hover:bg-gray-100 transition-colors text-notion-text text-sm"
           >
             <Camera className="w-4 h-4" />
-            Change cover
+            更换封面
           </button>
           <button
             onClick={handleRemove}
             className="flex items-center gap-2 px-4 py-2 bg-white rounded hover:bg-gray-100 transition-colors text-notion-text text-sm"
           >
             <X className="w-4 h-4" />
-            Remove
+            移除
           </button>
         </div>
       )}

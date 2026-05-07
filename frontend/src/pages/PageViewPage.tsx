@@ -41,7 +41,7 @@ export default function PageViewPage() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <p className="text-notion-textSecondary mb-2">Failed to load page</p>
+          <p className="text-notion-textSecondary mb-2">页面加载失败</p>
           <p className="text-sm text-notion-textSecondary/60">{error}</p>
         </div>
       </div>
@@ -109,7 +109,7 @@ export default function PageViewPage() {
 
         {/* Title */}
         <h1 className="text-[40px] font-bold text-notion-text leading-tight mb-2 outline-none">
-          {currentPage.title || 'Untitled'}
+          {currentPage.title || '未命名页面'}
         </h1>
 
         {/* Editor */}

@@ -58,7 +58,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-notion-hover transition-colors text-left text-notion-textSecondary"
           >
             <Settings className="w-4 h-4" />
-            <span className="text-sm">Settings</span>
+            <span className="text-sm">设置</span>
           </button>
         )}
       </div>

@@ -27,7 +27,7 @@ export default function LoginPage() {
         navigate('/');
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Invalid username or password');
+      setError(err.response?.data?.message || '用户名或密码错误');
       setIsLoading(false);
     }
   };
@@ -48,13 +48,13 @@ export default function LoginPage() {
         {/* Form Card */}
         <div className="bg-white border border-notion-border rounded-xl p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-notion-text mb-6 text-center">
-            Log in
+            登录
           </h2>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="username" className="block text-sm font-medium text-notion-text mb-1.5">
-                Username
+                用户名
               </label>
               <input
                 id="username"
@@ -62,7 +62,7 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full px-3 py-2 border border-notion-border rounded-lg text-sm text-notion-text placeholder-notion-textSecondary/50 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                placeholder="Enter username"
+                placeholder="请输入用户名"
                 required
                 autoFocus
               />
@@ -70,7 +70,7 @@ export default function LoginPage() {
 
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-notion-text mb-1.5">
-                Password
+                密码
               </label>
               <input
                 id="password"
@@ -78,7 +78,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-3 py-2 border border-notion-border rounded-lg text-sm text-notion-text placeholder-notion-textSecondary/50 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-                placeholder="Enter password"
+                placeholder="请输入密码"
                 required
               />
             </div>
@@ -94,14 +94,14 @@ export default function LoginPage() {
               disabled={isLoading}
               className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoading ? 'Logging in...' : 'Log in'}
+              {isLoading ? '登录中...' : '登录'}
             </button>
           </form>
         </div>
 
         {/* Footer hint */}
         <p className="text-center text-xs text-notion-textSecondary/60 mt-6">
-          Default: admin / admin123
+          默认账号：admin / admin123
         </p>
       </div>
     </div>
