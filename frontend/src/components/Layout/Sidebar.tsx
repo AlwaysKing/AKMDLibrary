@@ -1,9 +1,10 @@
-import { Settings, PanelLeft } from 'lucide-react';
+import { Settings, PanelLeft, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SpaceSelector from '../Sidebar/SpaceSelector';
 import PageTree from '../Sidebar/PageTree';
 import NewPageButton from '../Sidebar/NewPageButton';
 import { useAuthStore } from '../../stores/authStore';
+import { useSpaceStore } from '../../stores/spaceStore';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -52,6 +53,13 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Bottom actions */}
       <div className="px-2 py-2 border-t border-notion-border/60 space-y-0.5">
         <NewPageButton />
+        <button
+          onClick={() => navigate(`/s/${useSpaceStore.getState().currentSpace?.slug || ''}/trash`)}
+          className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-notion-hover transition-colors text-left text-notion-textSecondary"
+        >
+          <Trash2 className="w-4 h-4" />
+          <span className="text-sm">回收站</span>
+        </button>
         {user?.role === 'admin' && (
           <button
             onClick={() => navigate('/admin')}

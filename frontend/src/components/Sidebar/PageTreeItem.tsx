@@ -101,26 +101,28 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
   return (
     <div>
       <div
-        className={`w-full flex items-center gap-1 py-1 rounded hover:bg-notion-hover transition-colors text-left group ${
+        className={`w-full flex items-center gap-1 py-[5px] px-3 rounded-md hover:bg-notion-hover transition-colors text-left group ${
           isActive ? 'bg-notion-hover' : ''
         }`}
-        style={{ paddingLeft: `${level * 16 + 8}px`, paddingRight: '4px' }}
+        style={{ paddingLeft: `${level * 16 + 12}px`, paddingRight: '8px' }}
       >
-        {/* Expand/Collapse toggle */}
-        <button
-          onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
-          className={`p-0.5 hover:bg-notion-border rounded transition-colors flex-shrink-0 ${
-            hasChildren ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-          }`}
-        >
-          <ChevronRight className={`w-4 h-4 text-notion-textSecondary transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-        </button>
-
-        {/* Page icon or default */}
+        {/* Icon/Chevron — shared position: icon by default, chevron on hover */}
         {page.icon ? (
-          <span className="text-sm flex-shrink-0 w-4 text-center">{page.icon}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+            className="w-5 h-5 flex items-center justify-center flex-shrink-0 hover:bg-notion-border rounded transition-colors group/icon"
+          >
+            <span className="text-sm group-hover/icon:hidden">{page.icon}</span>
+            <ChevronRight className={`w-4 h-4 text-notion-textSecondary hidden group-hover/icon:block transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+          </button>
         ) : (
-          <FileText className="w-4 h-4 text-notion-textSecondary flex-shrink-0" />
+          <button
+            onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+            className="w-5 h-5 flex items-center justify-center flex-shrink-0 hover:bg-notion-border rounded transition-colors group/icon"
+          >
+            <FileText className="w-4 h-4 text-notion-textSecondary group-hover/icon:hidden" />
+            <ChevronRight className={`w-4 h-4 text-notion-textSecondary hidden group-hover/icon:block transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+          </button>
         )}
 
         {/* Title or rename input */}
@@ -140,11 +142,20 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
         ) : (
           <span
             onClick={handleClick}
-            className="text-sm text-notion-text truncate flex-1 cursor-pointer hover:underline decoration-notion-textSecondary/30"
+            className="text-sm font-medium text-notion-text truncate flex-1 cursor-pointer"
           >
             {page.title || '未命名页面'}
           </span>
         )}
+
+        {/* Quick add sub-page button */}
+        <button
+          onClick={(e) => { e.stopPropagation(); handleAddSubPage(); }}
+          className="p-0.5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+          title="添加子页面"
+        >
+          <Plus className="w-4 h-4 text-notion-textSecondary" />
+        </button>
 
         {/* More menu button */}
         <button
@@ -183,7 +194,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
             className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
           >
             <Trash2 className="w-4 h-4" />
-            删除
+            移到回收站
           </button>
         </div>
       )}

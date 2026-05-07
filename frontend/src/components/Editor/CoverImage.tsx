@@ -22,6 +22,8 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('page_id', String(pageId));
+      formData.append('space_slug', spaceSlug);
 
       const response = await fetch('/api/upload', {
         method: 'POST',
@@ -34,7 +36,7 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
       if (!response.ok) throw new Error('Upload failed');
 
       const data = await response.json();
-      const coverUrl = data.url || `/api/upload/${data.path}`;
+      const coverUrl = `/api/spaces/${spaceSlug}/pages/${pageId}/assets/${data.path}`;
       await updateMetadata(spaceSlug, pageId, { cover_url: coverUrl });
     } catch (error) {
       console.error('Failed to upload cover:', error);
@@ -44,7 +46,7 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
   };
 
   const handleRemove = async () => {
-    await updateMetadata(spaceSlug, pageId, { cover_url: null });
+    await updateMetadata(spaceSlug, pageId, { cover_url: '' });
   };
 
   if (!coverUrl) {
@@ -70,7 +72,7 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
 
   return (
     <div
-      className="relative h-40 bg-cover bg-center group"
+      className="relative h-[350px] bg-cover bg-center group"
       style={{ backgroundImage: `url(${coverUrl})` }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}

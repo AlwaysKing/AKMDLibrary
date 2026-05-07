@@ -33,10 +33,7 @@ func (h *PageHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enrich tree with database IDs and metadata
-	space, err := h.spaceService.GetBySlug(slug)
-	if err == nil {
-		h.pageService.EnrichTreeWithDB(tree, space.ID)
-	}
+	h.pageService.EnrichTreeWithDB(slug, tree)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tree)
@@ -85,7 +82,12 @@ func (h *PageHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	page, err := h.pageService.Create(slug, &req, space.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") {
+			http.Error(w, errMsg, http.StatusBadRequest)
+		} else {
+			http.Error(w, errMsg, http.StatusInternalServerError)
+		}
 		return
 	}
 

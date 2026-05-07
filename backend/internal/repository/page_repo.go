@@ -3,25 +3,26 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/alwaysking/mdlibrary/internal/model"
 )
 
 type PageRepository struct {
-	db *DB
+	db *sql.DB
 }
 
-func NewPageRepository(db *DB) *PageRepository {
+func NewPageRepository(db *sql.DB) *PageRepository {
 	return &PageRepository{db: db}
 }
 
 func (r *PageRepository) Create(page *model.Page) (*model.Page, error) {
 	query := `
-		INSERT INTO pages (space_id, title, file_path, icon, cover_url, sort_order)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO pages (title, file_path, icon, cover_url, sort_order)
+		VALUES (?, ?, ?, ?, ?)
 	`
 
-	result, err := r.db.Exec(query, page.SpaceID, page.Title, page.FilePath,
+	result, err := r.db.Exec(query, page.Title, page.FilePath,
 		page.Icon, page.CoverURL, page.SortOrder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create page: %w", err)
@@ -37,15 +38,15 @@ func (r *PageRepository) Create(page *model.Page) (*model.Page, error) {
 
 func (r *PageRepository) GetByID(id int) (*model.Page, error) {
 	query := `
-		SELECT id, space_id, title, file_path, icon, cover_url, sort_order, created_at, updated_at
+		SELECT id, title, file_path, icon, cover_url, full_page, sort_order, created_at, updated_at
 		FROM pages WHERE id = ?
 	`
 
 	var page model.Page
 	var icon, coverURL sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
-		&page.ID, &page.SpaceID, &page.Title, &page.FilePath,
-		&icon, &coverURL, &page.SortOrder,
+		&page.ID, &page.Title, &page.FilePath,
+		&icon, &coverURL, &page.FullPage, &page.SortOrder,
 		&page.CreatedAt, &page.UpdatedAt,
 	)
 
@@ -66,17 +67,17 @@ func (r *PageRepository) GetByID(id int) (*model.Page, error) {
 	return &page, nil
 }
 
-func (r *PageRepository) GetBySpaceAndPath(spaceID int, filePath string) (*model.Page, error) {
+func (r *PageRepository) GetByPath(filePath string) (*model.Page, error) {
 	query := `
-		SELECT id, space_id, title, file_path, icon, cover_url, sort_order, created_at, updated_at
-		FROM pages WHERE space_id = ? AND file_path = ?
+		SELECT id, title, file_path, icon, cover_url, full_page, sort_order, created_at, updated_at
+		FROM pages WHERE file_path = ?
 	`
 
 	var page model.Page
 	var icon, coverURL sql.NullString
-	err := r.db.QueryRow(query, spaceID, filePath).Scan(
-		&page.ID, &page.SpaceID, &page.Title, &page.FilePath,
-		&icon, &coverURL, &page.SortOrder,
+	err := r.db.QueryRow(query, filePath).Scan(
+		&page.ID, &page.Title, &page.FilePath,
+		&icon, &coverURL, &page.FullPage, &page.SortOrder,
 		&page.CreatedAt, &page.UpdatedAt,
 	)
 
@@ -97,14 +98,14 @@ func (r *PageRepository) GetBySpaceAndPath(spaceID int, filePath string) (*model
 	return &page, nil
 }
 
-func (r *PageRepository) ListBySpaceID(spaceID int) ([]*model.Page, error) {
+func (r *PageRepository) ListAll() ([]*model.Page, error) {
 	query := `
-		SELECT id, space_id, title, file_path, icon, cover_url, sort_order, created_at, updated_at
-		FROM pages WHERE space_id = ?
+		SELECT id, title, file_path, icon, cover_url, full_page, sort_order, created_at, updated_at
+		FROM pages
 		ORDER BY sort_order ASC, created_at ASC
 	`
 
-	rows, err := r.db.Query(query, spaceID)
+	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pages: %w", err)
 	}
@@ -115,8 +116,8 @@ func (r *PageRepository) ListBySpaceID(spaceID int) ([]*model.Page, error) {
 		var page model.Page
 		var icon, coverURL sql.NullString
 		if err := rows.Scan(
-			&page.ID, &page.SpaceID, &page.Title, &page.FilePath,
-			&icon, &coverURL, &page.SortOrder,
+			&page.ID, &page.Title, &page.FilePath,
+			&icon, &coverURL, &page.FullPage, &page.SortOrder,
 			&page.CreatedAt, &page.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan page: %w", err)
@@ -155,6 +156,10 @@ func (r *PageRepository) UpdateMeta(id int, req *model.UpdatePageMetaRequest) (*
 	setParts := []string{}
 	args := []interface{}{}
 
+	if req.Title != nil {
+		setParts = append(setParts, "title = ?")
+		args = append(args, *req.Title)
+	}
 	if req.Icon != nil {
 		setParts = append(setParts, "icon = ?")
 		args = append(args, *req.Icon)
@@ -163,13 +168,17 @@ func (r *PageRepository) UpdateMeta(id int, req *model.UpdatePageMetaRequest) (*
 		setParts = append(setParts, "cover_url = ?")
 		args = append(args, *req.CoverURL)
 	}
+	if req.FullPage != nil {
+		setParts = append(setParts, "full_page = ?")
+		args = append(args, *req.FullPage)
+	}
 	if req.SortOrder != nil {
 		setParts = append(setParts, "sort_order = ?")
 		args = append(args, *req.SortOrder)
 	}
 	setParts = append(setParts, "updated_at = CURRENT_TIMESTAMP")
 
-	query := "UPDATE pages SET " + joinArgs(setParts) + " WHERE id = ?"
+	query := "UPDATE pages SET " + strings.Join(setParts, ", ") + " WHERE id = ?"
 	args = append(args, id)
 
 	if _, err := r.db.Exec(query, args...); err != nil {
@@ -177,6 +186,12 @@ func (r *PageRepository) UpdateMeta(id int, req *model.UpdatePageMetaRequest) (*
 	}
 
 	return r.GetByID(id)
+}
+
+func (r *PageRepository) UpdateFilePath(id int, filePath string) error {
+	query := "UPDATE pages SET file_path = ? WHERE id = ?"
+	_, err := r.db.Exec(query, filePath, id)
+	return err
 }
 
 func (r *PageRepository) Delete(id int) error {
@@ -194,81 +209,6 @@ func (r *PageRepository) Delete(id int) error {
 
 	if rows == 0 {
 		return fmt.Errorf("page not found")
-	}
-
-	return nil
-}
-
-func (r *PageRepository) SyncPages(spaceID int, pages []*model.PageNode) error {
-	// Get existing pages
-	existingPages, err := r.ListBySpaceID(spaceID)
-	if err != nil {
-		return fmt.Errorf("failed to get existing pages: %w", err)
-	}
-
-	existingMap := make(map[int]*model.Page)
-	for _, p := range existingPages {
-		existingMap[p.ID] = p
-	}
-
-	// Sync pages recursively
-	return r.syncPagesRecursive(spaceID, pages, existingMap)
-}
-
-func (r *PageRepository) syncPagesRecursive(spaceID int, nodes []*model.PageNode, existingMap map[int]*model.Page) error {
-	for _, node := range nodes {
-		// Check if page exists
-		existing, exists := existingMap[node.ID]
-
-		if exists {
-			// Update if needed
-			if existing.Title != node.Title || existing.Icon != node.Icon || existing.SortOrder != node.SortOrder {
-				setParts := []string{}
-				args := []interface{}{}
-
-				if existing.Title != node.Title {
-					setParts = append(setParts, "title = ?")
-					args = append(args, node.Title)
-				}
-				if existing.Icon != node.Icon {
-					setParts = append(setParts, "icon = ?")
-					args = append(args, node.Icon)
-				}
-				if existing.SortOrder != node.SortOrder {
-					setParts = append(setParts, "sort_order = ?")
-					args = append(args, node.SortOrder)
-				}
-
-				if len(setParts) > 0 {
-					setParts = append(setParts, "updated_at = CURRENT_TIMESTAMP")
-					query := "UPDATE pages SET " + joinArgs(setParts) + " WHERE id = ?"
-					args = append(args, node.ID)
-
-					if _, err := r.db.Exec(query, args...); err != nil {
-						return fmt.Errorf("failed to update page %d: %w", node.ID, err)
-					}
-				}
-			}
-		} else {
-			// Create new page
-			_, err := r.Create(&model.Page{
-				SpaceID:   spaceID,
-				Title:     node.Title,
-				FilePath:  fmt.Sprintf("%s.md", node.Title),
-				Icon:      node.Icon,
-				SortOrder: node.SortOrder,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to create page %s: %w", node.Title, err)
-			}
-		}
-
-		// Sync children
-		if len(node.Children) > 0 {
-			if err := r.syncPagesRecursive(spaceID, node.Children, existingMap); err != nil {
-				return err
-			}
-		}
 	}
 
 	return nil

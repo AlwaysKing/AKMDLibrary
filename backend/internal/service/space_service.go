@@ -16,20 +16,17 @@ import (
 type SpaceService struct {
 	spaceRepo  *repository.SpaceRepository
 	memberRepo *repository.MemberRepository
-	pageRepo   *repository.PageRepository
 	docsDir    string
 }
 
 func NewSpaceService(
 	spaceRepo *repository.SpaceRepository,
 	memberRepo *repository.MemberRepository,
-	pageRepo *repository.PageRepository,
 	docsDir string,
 ) *SpaceService {
 	return &SpaceService{
 		spaceRepo:  spaceRepo,
 		memberRepo: memberRepo,
-		pageRepo:   pageRepo,
 		docsDir:    docsDir,
 	}
 }

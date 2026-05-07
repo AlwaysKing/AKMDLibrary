@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import { X, SmilePlus } from 'lucide-react';
 import { usePageStore } from '../../stores/pageStore';
 
 interface PageIconProps {
@@ -34,8 +34,9 @@ export default function PageIcon({ icon, spaceSlug, pageId }: PageIconProps) {
       {!icon ? (
         <button
           onClick={() => setIsOpen(true)}
-          className="text-sm text-notion-textSecondary hover:text-notion-text hover:bg-notion-hover px-2 py-1 rounded transition-colors"
+          className="flex items-center gap-2 px-3 py-1.5 text-sm text-notion-textSecondary hover:bg-notion-hover rounded transition-colors"
         >
+          <SmilePlus className="w-4 h-4" />
           添加图标
         </button>
       ) : (

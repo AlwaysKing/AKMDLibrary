@@ -67,6 +67,7 @@ func (db *DB) migrate() error {
 			file_path TEXT NOT NULL,
 			icon TEXT,
 			cover_url TEXT,
+			full_page BOOLEAN DEFAULT 0,
 			sort_order REAL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -115,4 +116,40 @@ func (db *DB) seedAdmin() error {
 	}
 
 	return nil
+}
+
+// OpenSpaceDB opens (or creates) a per-space cache database at spaceDir/.cache.db.
+// The database contains only the pages table (no space_id needed).
+func OpenSpaceDB(spaceDir string) (*sql.DB, error) {
+	dbPath := fmt.Sprintf("%s/.cache.db", spaceDir)
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open space database: %w", err)
+	}
+
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping space database: %w", err)
+	}
+
+	// Create pages table (no space_id — each DB is for one space)
+	schema := `CREATE TABLE IF NOT EXISTS pages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL,
+		file_path TEXT NOT NULL,
+		icon TEXT,
+		cover_url TEXT,
+		full_page BOOLEAN DEFAULT 0,
+		sort_order REAL DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`
+	if _, err := db.Exec(schema); err != nil {
+		return nil, fmt.Errorf("failed to create pages table: %w", err)
+	}
+
+	return db, nil
 }

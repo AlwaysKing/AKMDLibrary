@@ -40,14 +40,13 @@ func main() {
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
 	spaceRepo := repository.NewSpaceRepository(db)
-	pageRepo := repository.NewPageRepository(db)
 	memberRepo := repository.NewMemberRepository(db)
 
 	// Initialize services
 	authService := service.NewAuthService(userRepo, jwtSecret)
 	userService := service.NewUserService(userRepo, authService)
-	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageRepo, docsDir)
-	pageService := service.NewPageService(pageRepo, docsDir)
+	pageService := service.NewPageService(docsDir)
+	spaceService := service.NewSpaceService(spaceRepo, memberRepo, docsDir)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -107,7 +106,11 @@ func main() {
 		r.Put("/api/spaces/{slug}/pages/{id}", pageHandler.Update)
 		r.Put("/api/spaces/{slug}/pages/{id}/meta", pageHandler.UpdateMeta)
 		r.Delete("/api/spaces/{slug}/pages/{id}", pageHandler.Delete)
-		r.Get("/api/spaces/{slug}/pages/{id}/assets/*", pageHandler.ServeAsset)
+
+		// Trash
+		r.Get("/api/spaces/{slug}/trash", pageHandler.ListTrash)
+		r.Post("/api/spaces/{slug}/trash/restore", pageHandler.RestoreFromTrash)
+		r.Post("/api/spaces/{slug}/trash/delete", pageHandler.PermanentDelete)
 
 		// Users (admin only)
 		r.Group(func(r chi.Router) {
@@ -125,6 +128,9 @@ func main() {
 
 	// Public upload files
 	r.Get("/api/upload/{filename}", uploadHandler.ServeUpload)
+
+	// Public page assets (cover images, etc.) — no auth needed for CSS background-image
+	r.Get("/api/spaces/{slug}/pages/{id}/assets/*", pageHandler.ServeAsset)
 
 	// Serve frontend static files + SPA fallback
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {

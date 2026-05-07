@@ -1,0 +1,51 @@
+{
+  "url": "https://www.notion.so/alwaysking/HomePage-cd8795505b7b41a49b68de49dbcd230a",
+  "viewport": {
+    "width": 1713,
+    "height": 888,
+    "devicePixelRatio": 2,
+    "scrollX": 0,
+    "scrollY": 0
+  },
+  "cover": {
+    "inlineStyle": "display: block; object-fit: cover; border-radius: 0px; width: 100%; height: 30vh; max-height: 280px; opacity: 1;",
+    "container": {
+      "maxHeight": "280px",
+      "overflow": "hidden",
+      "position": "static"
+    }
+  },
+  "icon": {
+    "containerSize": "140x140px",
+    "imageSize": "~124x124px",
+    "containerMargin": "-80px 0 0 8px",
+    "containerPosition": "relative",
+    "containerDisplay": "flex",
+    "containerAlignItems": "center",
+    "containerJustifyContent": "center",
+    "borderRadius": "4px",
+    "imageObjectFit": "fill"
+  },
+  "title": {
+    "fontSize": "40px",
+    "lineHeight": "48px",
+    "fontWeight": "700",
+    "padding": "0 8px 0 8px",
+    "placeholder": "新页面"
+  },
+  "distances": {
+    "coverBottom_to_titleTop": "100px",
+    "iconBottom_to_titleTop": "~48px",
+    "iconCenter_offset_above_coverBottom": "10px",
+    "icon_overlap_above_cover": "~72px",
+    "icon_below_cover": "~52px"
+  },
+  "contentColumn": {
+    "width": "720px",
+    "layoutClass": "layout layout-reskin-wider",
+    "parentDisplay": "grid"
+  },
+  "sidebar": {
+    "width": "270px (approx)"
+  }
+}

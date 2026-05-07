@@ -1,15 +1,28 @@
-import { useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useCallback, useRef, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { usePageStore } from '../stores/pageStore';
 import { useSpaceStore } from '../stores/spaceStore';
 import Breadcrumb from '../components/Editor/Breadcrumb';
 import CoverImage from '../components/Editor/CoverImage';
 import PageIcon from '../components/Editor/PageIcon';
 import PageEditor from '../components/Editor/PageEditor';
+import { MoreHorizontal } from 'lucide-react';
+
+// Separate component so useEffect runs in its own render cycle
+function PageNotFound({ spaceSlug }: { spaceSlug?: string }) {
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (spaceSlug) {
+      navigate(`/s/${spaceSlug}`, { replace: true });
+    }
+  }, [spaceSlug, navigate]);
+  return null;
+}
 
 export default function PageViewPage() {
   const { spaceSlug, pageId } = useParams<{ spaceSlug: string; pageId: string }>();
-  const { currentPage, currentContent, fetchPage, isLoading, error, savePage, refreshPageTree } = usePageStore();
+  const navigate = useNavigate();
+  const { currentPage, currentContent, fetchPage, isLoading, error, savePage, refreshPageTree, updateMetadata } = usePageStore();
   const { setCurrentSpace } = useSpaceStore();
 
   useEffect(() => {
@@ -29,6 +42,33 @@ export default function PageViewPage() {
     await refreshPageTree();
   }, [spaceSlug, pageId, savePage, refreshPageTree]);
 
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [showPageMenu, setShowPageMenu] = useState(false);
+
+  const handleFullPageToggle = useCallback(async () => {
+    if (!spaceSlug || !pageId || !currentPage) return;
+    const newFullPage = !currentPage.full_page;
+    await updateMetadata(spaceSlug, parseInt(pageId), { full_page: newFullPage });
+  }, [spaceSlug, pageId, currentPage, updateMetadata]);
+
+  const handleTitleBlur = useCallback(async () => {
+    const newTitle = titleRef.current?.textContent?.trim() || '';
+    const currentTitle = usePageStore.getState().currentPage?.title;
+    if (newTitle && newTitle !== currentTitle && spaceSlug && pageId) {
+      await updateMetadata(spaceSlug, parseInt(pageId), { title: newTitle });
+      await refreshPageTree();
+    } else if (!newTitle && titleRef.current) {
+      titleRef.current.textContent = currentTitle || '未命名页面';
+    }
+  }, [spaceSlug, pageId, updateMetadata, refreshPageTree]);
+
+  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      titleRef.current?.blur();
+    }
+  }, []);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -38,22 +78,15 @@ export default function PageViewPage() {
   }
 
   if (error) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <p className="text-notion-textSecondary mb-2">页面加载失败</p>
-          <p className="text-sm text-notion-textSecondary/60">{error}</p>
-        </div>
-      </div>
-    );
+    return <PageNotFound spaceSlug={spaceSlug} />;
   }
 
   if (!currentPage) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-notion-border border-t-notion-text"></div>
-      </div>
-    );
+    // Not loading, no error, but no page — page was deleted or doesn't exist
+    if (spaceSlug) {
+      navigate(`/s/${spaceSlug}`, { replace: true });
+    }
+    return null;
   }
 
   const showCover = !!currentPage.cover_url;
@@ -61,7 +94,36 @@ export default function PageViewPage() {
   return (
     <div className="min-h-screen bg-notion-bg flex flex-col">
       {/* Breadcrumb */}
-      <Breadcrumb pageTitle={currentPage.title} spaceSlug={spaceSlug!} />
+      <Breadcrumb
+        pageTitle={currentPage.title}
+        spaceSlug={spaceSlug!}
+        actions={
+          <div className="relative">
+            <button
+              onClick={() => setShowPageMenu(!showPageMenu)}
+              className="p-1 hover:bg-notion-hover rounded transition-colors"
+            >
+              <MoreHorizontal className="w-4 h-4 text-notion-textSecondary" />
+            </button>
+            {showPageMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowPageMenu(false)} />
+                <div className="absolute right-0 top-full mt-1 bg-white border border-notion-border rounded-lg shadow-xl z-50 min-w-[200px] py-1">
+                  <button
+                    onClick={handleFullPageToggle}
+                    className="w-full flex items-center justify-between px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+                  >
+                    <span>全宽页面</span>
+                    <div className={`w-8 h-4 rounded-full transition-colors relative ${currentPage.full_page ? 'bg-blue-500' : 'bg-gray-300'}`}>
+                      <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${currentPage.full_page ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                    </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        }
+      />
 
       {/* Cover image - full width at top */}
       {showCover && (
@@ -73,29 +135,49 @@ export default function PageViewPage() {
       )}
 
       {/* Page content area */}
-      <div className="max-w-[720px] mx-auto w-full px-12 pb-32">
-        {/* Hover action bar - shows add hints when no cover/icon */}
-        {!showCover && (
-          <div className="mt-1 mb-1 opacity-0 hover:opacity-100 transition-opacity duration-200">
-            <CoverImage
-              coverUrl={currentPage.cover_url}
+      <div className={`${currentPage.full_page ? 'w-full' : 'max-w-[900px]'} mx-auto w-full px-12 pb-32 group/page-header`}>
+        {/* Icon - only renders when set */}
+        {currentPage.icon && (
+          <div className={showCover ? '-mt-12 mb-1' : 'mt-2 mb-1'}>
+            <PageIcon
+              icon={currentPage.icon}
               spaceSlug={spaceSlug!}
               pageId={currentPage.id}
             />
           </div>
         )}
 
-        {/* Icon - single render */}
-        <div className={showCover ? '-mt-8 mb-2' : 'mb-2'}>
-          <PageIcon
-            icon={currentPage.icon}
-            spaceSlug={spaceSlug!}
-            pageId={currentPage.id}
-          />
-        </div>
+        {/* Action hints row - hover only, below icon/cover */}
+        {(!showCover || !currentPage.icon) && (
+          <div className={`flex items-center gap-2 mb-1 opacity-0 group-hover/page-header:opacity-100 transition-opacity duration-200 ${!showCover && !currentPage.icon ? 'mt-2' : ''}`}>
+            {!currentPage.icon && (
+              <PageIcon
+                icon={currentPage.icon}
+                spaceSlug={spaceSlug!}
+                pageId={currentPage.id}
+              />
+            )}
+            {!showCover && (
+              <CoverImage
+                coverUrl={currentPage.cover_url}
+                spaceSlug={spaceSlug!}
+                pageId={currentPage.id}
+              />
+            )}
+          </div>
+        )}
 
         {/* Title */}
-        <h1 className="text-[40px] font-bold text-notion-text leading-tight mb-1 outline-none">
+        <h1
+          key={`title-${currentPage.id}`}
+          ref={titleRef}
+          contentEditable
+          suppressContentEditableWarning
+          onBlur={handleTitleBlur}
+          onKeyDown={handleTitleKeyDown}
+          className="text-[40px] font-bold text-notion-text leading-tight mb-1 outline-none focus:outline-none"
+          data-placeholder="未命名页面"
+        >
           {currentPage.title || '未命名页面'}
         </h1>
 

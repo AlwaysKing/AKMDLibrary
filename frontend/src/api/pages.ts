@@ -7,6 +7,7 @@ export interface Page {
   file_path: string;
   icon?: string;
   cover_url?: string;
+  full_page?: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -23,7 +24,15 @@ export interface PageMetadata {
   title?: string;
   icon?: string;
   cover_url?: string;
+  full_page?: boolean;
   sort_order?: number;
+}
+
+export interface TrashedItem {
+  name: string;
+  trash_path: string;
+  parent_path: string;
+  file_name: string;
 }
 
 export const pagesApi = {
@@ -54,5 +63,19 @@ export const pagesApi = {
 
   delete: async (spaceSlug: string, pageId: number): Promise<void> => {
     await apiClient.delete(`/spaces/${spaceSlug}/pages/${pageId}`);
+  },
+
+  listTrash: async (spaceSlug: string): Promise<TrashedItem[]> => {
+    const response = await apiClient.get<TrashedItem[]>(`/spaces/${spaceSlug}/trash`);
+    return response.data;
+  },
+
+  restoreFromTrash: async (spaceSlug: string, trashPath: string): Promise<Page> => {
+    const response = await apiClient.post<Page>(`/spaces/${spaceSlug}/trash/restore`, { trash_path: trashPath });
+    return response.data;
+  },
+
+  permanentDelete: async (spaceSlug: string, trashPath: string): Promise<void> => {
+    await apiClient.post(`/spaces/${spaceSlug}/trash/delete`, { trash_path: trashPath });
   },
 };

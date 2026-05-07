@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage';
 import SpacePage from './pages/SpacePage';
 import PageViewPage from './pages/PageViewPage';
 import AdminPage from './pages/AdminPage';
+import TrashPage from './pages/TrashPage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 
@@ -57,6 +58,7 @@ function App() {
           }
         >
           <Route index element={<SpacePage />} />
+          <Route path="trash" element={<TrashPage />} />
         </Route>
         <Route
           path="/s/:spaceSlug/p/:pageId"

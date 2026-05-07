@@ -36,7 +36,7 @@ export default function SpaceSelector() {
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between px-2 py-1.5 rounded hover:bg-notion-hover transition-colors text-left"
+        className="w-full flex items-center justify-between px-3 py-2 rounded-md hover:bg-notion-hover transition-colors text-left"
       >
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {currentSpace?.icon && <span className="text-lg">{currentSpace.icon}</span>}
