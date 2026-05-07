@@ -45,10 +45,10 @@ func (s *PageService) EnrichTreeWithDB(nodes []*model.PageNode, spaceID int) {
 	}
 
 	// Enrich nodes recursively using exact path matching
-	s.enrichNodes(nodes, pathMap)
+	s.enrichNodes(nodes, pathMap, spaceID)
 }
 
-func (s *PageService) enrichNodes(nodes []*model.PageNode, pathMap map[string]*model.Page) {
+func (s *PageService) enrichNodes(nodes []*model.PageNode, pathMap map[string]*model.Page, spaceID int) {
 	for _, node := range nodes {
 		// Use exact file path matching if available
 		if node.FilePath != "" {
@@ -63,11 +63,23 @@ func (s *PageService) enrichNodes(nodes []*model.PageNode, pathMap map[string]*m
 				if page.Title != "" {
 					node.Title = page.Title
 				}
+			} else {
+				// No DB record exists — auto-create one so the page is addressable by ID
+				created, err := s.pageRepo.Create(&model.Page{
+					SpaceID:   spaceID,
+					Title:     node.Title,
+					FilePath:  node.FilePath,
+					SortOrder: float64(time.Now().UnixNano()),
+				})
+				if err == nil {
+					node.ID = created.ID
+					pathMap[node.FilePath] = created
+				}
 			}
 		}
 
 		if len(node.Children) > 0 {
-			s.enrichNodes(node.Children, pathMap)
+			s.enrichNodes(node.Children, pathMap, spaceID)
 		}
 	}
 }
@@ -98,9 +110,8 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 			return nil, fmt.Errorf("parent page not found: %w", err)
 		}
 
-		// Get parent directory (file without .md)
-		parentDir := strings.TrimSuffix(parentPage.FilePath, ".md")
-		parentPath = parentDir
+		// Get parent directory path (e.g. "test-space/Getting Started" from "test-space/Getting Started/Getting Started.md")
+		parentPath = filepath.Dir(parentPage.FilePath)
 	} else {
 		// Root level - use space slug as directory
 		parentPath = spaceSlug
@@ -170,8 +181,8 @@ func (s *PageService) Delete(spaceSlug string, pageID int) error {
 	// Delete file and directory
 	filePath := filepath.Join(s.docsDir, page.FilePath)
 
-	// Get directory (file without .md)
-	fileDir := strings.TrimSuffix(filePath, ".md")
+	// Get the page's directory (parent of the .md file)
+	fileDir := filepath.Dir(filePath)
 
 	// Remove the directory and all its contents
 	if err := os.RemoveAll(fileDir); err != nil {
@@ -188,8 +199,8 @@ func (s *PageService) GetAssetPath(spaceSlug string, pageID int, assetPath strin
 		return "", err
 	}
 
-	// Get the page directory
-	pageDir := strings.TrimSuffix(page.FilePath, ".md")
+	// Get the page directory (parent of the .md file)
+	pageDir := filepath.Dir(page.FilePath)
 
 	// Build full path
 	fullPath := filepath.Join(s.docsDir, pageDir, "public", assetPath)
@@ -223,8 +234,8 @@ func (s *PageService) UploadAsset(spaceSlug string, pageID int, filename string,
 		return "", err
 	}
 
-	// Get the page directory
-	pageDir := strings.TrimSuffix(page.FilePath, ".md")
+	// Get the page directory (parent of the .md file)
+	pageDir := filepath.Dir(page.FilePath)
 
 	// Generate UUIDs for path
 	uuid1 := uuid.New().String()
