@@ -57,7 +57,7 @@ func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
 		return nil, fmt.Errorf("failed to read space directory: %w", err)
 	}
 
-	var nodes []*model.PageNode
+	nodes := make([]*model.PageNode, 0)
 	for _, entry := range entries {
 		// Skip hidden files
 		if strings.HasPrefix(entry.Name(), ".") {
@@ -138,10 +138,10 @@ func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
 func (s *Scanner) scanDirectorySkipSelf(dirPath string, parentName string, pathPrefix string) []*model.PageNode {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return nil
+		return make([]*model.PageNode, 0)
 	}
 
-	var nodes []*model.PageNode
+	nodes := make([]*model.PageNode, 0)
 	for _, entry := range entries {
 		// Skip hidden files and public directory
 		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "public" {

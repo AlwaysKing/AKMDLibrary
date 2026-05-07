@@ -69,7 +69,7 @@ export const usePageStore = create<PageState>((set) => ({
     set({ isLoading: true, error: null });
     try {
       await pagesApi.delete(spaceSlug, pageId);
-      set({ isLoading: false });
+      set({ isLoading: false, currentPage: null, currentContent: '' });
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
       throw error;

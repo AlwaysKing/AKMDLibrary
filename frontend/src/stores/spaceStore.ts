@@ -44,7 +44,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const pageTree = await pagesApi.getTree(spaceSlug);
-      set({ pageTree, isLoading: false });
+      set({ pageTree: pageTree || [], isLoading: false });
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
     }
