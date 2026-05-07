@@ -57,24 +57,36 @@ export default function PageViewPage() {
   }
 
   const showCover = !!currentPage.cover_url;
-  const showIcon = !!currentPage.icon;
 
   return (
     <div className="min-h-screen bg-notion-bg flex flex-col">
       {/* Breadcrumb */}
       <Breadcrumb pageTitle={currentPage.title} spaceSlug={spaceSlug!} />
 
-      {/* Cover image */}
-      <CoverImage
-        coverUrl={currentPage.cover_url}
-        spaceSlug={spaceSlug!}
-        pageId={currentPage.id}
-      />
+      {/* Cover image - full width at top */}
+      {showCover && (
+        <CoverImage
+          coverUrl={currentPage.cover_url}
+          spaceSlug={spaceSlug!}
+          pageId={currentPage.id}
+        />
+      )}
 
       {/* Page content area */}
       <div className="max-w-[720px] mx-auto w-full px-12 pb-32">
-        {/* Icon */}
-        <div className={showCover ? '-mt-8 mb-2' : 'mt-2 mb-2'}>
+        {/* Hover action bar - shows add hints when no cover/icon */}
+        {!showCover && (
+          <div className="mt-1 mb-1 opacity-0 hover:opacity-100 transition-opacity duration-200">
+            <CoverImage
+              coverUrl={currentPage.cover_url}
+              spaceSlug={spaceSlug!}
+              pageId={currentPage.id}
+            />
+          </div>
+        )}
+
+        {/* Icon - single render */}
+        <div className={showCover ? '-mt-8 mb-2' : 'mb-2'}>
           <PageIcon
             icon={currentPage.icon}
             spaceSlug={spaceSlug!}
@@ -82,33 +94,8 @@ export default function PageViewPage() {
           />
         </div>
 
-        {/* Action hints when no cover/icon */}
-        {!showCover && !showIcon && (
-          <div className="flex gap-2 mb-2 -mt-2">
-            <CoverImage
-              coverUrl={currentPage.cover_url}
-              spaceSlug={spaceSlug!}
-              pageId={currentPage.id}
-            />
-            <PageIcon
-              icon={currentPage.icon}
-              spaceSlug={spaceSlug!}
-              pageId={currentPage.id}
-            />
-          </div>
-        )}
-        {!showCover && showIcon && (
-          <div className="mb-2 -mt-2">
-            <CoverImage
-              coverUrl={currentPage.cover_url}
-              spaceSlug={spaceSlug!}
-              pageId={currentPage.id}
-            />
-          </div>
-        )}
-
         {/* Title */}
-        <h1 className="text-[40px] font-bold text-notion-text leading-tight mb-2 outline-none">
+        <h1 className="text-[40px] font-bold text-notion-text leading-tight mb-1 outline-none">
           {currentPage.title || '未命名页面'}
         </h1>
 
