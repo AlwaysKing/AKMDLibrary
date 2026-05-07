@@ -4,6 +4,9 @@ import { PartialBlock } from '@blocknote/core';
  * Parse markdown and convert to BlockNote blocks
  */
 export function markdownToBlocks(markdown: string): PartialBlock[] {
+  if (!markdown) {
+    return [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }];
+  }
   const blocks: any[] = [];
   const lines = markdown.split('\n');
   let i = 0;
@@ -134,7 +137,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
 
   // BlockNote requires at least one block — return a default empty paragraph
   if (blocks.length === 0) {
-    return [{ type: 'paragraph', content: [] }];
+    return [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }];
   }
 
   return blocks;

@@ -114,6 +114,7 @@ export default function PageViewPage() {
 
         {/* Editor */}
         <PageEditor
+          key={currentPage.id}
           initialContent={currentContent}
           onSave={handleSave}
           readOnly={false}
