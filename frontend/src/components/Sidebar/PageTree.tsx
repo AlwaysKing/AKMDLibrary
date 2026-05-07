@@ -21,7 +21,7 @@ export default function PageTree() {
   }
 
   return (
-    <div className="space-y-[2px]">
+    <div data-page-tree="true" className="space-y-[2px]">
       {pageTree.map((page) => (
         <PageTreeItem key={page.id} page={page} level={0} />
       ))}

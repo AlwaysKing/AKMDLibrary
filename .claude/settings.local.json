@@ -133,7 +133,20 @@
       "Bash(python3 /tmp/notion_snapshot6.py)",
       "Bash(awk 'NR>1{printf \"%-8s %s\\\\n\", $5, $9}')",
       "Bash(python3 /tmp/notion_snapshot7.py)",
-      "Bash(git status *)"
+      "Bash(git status *)",
+      "Bash(npx vite *)",
+      "Bash(/Users/alwaysking/.claude/plugins/cache/superpowers-marketplace/superpowers-chrome/1.12.0/chrome-ws)",
+      "Bash(curl -s http://localhost:9222/json/version)",
+      "Bash(curl -s http://localhost:9222/json)",
+      "Bash(python3 -c \" import json,sys tabs = json.load\\(sys.stdin\\) for i,t in enumerate\\(tabs\\): print\\(f'Tab {i}: {t.get\\(\\\\\"title\\\\\",\\\\\"?\\\\\"\\)[:60]} | {t.get\\(\\\\\"url\\\\\",\\\\\"?\\\\\"\\)[:100]}'\\) \")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/login)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/login)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080/api/auth/me)",
+      "Bash(curl -s http://localhost:3000/s/my-space/p/2)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(python3 -c \" import json,sys d = json.load\\(sys.stdin\\) print\\(f'Opened tab with ID: {d.get\\(\\\\\"id\\\\\",\\\\\"?\\\\\"\\)[:30]}'\\) print\\(f'URL: {d.get\\(\\\\\"url\\\\\",\\\\\"?\\\\\"\\)}'\\) \")",
+      "Bash(curl -s http://localhost:3000/src/styles/globals.css)"
     ]
   }
 }

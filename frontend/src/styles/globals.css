@@ -61,20 +61,42 @@
    BlockNote Editor - Notion-like Custom Styles
    ============================================ */
 
+/* BlockNote Notion 主题覆盖 */
+.bn-root {
+  --bn-colors-editor-text: #37352f !important;
+  --bn-colors-editor-background: #ffffff !important;
+  --bn-colors-menu-text: #37352f !important;
+  --bn-colors-menu-background: #ffffff !important;
+  --bn-colors-tooltip-text: #37352f !important;
+  --bn-colors-tooltip-background: #f7f6f3 !important;
+  --bn-colors-hovered-text: #37352f !important;
+  --bn-colors-hovered-background: #ebebea !important;
+  --bn-colors-selected-text: #ffffff !important;
+  --bn-colors-selected-background: #2383e2 !important;
+  --bn-colors-disabled-text: #c4c3c0 !important;
+  --bn-colors-disabled-background: #f7f6f3 !important;
+  --bn-colors-shadow: rgba(0, 0, 0, 0.08) !important;
+  --bn-colors-border: #e9e9e7 !important;
+  --bn-colors-side-menu: #9b9a97 !important;
+  --bn-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol" !important;
+  --bn-border-radius: 8px !important;
+}
+
 .bn-editor {
-  font-size: 15px !important;
-  line-height: 1.7 !important;
+  font-size: 16px !important;
+  line-height: 1.5 !important;
   color: #37352f !important;
   padding: 0 !important;
 }
 
 .bn-editor .bn-block-content {
-  padding: 1px 0 !important;
+  padding: 2px 0 !important;
 }
 
 /* Headings */
 .bn-editor [data-content-type="heading"] .bn-block-content {
   font-weight: 600 !important;
+  color: #37352f !important;
   margin-top: 1.2em !important;
   margin-bottom: 0.3em !important;
 }
@@ -152,14 +174,209 @@
   color: #c4c3c0 !important;
 }
 
-/* Slash menu */
+/* Selection */
+.bn-editor ::selection {
+  background: #d4ebfb;
+}
+
+/* Side Menu Notion Style */
+.bn-side-menu {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0px !important;
+  opacity: 0 !important;
+  transition: opacity 0.15s ease !important;
+  position: absolute !important;
+  left: -3px !important;
+  width: 24px !important;
+  height: 24px !important;
+  z-index: 10 !important;
+}
+
+/* 悬停块时显示 SideMenu */
+.bn-block-outer:hover > .bn-block > .bn-side-menu {
+  opacity: 0.6 !important;
+}
+
+.bn-block-outer:hover > .bn-block > .bn-side-menu:hover {
+  opacity: 1 !important;
+}
+
+/* SideMenu 按钮样式 */
+.bn-side-menu .bn-button {
+  width: 22px !important;
+  height: 22px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 4px !important;
+  color: rgba(0, 0, 0, 0.4) !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+}
+
+.bn-side-menu .bn-button:hover {
+  color: rgba(0, 0, 0, 0.6) !important;
+  background: rgba(0, 0, 0, 0.06) !important;
+}
+
+/* ============================================
+   Six-dot drag handle icon replacement
+   ============================================ */
+
+/* Hide the default three-line drag indicator SVG */
+.bn-side-menu svg[data-test="dragHandle"] {
+  display: none !important;
+}
+
+/* Drag handle button: grab cursor + relative positioning for pseudo-element */
+.bn-side-menu .bn-button[draggable="true"] {
+  cursor: grab !important;
+  position: relative !important;
+}
+
+.bn-side-menu .bn-button[draggable="true"]:active {
+  cursor: grabbing !important;
+}
+
+/* Six-dot icon via CSS mask (inherits currentColor for dynamic hover) */
+.bn-side-menu .bn-button[draggable="true"]::before {
+  content: '' !important;
+  display: block !important;
+  width: 16px !important;
+  height: 16px !important;
+  background-color: currentColor !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='9' cy='6' r='1.5'/%3E%3Ccircle cx='15' cy='6' r='1.5'/%3E%3Ccircle cx='9' cy='12' r='1.5'/%3E%3Ccircle cx='15' cy='12' r='1.5'/%3E%3Ccircle cx='9' cy='18' r='1.5'/%3E%3Ccircle cx='15' cy='18' r='1.5'/%3E%3C/svg%3E") !important;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='9' cy='6' r='1.5'/%3E%3Ccircle cx='15' cy='6' r='1.5'/%3E%3Ccircle cx='9' cy='12' r='1.5'/%3E%3Ccircle cx='15' cy='12' r='1.5'/%3E%3Ccircle cx='9' cy='18' r='1.5'/%3E%3Ccircle cx='15' cy='18' r='1.5'/%3E%3C/svg%3E") !important;
+  mask-size: contain !important;
+  -webkit-mask-size: contain !important;
+  mask-repeat: no-repeat !important;
+  -webkit-mask-repeat: no-repeat !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+/* Resize the add block button icon to fit the 22px button */
+.bn-side-menu svg[data-test="dragHandleAdd"] {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Formatting Toolbar Notion Style */
+.bn-formatting-toolbar {
+  border: 1px solid #e9e9e7 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  background: #ffffff !important;
+  padding: 4px !important;
+  gap: 1px !important;
+}
+
+.bn-formatting-toolbar button {
+  border-radius: 4px !important;
+  padding: 4px 6px !important;
+  height: 30px !important;
+  min-width: 28px !important;
+  color: #37352f !important;
+}
+
+.bn-formatting-toolbar button:hover {
+  background: #ebebea !important;
+}
+
+.bn-formatting-toolbar button[data-active="true"] {
+  color: #2383e2 !important;
+  background: rgba(35, 131, 226, 0.08) !important;
+}
+
+/* Slash Menu Notion Style */
 .bn-slash-menu {
   border: 1px solid #e9e9e7 !important;
   border-radius: 8px !important;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
+  background: #ffffff !important;
+  padding: 6px !important;
+  max-height: 280px !important;
+  overflow-y: auto !important;
 }
 
-/* Selection */
-.bn-editor ::selection {
-  background: #d4ebfb !important;
+.bn-slash-menu .bn-suggestion-menu-item {
+  padding: 6px 8px !important;
+  border-radius: 4px !important;
+  font-size: 14px !important;
+  color: #37352f !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.bn-slash-menu .bn-suggestion-menu-item:hover,
+.bn-slash-menu .bn-suggestion-menu-item[data-selected="true"] {
+  background: #ebebea !important;
+}
+
+/* Drag Handle Menu Notion Style */
+.bn-drag-handle-menu {
+  border: 1px solid #e9e9e7 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
+  background: #ffffff !important;
+  padding: 4px !important;
+  min-width: 150px !important;
+}
+
+.bn-drag-handle-menu button {
+  padding: 5px 8px !important;
+  border-radius: 4px !important;
+  font-size: 14px !important;
+  color: #37352f !important;
+  width: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.bn-drag-handle-menu button:hover {
+  background: #ebebea !important;
+}
+
+/* 颜色菜单 */
+.bn-color-picker {
+  padding: 8px !important;
+  gap: 4px !important;
+}
+
+.bn-color-picker button {
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 4px !important;
+  border: 1px solid #e9e9e7 !important;
+}
+
+/* ============================================
+   Sidebar Page Tree - Notion-like Styles
+   ============================================ */
+
+/* Sidebar page tree item text */
+[data-page-tree] .cursor-pointer.truncate {
+  line-height: 30px;
+  color: #5f5e59;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Hover state - show primary text color */
+[data-page-tree] .group:hover .cursor-pointer.truncate {
+  color: #37352f;
+}
+
+/* Active page item - show primary text color */
+[data-page-tree] .bg-notion-hover .cursor-pointer.truncate {
+  color: #37352f;
 }

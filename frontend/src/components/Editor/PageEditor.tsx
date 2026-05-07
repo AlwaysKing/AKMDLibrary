@@ -81,6 +81,9 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
           onChange={handleChange}
           theme="light"
           slashMenu={true}
+          sideMenu={true}
+          formattingToolbar={true}
+          linkToolbar={true}
         />
       </div>
     </div>
