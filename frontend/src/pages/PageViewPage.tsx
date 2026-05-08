@@ -158,7 +158,7 @@ export default function PageViewPage() {
 
         {/* Icon - overlaps cover when cover exists */}
         {currentPage.icon && (
-          <div className={showCover ? '-mt-12 mb-12 ml-2' : 'mt-0 mb-12 ml-2'}>
+          <div className={showCover ? '-mt-12 mb-[46px] ml-2' : 'mt-0 mb-12 ml-2'}>
             <PageIcon
               icon={currentPage.icon}
               spaceSlug={spaceSlug!}
@@ -175,7 +175,7 @@ export default function PageViewPage() {
           suppressContentEditableWarning
           onBlur={handleTitleBlur}
           onKeyDown={handleTitleKeyDown}
-          className={`text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-1 px-2 ${showCover && !currentPage.icon ? 'mt-[78px]' : ''}`}
+          className={`text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-1 px-2 ${showCover && !currentPage.icon ? 'mt-[76px]' : ''}`}
           data-placeholder="未命名页面"
         >
           {currentPage.title || '未命名页面'}
