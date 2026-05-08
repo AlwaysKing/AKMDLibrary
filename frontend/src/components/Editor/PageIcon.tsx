@@ -42,7 +42,8 @@ export default function PageIcon({ icon, spaceSlug, pageId }: PageIconProps) {
       ) : (
         <button
           onClick={() => setIsOpen(true)}
-          className="text-5xl leading-none hover:opacity-80 transition-opacity py-2"
+          className="text-[78px] leading-none hover:opacity-80 transition-opacity"
+          style={{ width: '78px', height: '78px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         >
           {icon}
         </button>

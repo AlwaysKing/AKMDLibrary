@@ -146,7 +146,14 @@
       "Bash(curl -s http://localhost:3000/s/my-space/p/2)",
       "Bash(curl -s http://localhost:3000/)",
       "Bash(python3 -c \" import json,sys d = json.load\\(sys.stdin\\) print\\(f'Opened tab with ID: {d.get\\(\\\\\"id\\\\\",\\\\\"?\\\\\"\\)[:30]}'\\) print\\(f'URL: {d.get\\(\\\\\"url\\\\\",\\\\\"?\\\\\"\\)}'\\) \")",
-      "Bash(curl -s http://localhost:3000/src/styles/globals.css)"
+      "Bash(curl -s http://localhost:3000/src/styles/globals.css)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(curl -s http://localhost:3000/src/components/Editor/PageIcon.tsx)",
+      "Bash(curl -s http://localhost:3000/src/pages/PageViewPage.tsx)",
+      "Bash(curl -s http://localhost:3000/src/components/Layout/Sidebar.tsx)",
+      "Bash(curl -s http://localhost:3000/src/components/Editor/CoverImage.tsx)",
+      "Bash(curl -s -X PUT \"http://localhost:9222/json/new?http://localhost:3000/s/my-space/p/2\")",
+      "Bash(python3 -c \" import json,sys d = json.load\\(sys.stdin\\) print\\(f'Opened tab: {d.get\\(\\\\\"url\\\\\",\\\\\"?\\\\\"\\)[:80]}'\\) \")"
     ]
   }
 }

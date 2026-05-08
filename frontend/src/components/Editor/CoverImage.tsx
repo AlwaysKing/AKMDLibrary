@@ -72,7 +72,7 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
 
   return (
     <div
-      className="relative h-[350px] bg-cover bg-center group"
+      className="relative h-[30vh] max-h-[280px] bg-cover bg-center group"
       style={{ backgroundImage: `url(${coverUrl})` }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}

@@ -135,10 +135,10 @@ export default function PageViewPage() {
       )}
 
       {/* Page content area */}
-      <div className={`${currentPage.full_page ? 'w-full' : 'max-w-[900px]'} mx-auto w-full px-12 pb-32 group/page-header`}>
+      <div className={`${currentPage.full_page ? 'w-full' : 'max-w-[720px]'} mx-auto w-full px-16 pb-32 group/page-header`}>
         {/* Icon - only renders when set */}
         {currentPage.icon && (
-          <div className={showCover ? '-mt-12 mb-1' : 'mt-2 mb-1'}>
+          <div className={showCover ? '-mt-[72px] mb-0' : 'mt-6 mb-0'}>
             <PageIcon
               icon={currentPage.icon}
               spaceSlug={spaceSlug!}
@@ -175,7 +175,7 @@ export default function PageViewPage() {
           suppressContentEditableWarning
           onBlur={handleTitleBlur}
           onKeyDown={handleTitleKeyDown}
-          className="text-[40px] font-bold text-notion-text leading-tight mb-1 outline-none focus:outline-none"
+          className="text-[40px] font-bold text-notion-text leading-tight mb-1 outline-none focus:outline-none px-2"
           data-placeholder="未命名页面"
         >
           {currentPage.title || '未命名页面'}

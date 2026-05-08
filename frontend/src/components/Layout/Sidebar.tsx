@@ -17,7 +17,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   if (collapsed) {
     return (
-      <div className="w-10 bg-notion-sidebarBg h-screen flex flex-col items-center pt-3 gap-1 border-r border-notion-border">
+      <div className="w-10 bg-notion-sidebarBg h-screen flex flex-col items-center pt-3 gap-1 border-r border-notion-border flex-shrink-0">
         <button
           onClick={onToggle}
           className="p-1.5 hover:bg-notion-hover rounded transition-colors"
@@ -30,7 +30,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }
 
   return (
-    <aside className="w-60 bg-notion-sidebarBg h-screen flex flex-col border-r border-notion-border flex-shrink-0">
+    <aside className="w-[270px] bg-notion-sidebarBg h-screen flex flex-col border-r border-notion-border flex-shrink-0">
       {/* Space selector header */}
       <div className="px-2 py-2 flex items-center justify-between">
         <div className="flex-1">
