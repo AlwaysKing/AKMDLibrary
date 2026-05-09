@@ -136,23 +136,14 @@ export default function PageViewPage() {
 
       {/* Page content area */}
       <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[720px] px-16'} mx-auto w-full pb-32 relative group/page-header`}>
-        {/* Action hints row - hover only, at very top of content area */}
-        {(!showCover || !currentPage.icon) && (
-          <div className="flex items-center gap-2 opacity-0 group-hover/page-header:opacity-100 transition-opacity duration-200 mb-4">
-            {!currentPage.icon && (
-              <PageIcon
-                icon={currentPage.icon}
-                spaceSlug={spaceSlug!}
-                pageId={currentPage.id}
-              />
-            )}
-            {!showCover && (
-              <CoverImage
-                coverUrl={currentPage.cover_url}
-                spaceSlug={spaceSlug!}
-                pageId={currentPage.id}
-              />
-            )}
+        {/* Cover image hint - only when no cover */}
+        {!showCover && (
+          <div className="opacity-0 group-hover/page-header:opacity-100 transition-opacity duration-200 mb-4">
+            <CoverImage
+              coverUrl={currentPage.cover_url}
+              spaceSlug={spaceSlug!}
+              pageId={currentPage.id}
+            />
           </div>
         )}
 
@@ -167,19 +158,30 @@ export default function PageViewPage() {
           </div>
         )}
 
-        {/* Title */}
-        <h1
-          key={`title-${currentPage.id}`}
-          ref={titleRef}
-          contentEditable
-          suppressContentEditableWarning
-          onBlur={handleTitleBlur}
-          onKeyDown={handleTitleKeyDown}
-          className="text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-1 px-2"
-          data-placeholder="未命名页面"
-        >
-          {currentPage.title || '未命名页面'}
-        </h1>
+        {/* Title row with add icon button next to title */}
+        <div className={`relative ${!currentPage.icon ? 'pt-12' : ''}`}>
+          {!currentPage.icon && (
+            <div className="absolute left-2 top-12">
+              <PageIcon
+                icon={currentPage.icon}
+                spaceSlug={spaceSlug!}
+                pageId={currentPage.id}
+              />
+            </div>
+          )}
+          <h1
+            key={`title-${currentPage.id}`}
+            ref={titleRef}
+            contentEditable
+            suppressContentEditableWarning
+            onBlur={handleTitleBlur}
+            onKeyDown={handleTitleKeyDown}
+            className={`text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-1 ${!currentPage.icon ? 'pl-[112px]' : 'px-2'}`}
+            data-placeholder="未命名页面"
+          >
+            {currentPage.title || '未命名页面'}
+          </h1>
+        </div>
 
         {/* Editor */}
         <PageEditor
