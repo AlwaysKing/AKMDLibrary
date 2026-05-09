@@ -12,3 +12,4 @@ backend/mdlibrary
 test-*.cjs
 .env
 *.exe
+.claude/

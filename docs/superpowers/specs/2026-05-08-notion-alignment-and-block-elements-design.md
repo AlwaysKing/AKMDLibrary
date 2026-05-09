@@ -6,7 +6,7 @@
 1. **样式全面向 Notion 对齐** — 字体、字号、行高、颜色、间距等
 2. **Block 元素功能** — 添加按钮、六点拖拽手柄、/菜单、样式组件
 
-参考源：`/Users/alwaysking/AKProject/MDLibrary/notion-example/docs/notion-snapshots/`
+参考源：`notion-example/docs/notion-snapshots/`
 
 ---
 

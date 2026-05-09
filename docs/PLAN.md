@@ -8,9 +8,9 @@
 
 **Tech Stack:** Go (Chi/Echo), React 18 + TypeScript + Vite + Zustand + Tailwind CSS, BlockNote (Fork), SQLite, Playwright (testing)
 
-**Project Root:** `/Users/alwaysking/AKProject/MDLibrary`
+**Project Root:** `./` (MDLibrary 项目根目录)
 
-**Spec:** `/Users/alwaysking/Desktop/outline-main/docs/superpowers/specs/2026-05-07-knowledge-base-design.md`
+**Spec:** `docs/superpowers/specs/2026-05-07-knowledge-base-design.md`
 
 ---
 
@@ -27,31 +27,30 @@
 
 - [ ] **Step 1: Create root project directory**
 ```bash
-mkdir -p /Users/alwaysking/AKProject/MDLibrary/{backend,frontend,docs,data/uploads}
+mkdir -p {backend,frontend,docs,data/uploads}
 ```
 
 - [ ] **Step 2: Initialize Go module**
 ```bash
-cd /Users/alwaysking/AKProject/MDLibrary/backend
-go mod init github.com/alwaysking/mdlibrary
+cd backend
+go mod init github.com/yourname/mdlibrary
 ```
 
 - [ ] **Step 3: Create React app with Vite**
 ```bash
-cd /Users/alwaysking/AKProject/MDLibrary/frontend
+cd frontend
 npm create vite@latest . -- --template react-ts
 ```
 
 - [ ] **Step 4: Install frontend dependencies**
 ```bash
-cd /Users/alwaysking/AKProject/MDLibrary/frontend
+cd frontend
 npm install axios zustand react-router-dom lucide-react
 npm install -D tailwindcss @tailwindcss/vite
 ```
 
 - [ ] **Step 5: Initialize Git repo**
 ```bash
-cd /Users/alwaysking/AKProject/MDLibrary
 git init
 ```
 
@@ -77,7 +76,7 @@ Create file with node_modules, dist, data.db, .DS_Store etc.
 
 - [ ] **Step 1: Install Go dependencies**
 ```bash
-cd /Users/alwaysking/AKProject/MDLibrary/backend
+cd backend
 go get github.com/golang-jwt/jwt/v5
 go get golang.org/x/crypto/bcrypt
 go get github.com/mattn/go-sqlite3
