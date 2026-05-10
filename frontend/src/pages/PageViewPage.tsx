@@ -179,14 +179,14 @@ export default function PageViewPage() {
             suppressContentEditableWarning
             onBlur={handleTitleBlur}
             onKeyDown={handleTitleKeyDown}
-            className="text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-3 px-2"
+            className="text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none px-2"
             data-placeholder="未命名页面"
           >
             {currentPage.title || '未命名页面'}
           </h1>
 
           {/* Editor */}
-          <div className="mt-[14px]">
+          <div className="mt-4">
             <PageEditor
               key={currentPage.id}
               initialContent={currentContent}
