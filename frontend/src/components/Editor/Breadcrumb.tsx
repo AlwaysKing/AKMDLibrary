@@ -13,7 +13,7 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
   const { currentSpace } = useSpaceStore();
 
   return (
-    <div className="flex items-center justify-between text-sm text-notion-textSecondary h-11 px-4">
+    <div className="flex items-center justify-between text-base text-notion-textSecondary h-11 px-4">
       <div className="flex items-center gap-1">
       <button
         onClick={() => navigate(`/s/${spaceSlug}`)}
