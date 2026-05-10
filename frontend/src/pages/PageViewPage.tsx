@@ -135,21 +135,11 @@ export default function PageViewPage() {
       )}
 
       {/* Page content area */}
-      <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[720px] px-16'} mx-auto w-full pb-32 relative group/page-header`}>
-        {/* Cover image hint - only when no cover */}
-        {!showCover && (
-          <div className="opacity-0 group-hover/page-header:opacity-100 transition-opacity duration-200 mb-4">
-            <CoverImage
-              coverUrl={currentPage.cover_url}
-              spaceSlug={spaceSlug!}
-              pageId={currentPage.id}
-            />
-          </div>
-        )}
+      <div className={`${currentPage.full_page ? 'w-full' : 'max-w-[720px]'} mx-auto w-full pb-32 relative group/page-header ${!showCover ? 'pt-[80px]' : ''}`}>
 
-        {/* Icon - overlaps cover when cover exists */}
+        {/* Icon - large display, overlaps cover when cover exists (Notion: margin-top: -42px) */}
         {currentPage.icon && (
-          <div className={showCover ? '-mt-12 mb-[46px] ml-2' : 'mt-0 mb-12 ml-2'}>
+          <div className={showCover ? 'relative -mt-[42px] mb-[40px] ml-2' : 'mb-[40px] ml-2'}>
             <PageIcon
               icon={currentPage.icon}
               spaceSlug={spaceSlug!}
@@ -158,38 +148,49 @@ export default function PageViewPage() {
           </div>
         )}
 
-        {/* Title row with add icon button next to title */}
-        <div className={`relative ${!currentPage.icon ? 'pt-12' : ''}`}>
-          {!currentPage.icon && (
-            <div className="absolute left-2 top-12">
+        {/* Page controls - 添加图标/添加封面 buttons, hidden by default, visible on hover (Notion: opacity 0, pointer-events none) */}
+        {(!currentPage.icon || !showCover) && (
+          <div className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover/page-header:opacity-100 group-hover/page-header:pointer-events-auto transition-opacity duration-100 py-2">
+            {!currentPage.icon && (
               <PageIcon
                 icon={currentPage.icon}
                 spaceSlug={spaceSlug!}
                 pageId={currentPage.id}
               />
-            </div>
-          )}
-          <h1
-            key={`title-${currentPage.id}`}
-            ref={titleRef}
-            contentEditable
-            suppressContentEditableWarning
-            onBlur={handleTitleBlur}
-            onKeyDown={handleTitleKeyDown}
-            className={`text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-1 ${!currentPage.icon ? 'pl-[112px]' : 'px-2'}`}
-            data-placeholder="未命名页面"
-          >
-            {currentPage.title || '未命名页面'}
-          </h1>
-        </div>
+            )}
+            {!showCover && (
+              <CoverImage
+                coverUrl={currentPage.cover_url}
+                spaceSlug={spaceSlug!}
+                pageId={currentPage.id}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Title */}
+        <h1
+          key={`title-${currentPage.id}`}
+          ref={titleRef}
+          contentEditable
+          suppressContentEditableWarning
+          onBlur={handleTitleBlur}
+          onKeyDown={handleTitleKeyDown}
+          className="text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-3 px-2"
+          data-placeholder="未命名页面"
+        >
+          {currentPage.title || '未命名页面'}
+        </h1>
 
         {/* Editor */}
-        <PageEditor
-          key={currentPage.id}
-          initialContent={currentContent}
-          onSave={handleSave}
-          readOnly={false}
-        />
+        <div className="mt-[14px]">
+          <PageEditor
+            key={currentPage.id}
+            initialContent={currentContent}
+            onSave={handleSave}
+            readOnly={false}
+          />
+        </div>
       </div>
     </div>
   );

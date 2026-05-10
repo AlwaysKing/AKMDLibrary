@@ -79,6 +79,7 @@
   --bn-colors-border: #e9e9e7 !important;
   --bn-colors-side-menu: #9b9a97 !important;
   --bn-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol" !important;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol" !important;
   --bn-border-radius: 8px !important;
 }
 
@@ -86,7 +87,13 @@
   font-size: 16px !important;
   line-height: 1.5 !important;
   color: #37352f !important;
-  padding: 0 !important;
+  padding: 0 8px !important;
+}
+
+/* 标题和编辑器保持系统默认字体渲染，不受 body antialiased 影响 */
+h1[contenteditable],
+.bn-editor {
+  -webkit-font-smoothing: auto !important;
 }
 
 .bn-editor .bn-block-content {

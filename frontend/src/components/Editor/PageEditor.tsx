@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { BlockNoteViewRaw, useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteEditor } from '@blocknote/core';
-import '@blocknote/core/fonts/inter.css';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
 
