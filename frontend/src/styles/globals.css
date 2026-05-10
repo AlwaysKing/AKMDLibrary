@@ -97,7 +97,7 @@ h1[contenteditable],
 }
 
 .bn-editor .bn-block-content {
-  padding: 2px 0 !important;
+  padding: 2px !important;
 }
 
 /* Headings */
