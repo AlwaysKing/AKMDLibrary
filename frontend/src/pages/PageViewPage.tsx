@@ -92,8 +92,8 @@ export default function PageViewPage() {
   const showCover = !!currentPage.cover_url;
 
   return (
-    <div className="min-h-screen bg-notion-bg flex flex-col">
-      {/* Breadcrumb */}
+    <div className="flex-1 flex flex-col overflow-hidden bg-notion-bg">
+      {/* Breadcrumb — 固定在顶部，不随内容滚动 */}
       <Breadcrumb
         pageTitle={currentPage.title}
         spaceSlug={spaceSlug!}
@@ -125,71 +125,75 @@ export default function PageViewPage() {
         }
       />
 
-      {/* Cover image - full width at top */}
-      {showCover && (
-        <CoverImage
-          coverUrl={currentPage.cover_url}
-          spaceSlug={spaceSlug!}
-          pageId={currentPage.id}
-        />
-      )}
+      {/* 可滚动的内容区域 — Breadcrumb 固定，只有这部分滚动 */}
+      <div className="flex-1 overflow-y-auto">
 
-      {/* Page content area */}
-      <div className={`${currentPage.full_page ? 'w-full' : 'max-w-[720px]'} mx-auto w-full pb-32 relative group/page-header ${!showCover ? 'pt-[80px]' : ''}`}>
-
-        {/* Icon - large display, overlaps cover when cover exists (Notion: margin-top: -42px) */}
-        {currentPage.icon && (
-          <div className={showCover ? 'relative -mt-[42px] mb-[40px] ml-2' : 'mb-[40px] ml-2'}>
-            <PageIcon
-              icon={currentPage.icon}
-              spaceSlug={spaceSlug!}
-              pageId={currentPage.id}
-            />
-          </div>
+        {/* Cover image - full width at top */}
+        {showCover && (
+          <CoverImage
+            coverUrl={currentPage.cover_url}
+            spaceSlug={spaceSlug!}
+            pageId={currentPage.id}
+          />
         )}
 
-        {/* Page controls - 添加图标/添加封面 buttons, hidden by default, visible on hover (Notion: opacity 0, pointer-events none) */}
-        {(!currentPage.icon || !showCover) && (
-          <div className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover/page-header:opacity-100 group-hover/page-header:pointer-events-auto transition-opacity duration-100 py-2">
-            {!currentPage.icon && (
+        {/* Page content area */}
+        <div className={`${currentPage.full_page ? 'w-full' : 'max-w-[720px]'} mx-auto w-full pb-32 relative group/page-header ${!showCover ? 'pt-[80px]' : ''}`}>
+
+          {/* Icon - large display, overlaps cover when cover exists (Notion: margin-top: -42px) */}
+          {currentPage.icon && (
+            <div className={showCover ? 'relative -mt-[42px] mb-[40px] ml-2' : 'mb-[40px] ml-2'}>
               <PageIcon
                 icon={currentPage.icon}
                 spaceSlug={spaceSlug!}
                 pageId={currentPage.id}
               />
-            )}
-            {!showCover && (
-              <CoverImage
-                coverUrl={currentPage.cover_url}
-                spaceSlug={spaceSlug!}
-                pageId={currentPage.id}
-              />
-            )}
+            </div>
+          )}
+
+          {/* Page controls - 添加图标/添加封面 buttons, hidden by default, visible on hover (Notion: opacity 0, pointer-events none) */}
+          {(!currentPage.icon || !showCover) && (
+            <div className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover/page-header:opacity-100 group-hover/page-header:pointer-events-auto transition-opacity duration-100 py-2">
+              {!currentPage.icon && (
+                <PageIcon
+                  icon={currentPage.icon}
+                  spaceSlug={spaceSlug!}
+                  pageId={currentPage.id}
+                />
+              )}
+              {!showCover && (
+                <CoverImage
+                  coverUrl={currentPage.cover_url}
+                  spaceSlug={spaceSlug!}
+                  pageId={currentPage.id}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Title */}
+          <h1
+            key={`title-${currentPage.id}`}
+            ref={titleRef}
+            contentEditable
+            suppressContentEditableWarning
+            onBlur={handleTitleBlur}
+            onKeyDown={handleTitleKeyDown}
+            className="text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-3 px-2"
+            data-placeholder="未命名页面"
+          >
+            {currentPage.title || '未命名页面'}
+          </h1>
+
+          {/* Editor */}
+          <div className="mt-[14px]">
+            <PageEditor
+              key={currentPage.id}
+              initialContent={currentContent}
+              onSave={handleSave}
+              readOnly={false}
+            />
           </div>
-        )}
-
-        {/* Title */}
-        <h1
-          key={`title-${currentPage.id}`}
-          ref={titleRef}
-          contentEditable
-          suppressContentEditableWarning
-          onBlur={handleTitleBlur}
-          onKeyDown={handleTitleKeyDown}
-          className="text-[40px] font-bold text-notion-text leading-[1.2] outline-none focus:outline-none mb-3 px-2"
-          data-placeholder="未命名页面"
-        >
-          {currentPage.title || '未命名页面'}
-        </h1>
-
-        {/* Editor */}
-        <div className="mt-[14px]">
-          <PageEditor
-            key={currentPage.id}
-            initialContent={currentContent}
-            onSave={handleSave}
-            readOnly={false}
-          />
         </div>
       </div>
     </div>
