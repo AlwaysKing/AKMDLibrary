@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { BlockNoteViewRaw, useCreateBlockNote } from '@blocknote/react';
+import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext } from '@blocknote/react';
 import { BlockNoteEditor } from '@blocknote/core';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
+import { blockNoteComponents, clearBlockSelection } from './BlockNoteComponents';
 
 interface PageEditorProps {
   initialContent: string;
@@ -53,34 +54,16 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
     const container = editorRef.current;
     if (!container || readOnly) return;
 
-    const handleClick = (e: MouseEvent) => {
-      // Clear any existing block selections
-      const existing = container.querySelectorAll('.block-selected');
-      existing.forEach(el => el.classList.remove('block-selected'));
-
-      // Find the clicked block
-      const target = (e.target as HTMLElement).closest('.bn-block-outer');
-      if (target) {
-        // Only select if clicked on the block's empty area (not on content)
-        const contentEl = (e.target as HTMLElement).closest('.bn-block-content, .bn-inline-content, [contenteditable]');
-        if (!contentEl) {
-          e.preventDefault();
-          target.classList.add('block-selected');
-        }
-      }
-    };
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        const existing = container.querySelectorAll('.block-selected');
-        existing.forEach(el => el.classList.remove('block-selected'));
+        clearBlockSelection();
       }
     };
 
-    container.addEventListener('click', handleClick);
+    container.addEventListener('click', () => clearBlockSelection());
     document.addEventListener('keydown', handleKeyDown);
     return () => {
-      container.removeEventListener('click', handleClick);
+      container.removeEventListener('click', () => clearBlockSelection());
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [readOnly]);
@@ -111,7 +94,7 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
         </div>
       )}
 
-      <div className="w-full">
+      <ComponentsContext.Provider value={blockNoteComponents}>
         <BlockNoteViewRaw
           editor={editor}
           editable={!readOnly}
@@ -122,7 +105,7 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
           formattingToolbar={true}
           linkToolbar={true}
         />
-      </div>
+      </ComponentsContext.Provider>
     </div>
   );
 }

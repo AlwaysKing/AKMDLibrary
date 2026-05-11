@@ -94,7 +94,7 @@
   font-size: 16px !important;
   line-height: 1.5 !important;
   color: #2c2c2b !important;
-  padding: 0 8px !important;
+  padding: 0 !important;
 }
 
 /* 标题和编辑器保持系统默认字体渲染，不受 body antialiased 影响 */
@@ -106,16 +106,14 @@ h4[contenteditable],
   -webkit-font-smoothing: auto !important;
 }
 
-/* Block 外层: 对应 Notion 的 padding-top/bottom: 6px (不加水平padding，避免破坏对齐) */
+/* Block 外层: 对应 Notion 的 padding，左侧多 2px 与选中框对齐 */
 .bn-editor .bn-block-outer {
-  padding-top: 6px !important;
-  padding-bottom: 6px !important;
+  padding: 6px 6px 6px 8px !important;
 }
 
-/* Block 内层文本: 对应 Notion 的 padding-top/bottom: 2px */
+/* Block 内层文本: Notion 系统字体的实际行框比 lineHeight 高，需 2px 上下 padding 补偿 */
 .bn-editor .bn-block-content {
-  padding-top: 2px !important;
-  padding-bottom: 2px !important;
+  padding: 2px 0 !important;
 }
 
 /* Inline content: Notion 文本属性 */
@@ -305,29 +303,42 @@ h4[contenteditable],
   background: #d4ebfb;
 }
 
-/* Side Menu Notion Style — appears on left of block on hover */
+/* Side Menu Notion Style — floating-ui popover positioned on block hover */
+/* The side menu is rendered in a floating portal by BlockNote v0.50, not inside the block */
+
+/* Override floating-ui wrapper */
+/* Notion: 图标颜色始终不变，只有按钮背景在 hover 时出现 */
+[data-floating-ui-focusable]:has(> .bn-side-menu) {
+  opacity: 1 !important;
+  /* Notion: 侧边菜单出现在 block 左侧，间隙约 14px */
+  left: -14px !important;
+}
+
 .bn-side-menu {
   display: flex !important;
   align-items: center !important;
-  gap: 1px !important;
-  opacity: 0 !important;
-  transition: opacity 0.15s ease !important;
-  position: absolute !important;
-  left: -48px !important;
-  width: 48px !important;
-  z-index: 10 !important;
+  gap: 0px !important;
 }
 
-/* 悬停块时显示 SideMenu */
-.bn-block-outer:hover > .bn-block > .bn-side-menu {
-  opacity: 0.6 !important;
+/* 覆盖 BlockNote 默认的按块类型高度值（heading1=108px 等），
+   改为匹配第一行文字高度(lineHeight + padding 4px)，让按钮垂直居中与 Notion 一致 */
+.bn-side-menu {
+  height: 28px !important; /* 段落: lineHeight 24 + padding 4 */
 }
 
-.bn-block-outer:hover > .bn-block > .bn-side-menu:hover {
-  opacity: 1 !important;
+.bn-side-menu[data-block-type="heading"][data-level="1"] {
+  height: 43px !important; /* lineHeight 39 + padding 4 */
 }
 
-/* SideMenu 按钮样式 */
+.bn-side-menu[data-block-type="heading"][data-level="2"] {
+  height: 35px !important; /* lineHeight 31.2 + padding 4 ≈ 35 */
+}
+
+.bn-side-menu[data-block-type="heading"][data-level="3"] {
+  height: 30px !important; /* lineHeight 26 + padding 4 */
+}
+
+/* SideMenu 按钮通用样式 — Notion: rgb(44,44,43), transparent bg, 4px radius */
 .bn-side-menu .bn-button {
   width: 24px !important;
   height: 24px !important;
@@ -335,48 +346,51 @@ h4[contenteditable],
   align-items: center !important;
   justify-content: center !important;
   border-radius: 4px !important;
-  color: rgba(0, 0, 0, 0.4) !important;
+  color: rgb(44, 44, 43) !important;
   background: transparent !important;
   border: none !important;
   cursor: pointer !important;
   padding: 0 !important;
-  font-size: 14px !important;
+  font-size: 16px !important;
   line-height: 1 !important;
 }
 
+/* + button hover: Notion uses rgba(42,28,0,0.07) */
 .bn-side-menu .bn-button:hover {
-  color: rgba(0, 0, 0, 0.6) !important;
-  background: rgba(0, 0, 0, 0.06) !important;
+  background: rgba(42, 28, 0, 0.07) !important;
 }
 
 /* ============================================
-   Six-dot drag handle icon replacement
+   Drag handle button — Notion: 18x24, grab cursor
    ============================================ */
 
-/* Hide the default three-line drag indicator SVG */
-.bn-side-menu svg[data-test="dragHandle"] {
-  display: none !important;
-}
-
-/* Drag handle button: grab cursor + relative positioning for pseudo-element */
+/* Drag handle button */
 .bn-side-menu .bn-button[draggable="true"] {
+  width: 18px !important;
+  border-radius: 4px !important;
   cursor: grab !important;
   position: relative !important;
+  overflow: visible !important;
 }
 
 .bn-side-menu .bn-button[draggable="true"]:active {
   cursor: grabbing !important;
 }
 
-/* Six-dot icon via CSS mask (inherits currentColor for dynamic hover) */
+/* Hide the default three-line drag indicator SVG */
+.bn-side-menu svg[data-test="dragHandle"] {
+  display: none !important;
+}
+
+/* Six-dot icon via CSS mask — Notion: 20x20, color rgb(173,169,163) */
 .bn-side-menu .bn-button[draggable="true"]::before {
   content: '' !important;
   display: block !important;
-  width: 16px !important;
-  height: 16px !important;
-  background-color: currentColor !important;
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='9' cy='6' r='1.5'/%3E%3Ccircle cx='15' cy='6' r='1.5'/%3E%3Ccircle cx='9' cy='12' r='1.5'/%3E%3Ccircle cx='15' cy='12' r='1.5'/%3E%3Ccircle cx='9' cy='18' r='1.5'/%3E%3Ccircle cx='15' cy='18' r='1.5'/%3E%3C/svg%3E") !important;
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='9' cy='6' r='1.5'/%3E%3Ccircle cx='15' cy='6' r='1.5'/%3E%3Ccircle cx='9' cy='12' r='1.5'/%3E%3Ccircle cx='15' cy='12' r='1.5'/%3E%3Ccircle cx='9' cy='18' r='1.5'/%3E%3Ccircle cx='15' cy='18' r='1.5'/%3E%3C/svg%3E") !important;
+  width: 20px !important;
+  height: 20px !important;
+  background-color: rgb(173, 169, 163) !important;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='7.5' cy='4' r='1.25'/%3E%3Ccircle cx='12.5' cy='4' r='1.25'/%3E%3Ccircle cx='7.5' cy='10' r='1.25'/%3E%3Ccircle cx='12.5' cy='10' r='1.25'/%3E%3Ccircle cx='7.5' cy='16' r='1.25'/%3E%3Ccircle cx='12.5' cy='16' r='1.25'/%3E%3C/svg%3E") !important;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='7.5' cy='4' r='1.25'/%3E%3Ccircle cx='12.5' cy='4' r='1.25'/%3E%3Ccircle cx='7.5' cy='10' r='1.25'/%3E%3Ccircle cx='12.5' cy='10' r='1.25'/%3E%3Ccircle cx='7.5' cy='16' r='1.25'/%3E%3Ccircle cx='12.5' cy='16' r='1.25'/%3E%3C/svg%3E") !important;
   mask-size: contain !important;
   -webkit-mask-size: contain !important;
   mask-repeat: no-repeat !important;
@@ -387,10 +401,19 @@ h4[contenteditable],
   transform: translate(-50%, -50%) !important;
 }
 
-/* Resize the add block button icon to fit the 22px button */
+/* Add block button icon — Notion: 20x20, rgb(173,169,163), 不随 hover 变色 */
 .bn-side-menu svg[data-test="dragHandleAdd"] {
-  width: 14px !important;
-  height: 14px !important;
+  width: 20px !important;
+  height: 20px !important;
+  fill: rgb(173, 169, 163) !important;
+  stroke: rgb(173, 169, 163) !important;
+  color: rgb(173, 169, 163) !important;
+}
+
+.bn-side-menu svg[data-test="dragHandleAdd"]:hover {
+  fill: rgb(173, 169, 163) !important;
+  stroke: rgb(173, 169, 163) !important;
+  color: rgb(173, 169, 163) !important;
 }
 
 /* Formatting Toolbar Notion Style */
@@ -456,6 +479,7 @@ h4[contenteditable],
   min-width: 150px !important;
 }
 
+.bn-drag-handle-menu [role="menuitem"],
 .bn-drag-handle-menu button {
   padding: 5px 8px !important;
   border-radius: 4px !important;
@@ -465,8 +489,10 @@ h4[contenteditable],
   display: flex !important;
   align-items: center !important;
   gap: 8px !important;
+  cursor: pointer !important;
 }
 
+.bn-drag-handle-menu [role="menuitem"]:hover,
 .bn-drag-handle-menu button:hover {
   background: #ebebea !important;
 }
@@ -515,29 +541,9 @@ h4[contenteditable],
   border-radius: 4px;
 }
 
-/* Selected block — blue left border indicator */
-.bn-block-outer[data-selected="true"] > .bn-block,
-.bn-block-outer.block-selected > .bn-block {
-  position: relative;
-}
-
-.bn-block-outer[data-selected="true"] > .bn-block::before,
-.bn-block-outer.block-selected > .bn-block::before {
-  content: '';
-  position: absolute;
-  left: -4px;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: #2383e2;
-  border-radius: 2px;
-}
-
-/* Block selection highlight */
-.bn-block-outer.block-selected {
-  background: rgba(35, 131, 226, 0.04) !important;
-  border-radius: 4px;
-}
+/* Block selection is handled by dynamic <style> injection in BlockNoteComponents.tsx
+   using [data-id="xxx"] selectors to survive ProseMirror DOM rebuilding.
+   Notion uses rgba(35,131,226,0.14) background with no left blue line. */
 
 /* ============================================
    Table Styles - Notion-like
