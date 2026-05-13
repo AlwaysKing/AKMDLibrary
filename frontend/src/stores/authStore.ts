@@ -10,6 +10,7 @@ interface AuthState {
   logout: () => void;
   fetchMe: () => Promise<void>;
   initialize: () => void;
+  updateProfile: (data: { display_name?: string; avatar_url?: string }) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -55,5 +56,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     } else {
       set({ isLoading: false });
     }
+  },
+
+  updateProfile: async (data) => {
+    const user = await authApi.updateProfile(data);
+    set({ user });
   },
 }));

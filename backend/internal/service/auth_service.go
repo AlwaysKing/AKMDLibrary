@@ -94,3 +94,28 @@ func (s *AuthService) HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(bytes), err
 }
+
+func (s *AuthService) UpdateProfile(userID int, displayName, avatarURL *string) (*model.User, error) {
+	return s.userRepo.Update(userID, &model.UpdateUserRequest{
+		DisplayName: displayName,
+		AvatarURL:   avatarURL,
+	})
+}
+
+func (s *AuthService) ChangePassword(userID int, oldPassword, newPassword string) error {
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return errors.New("user not found")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword)); err != nil {
+		return errors.New("old password is incorrect")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	return s.userRepo.UpdatePassword(userID, string(hash))
+}

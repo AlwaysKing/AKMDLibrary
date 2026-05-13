@@ -42,12 +42,13 @@ func (s *Scanner) ScanSpaces() ([]*model.Space, error) {
 }
 
 func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
-	spacePath := filepath.Join(s.docsDir, spaceSlug)
-	if _, err := os.Stat(spacePath); os.IsNotExist(err) {
+	spacePath, dirName := s.resolveSpaceDir(spaceSlug)
+	if spacePath == "" {
 		return nil, fmt.Errorf("space not found: %s", spaceSlug)
 	}
 
-	nodes, err := s.scanDirectory(spacePath, spaceSlug)
+	// Use actual directory name as pathPrefix so FilePath stores the real path
+	nodes, err := s.scanDirectory(spacePath, dirName)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +59,31 @@ func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
 	})
 
 	return nodes, nil
+}
+
+// resolveSpaceDir finds the actual directory for a space slug.
+// Returns the full path and the directory name.
+func (s *Scanner) resolveSpaceDir(spaceSlug string) (string, string) {
+	// Try exact slug match first
+	exactPath := filepath.Join(s.docsDir, spaceSlug)
+	if info, err := os.Stat(exactPath); err == nil && info.IsDir() {
+		return exactPath, spaceSlug
+	}
+
+	// Scan directories and match by generated slug
+	entries, err := os.ReadDir(s.docsDir)
+	if err != nil {
+		return "", ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == "public" {
+			continue
+		}
+		if generateSlug(entry.Name()) == spaceSlug {
+			return filepath.Join(s.docsDir, entry.Name()), entry.Name()
+		}
+	}
+	return "", ""
 }
 
 // scanDirectory scans a directory for pages.

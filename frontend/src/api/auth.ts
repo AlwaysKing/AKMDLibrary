@@ -34,4 +34,13 @@ export const authApi = {
     const response = await apiClient.get<User>('/auth/me');
     return response.data;
   },
+
+  updateProfile: async (data: { display_name?: string; avatar_url?: string }): Promise<User> => {
+    const response = await apiClient.put<User>('/auth/profile', data);
+    return response.data;
+  },
+
+  changePassword: async (data: { old_password: string; new_password: string }): Promise<void> => {
+    await apiClient.put('/auth/password', data);
+  },
 };

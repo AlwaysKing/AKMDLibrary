@@ -201,6 +201,15 @@ func (r *UserRepository) Update(id int, req *model.UpdateUserRequest) (*model.Us
 	return r.GetByID(id)
 }
 
+func (r *UserRepository) UpdatePassword(id int, passwordHash string) error {
+	query := "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?"
+	_, err := r.db.Exec(query, passwordHash, time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+	return nil
+}
+
 func (r *UserRepository) Delete(id int) error {
 	query := "DELETE FROM users WHERE id = ?"
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,39 @@ type PageService struct {
 	repos   map[string]*repository.PageRepository
 	dbs     map[string]interface{ Close() error }
 	mu      sync.RWMutex
+}
+
+// resolveSpaceDir finds the actual directory for a space slug.
+// Returns the full path and the actual directory name.
+func (s *PageService) resolveSpaceDir(spaceSlug string) (string, string) {
+	// Try exact slug match first
+	exactPath := filepath.Join(s.docsDir, spaceSlug)
+	if info, err := os.Stat(exactPath); err == nil && info.IsDir() {
+		return exactPath, spaceSlug
+	}
+
+	// Scan directories and match by generated slug
+	entries, err := os.ReadDir(s.docsDir)
+	if err != nil {
+		return "", ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		dirName := entry.Name()
+		slug := strings.ToLower(dirName)
+		slug = strings.ReplaceAll(slug, " ", "-")
+		re := regexp.MustCompile("[^a-z0-9-]")
+		slug = re.ReplaceAllString(slug, "")
+		re2 := regexp.MustCompile("-+")
+		slug = re2.ReplaceAllString(slug, "-")
+		slug = strings.Trim(slug, "-")
+		if slug == spaceSlug {
+			return filepath.Join(s.docsDir, dirName), dirName
+		}
+	}
+	return "", ""
 }
 
 func NewPageService(docsDir string) *PageService {
@@ -49,9 +83,10 @@ func (s *PageService) getRepo(spaceSlug string) (*repository.PageRepository, err
 		return repo, nil
 	}
 
-	spaceDir := filepath.Join(s.docsDir, spaceSlug)
-	if err := os.MkdirAll(spaceDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create space directory: %w", err)
+	// Resolve actual directory name (slug may differ from dir name)
+	spaceDir, _ := s.resolveSpaceDir(spaceSlug)
+	if spaceDir == "" {
+		return nil, fmt.Errorf("space directory not found for slug: %s", spaceSlug)
 	}
 
 	db, err := repository.OpenSpaceDB(spaceDir)
@@ -74,6 +109,61 @@ func (s *PageService) CloseAll() {
 	}
 	s.repos = make(map[string]*repository.PageRepository)
 	s.dbs = make(map[string]interface{ Close() error })
+}
+
+// RebuildCache closes the space's cache DB, deletes it, and rebuilds from filesystem.
+func (s *PageService) RebuildCache(spaceSlug string) error {
+	spaceDir, _ := s.resolveSpaceDir(spaceSlug)
+	if spaceDir == "" {
+		return fmt.Errorf("space directory not found for slug: %s", spaceSlug)
+	}
+
+	// Close existing connection and remove from memory
+	s.mu.Lock()
+	if db, ok := s.dbs[spaceSlug]; ok {
+		db.Close()
+		delete(s.dbs, spaceSlug)
+		delete(s.repos, spaceSlug)
+	}
+	s.mu.Unlock()
+
+	// Delete the cache DB file
+	cachePath := filepath.Join(spaceDir, ".cache.db")
+	os.Remove(cachePath)
+
+	// Re-scan and rebuild: open new DB, scan tree, enrich
+	repo, err := s.getRepo(spaceSlug)
+	if err != nil {
+		return err
+	}
+
+	scanner := filesystem.NewScanner(s.docsDir)
+	nodes, err := scanner.ScanPageTree(spaceSlug)
+	if err != nil {
+		return err
+	}
+
+	// Create cache entries for all pages
+	s.rebuildNodes(nodes, repo)
+	return nil
+}
+
+func (s *PageService) rebuildNodes(nodes []*model.PageNode, repo *repository.PageRepository) {
+	for _, node := range nodes {
+		if node.FilePath != "" {
+			created, err := repo.Create(&model.Page{
+				Title:     node.Title,
+				FilePath:  node.FilePath,
+				SortOrder: float64(time.Now().UnixNano()),
+			})
+			if err == nil {
+				node.ID = created.ID
+			}
+		}
+		if len(node.Children) > 0 {
+			s.rebuildNodes(node.Children, repo)
+		}
+	}
 }
 
 // --- Helper methods ---

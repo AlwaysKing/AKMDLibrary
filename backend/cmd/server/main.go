@@ -46,7 +46,7 @@ func main() {
 	authService := service.NewAuthService(userRepo, jwtSecret)
 	userService := service.NewUserService(userRepo, authService)
 	pageService := service.NewPageService(docsDir)
-	spaceService := service.NewSpaceService(spaceRepo, memberRepo, docsDir)
+	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageService, docsDir)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -85,6 +85,8 @@ func main() {
 		r.Use(authMiddleware.RequireAuth)
 
 		r.Get("/api/auth/me", authHandler.Me)
+			r.Put("/api/auth/profile", authHandler.UpdateProfile)
+			r.Put("/api/auth/password", authHandler.ChangePassword)
 
 		// Spaces
 		r.Get("/api/spaces", spaceHandler.List)
@@ -92,6 +94,7 @@ func main() {
 		r.Post("/api/spaces", spaceHandler.Create)
 		r.Put("/api/spaces/{slug}", spaceHandler.Update)
 		r.Delete("/api/spaces/{slug}", spaceHandler.Delete)
+		r.Post("/api/spaces/{slug}/refresh", spaceHandler.Refresh)
 
 		// Space members
 		r.Get("/api/spaces/{slug}/members", spaceHandler.ListMembers)
@@ -120,6 +123,7 @@ func main() {
 			r.Get("/api/users/{id}", userHandler.GetByID)
 			r.Put("/api/users/{id}", userHandler.Update)
 			r.Delete("/api/users/{id}", userHandler.Delete)
+			r.Put("/api/users/{id}/password", userHandler.ResetPassword)
 		})
 
 		// Upload

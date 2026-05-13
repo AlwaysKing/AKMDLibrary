@@ -22,4 +22,8 @@ export const usersApi = {
   delete: async (id: number): Promise<void> => {
     await apiClient.delete(`/users/${id}`);
   },
+
+  resetPassword: async (id: number, password: string): Promise<void> => {
+    await apiClient.put(`/users/${id}/password`, { password });
+  },
 };

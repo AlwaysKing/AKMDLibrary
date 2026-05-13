@@ -53,6 +53,10 @@ export const spacesApi = {
     await apiClient.delete(`/spaces/${slug}`);
   },
 
+  refresh: async (slug: string): Promise<void> => {
+    await apiClient.post(`/spaces/${slug}/refresh`);
+  },
+
   getMembers: async (slug: string): Promise<SpaceMember[]> => {
     const response = await apiClient.get<SpaceMember[]>(`/spaces/${slug}/members`);
     return response.data;

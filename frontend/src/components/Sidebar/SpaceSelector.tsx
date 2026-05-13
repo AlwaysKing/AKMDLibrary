@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, MoreHorizontal } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { Space } from '../../api/spaces';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -52,23 +52,20 @@ export default function SpaceSelector() {
             onClick={() => setIsOpen(false)}
           />
           <div className="absolute left-0 top-full mt-1 w-full bg-white border border-notion-border rounded-lg shadow-lg z-20 max-h-96 overflow-auto">
-            {spaces.map((space) => (
-              <button
-                key={space.id}
-                onClick={() => handleSelectSpace(space)}
-                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-notion-hover transition-colors text-left"
-              >
-                {space.icon && <span className="text-lg">{space.icon}</span>}
-                <span className="text-notion-text">{space.name}</span>
-              </button>
-            ))}
-            <button
-              onClick={() => setIsOpen(false)}
-              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-notion-hover transition-colors text-left text-notion-textSecondary"
-            >
-              <MoreHorizontal className="w-4 h-4" />
-              <span>管理空间</span>
-            </button>
+            {spaces.length > 0 ? (
+              spaces.map((space) => (
+                <button
+                  key={space.id}
+                  onClick={() => handleSelectSpace(space)}
+                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-notion-hover transition-colors text-left"
+                >
+                  {space.icon && <span className="text-lg">{space.icon}</span>}
+                  <span className="text-notion-text">{space.name}</span>
+                </button>
+              ))
+            ) : (
+              <div className="px-3 py-2 text-sm text-notion-textSecondary">没有可用空间</div>
+            )}
           </div>
         </>
       )}

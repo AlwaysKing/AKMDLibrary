@@ -16,17 +16,20 @@ import (
 type SpaceService struct {
 	spaceRepo  *repository.SpaceRepository
 	memberRepo *repository.MemberRepository
+	pageService *PageService
 	docsDir    string
 }
 
 func NewSpaceService(
 	spaceRepo *repository.SpaceRepository,
 	memberRepo *repository.MemberRepository,
+	pageService *PageService,
 	docsDir string,
 ) *SpaceService {
 	return &SpaceService{
 		spaceRepo:  spaceRepo,
 		memberRepo: memberRepo,
+		pageService: pageService,
 		docsDir:    docsDir,
 	}
 }
@@ -178,6 +181,22 @@ func (s *SpaceService) SyncFromFS() error {
 
 	// Sync to database
 	return s.spaceRepo.SyncFromFS(spaces)
+}
+
+func (s *SpaceService) RefreshSpace(slug string) error {
+	// Verify space exists
+	_, err := s.GetBySlug(slug)
+	if err != nil {
+		return err
+	}
+
+	// Re-scan spaces from filesystem
+	if err := s.SyncFromFS(); err != nil {
+		return err
+	}
+
+	// Rebuild page cache for this space
+	return s.pageService.RebuildCache(slug)
 }
 
 func (s *SpaceService) generateSlug(name string) string {

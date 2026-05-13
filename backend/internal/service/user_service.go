@@ -52,3 +52,11 @@ func (s *UserService) Update(id int, req *model.UpdateUserRequest) (*model.User,
 func (s *UserService) Delete(id int) error {
 	return s.userRepo.Delete(id)
 }
+
+func (s *UserService) ResetPassword(id int, newPassword string) error {
+	passwordHash, err := s.authService.HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+	return s.userRepo.UpdatePassword(id, passwordHash)
+}
