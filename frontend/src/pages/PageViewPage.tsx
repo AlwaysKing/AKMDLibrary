@@ -6,7 +6,7 @@ import Breadcrumb from '../components/Editor/Breadcrumb';
 import CoverImage from '../components/Editor/CoverImage';
 import PageIcon from '../components/Editor/PageIcon';
 import PageEditor from '../components/Editor/PageEditor';
-import { MoreHorizontal } from 'lucide-react';
+import { MoreHorizontal, Loader2, Check } from 'lucide-react';
 
 // Separate component so useEffect runs in its own render cycle
 function PageNotFound({ spaceSlug }: { spaceSlug?: string }) {
@@ -44,6 +44,34 @@ export default function PageViewPage() {
 
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [showPageMenu, setShowPageMenu] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | null>(null);
+  const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
+  const [, setTick] = useState(0);
+
+  // 每分钟刷新一次相对时间显示
+  useEffect(() => {
+    const timer = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatSyncTime = useCallback((date: Date) => {
+    const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (diff < 60) return '同步于: 刚刚';
+    if (diff < 3600) return `同步于: ${Math.floor(diff / 60)} 分钟前`;
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `同步于: ${y}/${m}/${d} ${h}:${min}`;
+  }, []);
+
+  const handleSyncStatusChange = useCallback((status: 'syncing' | 'synced') => {
+    setSyncStatus(status);
+    if (status === 'synced') {
+      setLastSyncDate(new Date());
+    }
+  }, []);
 
   const handleFullPageToggle = useCallback(async () => {
     if (!spaceSlug || !pageId || !currentPage) return;
@@ -98,8 +126,21 @@ export default function PageViewPage() {
         pageTitle={currentPage.title}
         spaceSlug={spaceSlug!}
         actions={
-          <div className="relative">
-            <button
+          <div className="flex items-center gap-2">
+            {syncStatus === 'syncing' && (
+              <span className="flex items-center gap-1 text-xs text-notion-textSecondary">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                同步中
+              </span>
+            )}
+            {syncStatus === 'synced' && lastSyncDate && (
+              <span className="flex items-center gap-1 text-xs text-notion-textSecondary">
+                {formatSyncTime(lastSyncDate)}
+                <Check className="w-3 h-3" />
+              </span>
+            )}
+            <div className="relative">
+              <button
               onClick={() => setShowPageMenu(!showPageMenu)}
               className="p-1 hover:bg-notion-hover rounded transition-colors"
             >
@@ -121,6 +162,7 @@ export default function PageViewPage() {
                 </div>
               </>
             )}
+          </div>
           </div>
         }
       />
@@ -191,6 +233,7 @@ export default function PageViewPage() {
               key={currentPage.id}
               initialContent={currentContent}
               onSave={handleSave}
+              onSyncStatusChange={handleSyncStatusChange}
               readOnly={false}
             />
           </div>

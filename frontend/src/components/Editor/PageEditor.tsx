@@ -8,10 +8,11 @@ import { blockNoteComponents, clearBlockSelection } from './BlockNoteComponents'
 interface PageEditorProps {
   initialContent: string;
   onSave: (content: string) => void | Promise<void>;
+  onSyncStatusChange?: (status: 'syncing' | 'synced') => void;
   readOnly?: boolean;
 }
 
-export function PageEditor({ initialContent, onSave, readOnly = false }: PageEditorProps) {
+export function PageEditor({ initialContent, onSave, onSyncStatusChange, readOnly = false }: PageEditorProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -25,11 +26,13 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
     if (!hasChanges || isSaving || readOnly) return;
 
     setIsSaving(true);
+    onSyncStatusChange?.('syncing');
     try {
       const currentBlocks = editor.document;
       const markdown = blocksToMarkdown(currentBlocks);
       await onSave(markdown);
       setHasChanges(false);
+      onSyncStatusChange?.('synced');
     } catch (error) {
       console.error('Failed to save:', error);
     } finally {
@@ -81,19 +84,6 @@ export function PageEditor({ initialContent, onSave, readOnly = false }: PageEdi
 
   return (
     <div className="relative" ref={editorRef}>
-      {(hasChanges || isSaving) && (
-        <div className="fixed top-4 right-4 z-50 bg-white px-3 py-1.5 rounded-lg shadow-md border border-gray-200 text-sm">
-          {isSaving ? (
-            <span className="flex items-center gap-2 text-gray-600">
-              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-gray-600" />
-              保存中...
-            </span>
-          ) : (
-            <span className="text-gray-500">未保存的更改...</span>
-          )}
-        </div>
-      )}
-
       <ComponentsContext.Provider value={blockNoteComponents}>
         <BlockNoteViewRaw
           editor={editor}
