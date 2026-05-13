@@ -202,7 +202,7 @@ export default function PageViewPage() {
         )}
 
         {/* Page content area */}
-        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[720px] mx-auto'} w-full pb-32 relative group/page-header ${!showCover ? (currentPage.icon ? 'pt-[96px]' : 'pt-[64px]') : ''}`}>
+        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} pb-32 relative group/page-header ${!showCover ? (currentPage.icon ? 'pt-[96px]' : 'pt-[64px]') : ''}`}>
 
           {/* Icon - large display, overlaps cover when cover exists (Notion: margin-top: -42px) */}
           {currentPage.icon && (
