@@ -14,6 +14,7 @@ import React, {
   ComponentType,
   ReactNode,
 } from 'react';
+import { useBlockNoteEditor } from '@blocknote/react';
 
 // ==================== Menu Context ====================
 interface MenuContextValue {
@@ -93,6 +94,45 @@ const SideMenuButton: React.FC<{
 }> = (props) => {
   const { className, onClick, icon, draggable, onDragStart, onDragEnd, label, children } = props;
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const editor = useBlockNoteEditor();
+
+  // Intercept "+" button click: insert empty block and open slash menu
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    // Detect if this is the "+" add button (not the drag handle)
+    const isAddButton = !draggable;
+    if (isAddButton && editor) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Find the block this side menu belongs to
+      const sideMenu = buttonRef.current?.closest('.bn-side-menu');
+      const blockOuter = sideMenu?.closest('.bn-block-outer');
+      if (!blockOuter) return;
+
+      const blockContainer = blockOuter.querySelector('[data-node-type="blockContainer"]') || blockOuter;
+      const blockId = blockContainer.getAttribute('data-id') || blockOuter.getAttribute('data-id');
+      if (!blockId) return;
+
+      // Insert a new empty paragraph block after the current block
+      const newBlocks = editor.insertBlocks([{ type: 'paragraph' }], blockId, 'after');
+      if (newBlocks.length > 0) {
+        // Focus the new block
+        editor.focus();
+        // Open slash menu so user can pick block type
+        setTimeout(() => {
+          try {
+            (editor as any).suggestionMenu?.openSuggestionMenu?.('/');
+          } catch {
+            // fallback: try dispatching "/" key
+          }
+        }, 50);
+      }
+      return;
+    }
+
+    // For drag handle, use original behavior
+    onClick?.(e);
+  }, [draggable, editor, onClick]);
 
   // 使用原生 DOM 事件，确保 dispatchEvent 和真实点击都能触发
   useEffect(() => {
@@ -134,7 +174,7 @@ const SideMenuButton: React.FC<{
     <button
       ref={buttonRef}
       className={className}
-      onClick={onClick}
+      onClick={handleClick}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
