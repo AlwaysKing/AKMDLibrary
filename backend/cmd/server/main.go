@@ -29,6 +29,8 @@ func main() {
 	os.MkdirAll(dataDir, 0755)
 	uploadDir := filepath.Join(dataDir, "uploads")
 	os.MkdirAll(uploadDir, 0755)
+	iconDir := filepath.Join(dataDir, "icons")
+	os.MkdirAll(iconDir, 0755)
 
 	// Initialize database
 	db, err := repository.NewDB(dataDir)
@@ -58,7 +60,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userService)
 	spaceHandler := handler.NewSpaceHandler(spaceService, authService)
 	pageHandler := handler.NewPageHandler(pageService, spaceService, authService)
-	uploadHandler := handler.NewUploadHandler(pageService, uploadDir)
+	uploadHandler := handler.NewUploadHandler(pageService, uploadDir, iconDir)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -128,16 +130,29 @@ func main() {
 
 		// Upload
 		r.Post("/api/upload", uploadHandler.Upload)
+
+		// Icon library
+		r.Get("/api/icons", uploadHandler.ListIcons)
+		r.Get("/api/icons/check", uploadHandler.CheckIconName)
+		r.Post("/api/icons/use", uploadHandler.UseIcon)
 	})
 
 	// Public upload files
 	r.Get("/api/upload/{filename}", uploadHandler.ServeUpload)
+
+	// Public icon library files
+	r.Get("/api/icons/*", uploadHandler.ServeIcon)
 
 	// Public page assets (cover images, etc.) — no auth needed for CSS background-image
 	r.Get("/api/spaces/{slug}/pages/{id}/assets/*", pageHandler.ServeAsset)
 
 	// Serve frontend static files + SPA fallback
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Don't serve SPA for API routes — return 404 instead
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
 		// Clean the path
 		cleanPath := strings.TrimPrefix(r.URL.Path, "/")
 		if cleanPath == "" {

@@ -196,19 +196,21 @@ export default function PageViewPage() {
         {showCover && (
           <CoverImage
             coverUrl={currentPage.cover_url}
+            coverOffset={currentPage.cover_offset}
             spaceSlug={spaceSlug!}
             pageId={currentPage.id}
           />
         )}
 
         {/* Page content area */}
-        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} pb-32 relative group/page-header ${!showCover ? (currentPage.icon ? 'pt-[96px]' : 'pt-[64px]') : ''}`}>
+        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} pb-32 relative group/page-header ${!showCover ? (currentPage.icon ? (currentPage.icon_large ? 'pt-[125px]' : 'pt-[96px]') : 'pt-[64px]') : ''}`}>
 
-          {/* Icon - large display, overlaps cover when cover exists (Notion: margin-top: -42px) */}
+          {/* Icon */}
           {currentPage.icon && (
-            <div className={showCover ? 'relative -mt-[42px] ml-2' : 'ml-2'}>
+            <div className={showCover ? `relative ml-2 ${currentPage.icon_large ? '-mt-[72px]' : '-mt-[42px]'}` : 'ml-2'}>
               <PageIcon
                 icon={currentPage.icon}
+                iconLarge={currentPage.icon_large}
                 spaceSlug={spaceSlug!}
                 pageId={currentPage.id}
               />
@@ -217,6 +219,7 @@ export default function PageViewPage() {
                 <div className="h-0 translate-y-2 -ml-2 overflow-visible opacity-0 pointer-events-none group-hover/page-header:opacity-100 group-hover/page-header:pointer-events-auto transition-opacity duration-100">
                   <CoverImage
                     coverUrl={currentPage.cover_url}
+                    coverOffset={currentPage.cover_offset}
                     spaceSlug={spaceSlug!}
                     pageId={currentPage.id}
                   />
@@ -238,6 +241,7 @@ export default function PageViewPage() {
               {!showCover && (
                 <CoverImage
                   coverUrl={currentPage.cover_url}
+                  coverOffset={currentPage.cover_offset}
                   spaceSlug={spaceSlug!}
                   pageId={currentPage.id}
                 />

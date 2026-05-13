@@ -110,18 +110,19 @@ const getThumbUrl = (url: string) => {
 
 interface CoverImageProps {
   coverUrl: string | null | undefined;
+  coverOffset?: number;
   spaceSlug: string;
   pageId: number;
 }
 
-export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImageProps) {
+export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSlug, pageId }: CoverImageProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerTab, setPickerTab] = useState<'gallery' | 'upload' | 'link' | 'unsplash'>('gallery');
   const [galleryCategory, setGalleryCategory] = useState('gradient');
   const [linkUrl, setLinkUrl] = useState('');
   const [isRepositioning, setIsRepositioning] = useState(false);
-  const [coverOffset, setCoverOffset] = useState(50);
+  const [coverOffset, setCoverOffset] = useState(savedOffset ?? 50);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { updateMetadata } = usePageStore();
   const [isUploading, setIsUploading] = useState(false);
@@ -176,20 +177,18 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
-      setShowPicker(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const handleSelectPreset = async (preset: string) => {
     await updateMetadata(spaceSlug, pageId, { cover_url: preset });
-    setShowPicker(false);
-    // 不设置 isHovered(false)，保持按钮可见
+    // Keep picker open so user can try different covers
   };
 
   const handleSelectUnsplash = async (url: string) => {
     await updateMetadata(spaceSlug, pageId, { cover_url: url });
-    setShowPicker(false);
+    // Keep picker open so user can try different covers
   };
 
   const handleRemove = async () => {
@@ -246,7 +245,8 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
 
   const exitReposition = useCallback(() => {
     setIsRepositioning(false);
-  }, []);
+    updateMetadata(spaceSlug, pageId, { cover_offset: coverOffset });
+  }, [coverOffset, spaceSlug, pageId, updateMetadata]);
 
   // Close picker on outside click
   useEffect(() => {
@@ -466,7 +466,7 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
               <div className="p-4">
                 <button
                   className="w-full px-3 py-2 border border-gray-300 rounded text-sm text-notion-text hover:bg-gray-50 transition-colors"
-                  onClick={() => { setShowPicker(false); fileInputRef.current?.click(); }}
+                  onClick={() => { fileInputRef.current?.click(); }}
                 >
                   上传文件
                 </button>
@@ -490,7 +490,6 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
                   onKeyDown={async (e) => {
                     if (e.key === 'Enter' && linkUrl.trim()) {
                       await updateMetadata(spaceSlug, pageId, { cover_url: linkUrl.trim() });
-                      setShowPicker(false);
                     }
                   }}
                 />
@@ -498,7 +497,6 @@ export default function CoverImage({ coverUrl, spaceSlug, pageId }: CoverImagePr
                   onClick={async () => {
                     if (linkUrl.trim()) {
                       await updateMetadata(spaceSlug, pageId, { cover_url: linkUrl.trim() });
-                      setShowPicker(false);
                     }
                   }}
                   disabled={!linkUrl.trim()}

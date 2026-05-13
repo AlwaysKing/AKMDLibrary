@@ -8,6 +8,8 @@ export interface Page {
   icon?: string;
   cover_url?: string;
   full_page?: boolean;
+  icon_large?: boolean;
+  cover_offset?: number;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -25,6 +27,8 @@ export interface PageMetadata {
   icon?: string;
   cover_url?: string;
   full_page?: boolean;
+  icon_large?: boolean;
+  cover_offset?: number;
   sort_order?: number;
 }
 

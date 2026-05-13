@@ -112,7 +112,11 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
             onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
             className="w-5 h-5 flex items-center justify-center flex-shrink-0 hover:bg-notion-border rounded transition-colors group/icon"
           >
-            <span className="text-sm group-hover/icon:hidden">{page.icon}</span>
+            {(page.icon.startsWith('/') || page.icon.startsWith('http')) ? (
+              <img src={page.icon} alt="" className="w-4 h-4 object-contain group-hover/icon:hidden" />
+            ) : (
+              <span className="text-sm group-hover/icon:hidden">{page.icon}</span>
+            )}
             <ChevronRight className={`w-4 h-4 text-notion-textSecondary hidden group-hover/icon:block transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
           </button>
         ) : (

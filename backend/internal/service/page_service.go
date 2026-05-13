@@ -191,6 +191,47 @@ func (s *PageService) toRelativeCover(coverURL string) string {
 	return coverURL
 }
 
+// cleanupLocalAsset removes a local asset file (icon image) from a page's public directory.
+// The iconURL is expected to be an API path like /api/spaces/{slug}/pages/{id}/assets/{uuid}/file.png
+// or a relative path like ./public/{uuid}/file.png.
+func (s *PageService) cleanupLocalAsset(spaceSlug string, pageFilePath string, iconURL string) {
+	var assetPart string
+	if strings.HasPrefix(iconURL, "/api/spaces/") {
+		idx := strings.Index(iconURL, "/assets/")
+		if idx == -1 {
+			return
+		}
+		assetPart = iconURL[idx+len("/assets/"):]
+	} else if strings.HasPrefix(iconURL, "./public/") {
+		assetPart = strings.TrimPrefix(iconURL, "./public/")
+	} else {
+		return // not a local asset
+	}
+
+	pageDir := filepath.Dir(pageFilePath)
+	absAssetPath := filepath.Join(s.docsDir, pageDir, "public", assetPart)
+
+	// Safety: ensure path is under docs dir
+	absDocsDir, err := filepath.Abs(s.docsDir)
+	if err != nil {
+		return
+	}
+	absResolved, err := filepath.Abs(absAssetPath)
+	if err != nil {
+		return
+	}
+	if !strings.HasPrefix(absResolved, absDocsDir) {
+		return
+	}
+
+	// Remove the file and its parent uuid directory if empty
+	os.Remove(absResolved)
+	parentDir := filepath.Dir(absResolved)
+	if entries, err := os.ReadDir(parentDir); err == nil && len(entries) == 0 {
+		os.Remove(parentDir)
+	}
+}
+
 func (s *PageService) resolveUniqueTitle(dir string, title string, skipDir string) string {
 	baseTitle := title
 	counter := 2
@@ -298,6 +339,12 @@ func (s *PageService) GetByID(spaceSlug string, pageID int) (*model.Page, error)
 	}
 	if fm.FullPage != nil {
 		page.FullPage = *fm.FullPage
+	}
+	if fm.IconLarge != nil {
+		page.IconLarge = *fm.IconLarge
+	}
+	if fm.CoverOffset != nil {
+		page.CoverOffset = *fm.CoverOffset
 	}
 	page.Content = body
 
@@ -416,6 +463,10 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID int, req *model.Update
 	fm, body, _ := frontmatter.Parse(raw)
 
 	if req.Icon != nil {
+		// Clean up old local icon file when icon is being changed
+		if fm.Icon != "" && fm.Icon != *req.Icon {
+			s.cleanupLocalAsset(spaceSlug, page.FilePath, fm.Icon)
+		}
 		fm.Icon = *req.Icon
 	}
 	if req.CoverURL != nil {
@@ -423,6 +474,12 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID int, req *model.Update
 	}
 	if req.FullPage != nil {
 		fm.FullPage = req.FullPage
+	}
+	if req.IconLarge != nil {
+		fm.IconLarge = req.IconLarge
+	}
+	if req.CoverOffset != nil {
+		fm.CoverOffset = req.CoverOffset
 	}
 
 	if req.Title != nil && *req.Title != "" && *req.Title != page.Title {
@@ -464,7 +521,13 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID int, req *model.Update
 		return nil, fmt.Errorf("failed to write frontmatter: %w", err)
 	}
 
-	return repo.UpdateMeta(pageID, req)
+	// Update SQL fields (title, icon, cover_url, etc.)
+	if _, err := repo.UpdateMeta(pageID, req); err != nil {
+		return nil, err
+	}
+
+	// Re-read the page to pick up frontmatter-only fields (icon_large, etc.)
+	return s.GetByID(spaceSlug, pageID)
 }
 
 func (s *PageService) Delete(spaceSlug string, pageID int) error {

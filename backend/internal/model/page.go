@@ -9,8 +9,10 @@ type Page struct {
 	FilePath  string    `json:"file_path" db:"file_path"`
 	Icon      string    `json:"icon" db:"icon"`
 	CoverURL  string    `json:"cover_url" db:"cover_url"`
-	FullPage  bool      `json:"full_page" db:"full_page"`
-	SortOrder float64   `json:"sort_order" db:"sort_order"`
+	FullPage    bool      `json:"full_page" db:"full_page"`
+	IconLarge   bool      `json:"icon_large" db:"-"`
+	CoverOffset int       `json:"cover_offset" db:"-"`
+	SortOrder   float64   `json:"sort_order" db:"sort_order"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 	Content   string    `json:"content,omitempty"`
@@ -38,9 +40,11 @@ type UpdatePageRequest struct {
 }
 
 type UpdatePageMetaRequest struct {
-	Title     *string  `json:"title"`
-	Icon      *string  `json:"icon"`
-	CoverURL  *string  `json:"cover_url"`
-	FullPage  *bool    `json:"full_page"`
-	SortOrder *float64 `json:"sort_order"`
+	Title       *string  `json:"title"`
+	Icon        *string  `json:"icon"`
+	CoverURL    *string  `json:"cover_url"`
+	FullPage    *bool    `json:"full_page"`
+	IconLarge   *bool    `json:"icon_large"`
+	CoverOffset *int     `json:"cover_offset"`
+	SortOrder   *float64 `json:"sort_order"`
 }
