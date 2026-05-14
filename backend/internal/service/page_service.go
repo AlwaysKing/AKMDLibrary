@@ -783,6 +783,194 @@ func (s *PageService) PermanentDelete(spaceSlug string, trashRelPath string) err
 	return nil
 }
 
+// Duplicate creates a copy of a page (and its entire subtree) under an optional target parent.
+// If targetParentID is nil, the duplicate is placed at the space root.
+func (s *PageService) Duplicate(spaceSlug string, pageID int, targetParentID *int, spaceID int) (*model.Page, error) {
+	repo, err := s.getRepo(spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the original page
+	origPage, err := repo.GetByID(pageID)
+	if err != nil {
+		return nil, fmt.Errorf("source page not found: %w", err)
+	}
+
+	// Read the original file content + frontmatter
+	absPath := filepath.Join(s.docsDir, origPage.FilePath)
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read source page: %w", err)
+	}
+	fm, body, _ := frontmatter.Parse(raw)
+
+	// Determine target directory
+	var targetDir string // absolute path to directory where the new .md goes
+	var targetRelDir string
+	newTitle := origPage.Title + " 副本"
+
+	if targetParentID != nil {
+		parentPage, err := repo.GetByID(*targetParentID)
+		if err != nil {
+			return nil, fmt.Errorf("target parent not found: %w", err)
+		}
+		parentFileName := filepath.Base(parentPage.FilePath)
+		parentName := strings.TrimSuffix(parentFileName, ".md")
+		parentRelDir := filepath.Dir(parentPage.FilePath)
+		childRelDir := filepath.Join(parentRelDir, parentName)
+		targetDir = filepath.Join(s.docsDir, childRelDir)
+		targetRelDir = childRelDir
+	} else {
+		spaceDir, _ := s.resolveSpaceDir(spaceSlug)
+		targetDir = spaceDir
+		targetRelDir = spaceSlug
+	}
+
+	// Ensure target directory exists
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create target directory: %w", err)
+	}
+
+	// Resolve unique title in target directory
+	newTitle = s.resolveUniqueTitle(targetDir, newTitle, "")
+
+	// Write new .md file with same frontmatter + content
+	newRelPath := filepath.Join(targetRelDir, newTitle+".md")
+	newAbsPath := filepath.Join(s.docsDir, newRelPath)
+	fileBytes := frontmatter.Render(fm, body)
+	if err := os.WriteFile(newAbsPath, fileBytes, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write duplicate page: %w", err)
+	}
+
+	// Copy child directory tree if it exists
+	origName := strings.TrimSuffix(filepath.Base(origPage.FilePath), ".md")
+	origChildDir := filepath.Join(filepath.Dir(absPath), origName)
+	if info, err := os.Stat(origChildDir); err == nil && info.IsDir() {
+		newChildDir := filepath.Join(targetDir, newTitle)
+		if err := copyDirRecursive(origChildDir, newChildDir); err != nil {
+			return nil, fmt.Errorf("failed to copy child pages: %w", err)
+		}
+	}
+
+	// Rebuild cache to discover all new files
+	if err := s.RebuildCache(spaceSlug); err != nil {
+		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
+	}
+
+	// Find the new page by its file path
+	repo, err = s.getRepo(spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+	return repo.GetByPath(newRelPath)
+}
+
+// copyDirRecursive copies a directory tree from src to dst.
+func copyDirRecursive(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, _ := filepath.Rel(src, path)
+		targetPath := filepath.Join(dst, relPath)
+
+		if d.IsDir() {
+			return os.MkdirAll(targetPath, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, data, 0644)
+	})
+}
+
+// Move relocates a page (and its subtree) to a new parent.
+// If targetParentID is nil, the page is moved to the space root.
+func (s *PageService) Move(spaceSlug string, pageID int, targetParentID *int) (*model.Page, error) {
+	repo, err := s.getRepo(spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the page to move
+	page, err := repo.GetByID(pageID)
+	if err != nil {
+		return nil, fmt.Errorf("page not found: %w", err)
+	}
+
+	absPath := filepath.Join(s.docsDir, page.FilePath)
+	pageName := strings.TrimSuffix(filepath.Base(page.FilePath), ".md")
+	parentDir := filepath.Dir(absPath)
+	childDir := filepath.Join(parentDir, pageName)
+
+	// Determine target directory
+	var targetDir string    // absolute
+	var targetRelDir string // relative to docsDir
+
+	if targetParentID != nil {
+		// Validate: target parent cannot be self or a descendant
+		if *targetParentID == pageID {
+			return nil, fmt.Errorf("cannot move a page into itself")
+		}
+		targetParent, err := repo.GetByID(*targetParentID)
+		if err != nil {
+			return nil, fmt.Errorf("target parent not found: %w", err)
+		}
+		// Check if target is a descendant of the page being moved
+		if strings.HasPrefix(targetParent.FilePath, strings.TrimSuffix(page.FilePath, ".md")+"/") {
+			return nil, fmt.Errorf("cannot move a page into its own descendant")
+		}
+
+		tpFileName := filepath.Base(targetParent.FilePath)
+		tpName := strings.TrimSuffix(tpFileName, ".md")
+		tpRelDir := filepath.Dir(targetParent.FilePath)
+		childRelDir := filepath.Join(tpRelDir, tpName)
+		targetDir = filepath.Join(s.docsDir, childRelDir)
+		targetRelDir = childRelDir
+	} else {
+		spaceDir, _ := s.resolveSpaceDir(spaceSlug)
+		targetDir = spaceDir
+		targetRelDir = spaceSlug
+	}
+
+	// Ensure target directory exists
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create target directory: %w", err)
+	}
+
+	// Resolve unique title (skip own directory which will be vacated)
+	newTitle := s.resolveUniqueTitle(targetDir, page.Title, "")
+
+	// Move .md file
+	newRelPath := filepath.Join(targetRelDir, newTitle+".md")
+	newAbsPath := filepath.Join(s.docsDir, newRelPath)
+	if err := os.Rename(absPath, newAbsPath); err != nil {
+		return nil, fmt.Errorf("failed to move page file: %w", err)
+	}
+
+	// Move child directory if exists
+	if info, err := os.Stat(childDir); err == nil && info.IsDir() {
+		newChildDir := filepath.Join(targetDir, newTitle)
+		if err := os.Rename(childDir, newChildDir); err != nil {
+			return nil, fmt.Errorf("failed to move child directory: %w", err)
+		}
+	}
+
+	// Rebuild cache to update all paths
+	if err := s.RebuildCache(spaceSlug); err != nil {
+		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
+	}
+
+	// Find the moved page by its new file path
+	repo, err = s.getRepo(spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+	return repo.GetByPath(newRelPath)
+}
+
 // ListStarred returns all starred pages for a space
 func (s *PageService) ListStarred(spaceSlug string) ([]*model.Page, error) {
 	repo, err := s.getRepo(spaceSlug)

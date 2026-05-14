@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronRight, FileText, MoreHorizontal, Plus, Trash2, Edit3, Star } from 'lucide-react';
+import { ChevronRight, FileText, MoreHorizontal, Plus, Trash2, Edit3, Star, Link, Copy, FolderInput } from 'lucide-react';
 import { Page } from '../../api/pages';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { usePageStore } from '../../stores/pageStore';
 import { useSpaceStore } from '../../stores/spaceStore';
+import MoveToDialog from './MoveToDialog';
 
 interface PageTreeItemProps {
   page: Page;
@@ -16,12 +17,14 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
   const [showMenu, setShowMenu] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState(page.title);
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const { spaceSlug } = useParams<{ spaceSlug: string }>();
-  const { createPage, deletePage, updateMetadata, refreshPageTree } = usePageStore();
+  const { createPage, deletePage, updateMetadata, refreshPageTree, duplicatePage, movePage } = usePageStore();
   const hasChildren = page.children && page.children.length > 0;
   const isActive = location.pathname.includes(`/p/${page.id}`);
   const isExpanded = expandedPageIds.has(page.id);
@@ -61,7 +64,6 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
 
   const handleAddSubPage = async () => {
     if (!spaceSlug) return;
-    setShowMenu(false);
     try {
       const newPage = await createPage(spaceSlug, '未命名页面', page.id);
       await refreshPageTree();
@@ -110,6 +112,41 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
       useSpaceStore.getState().fetchStarred(spaceSlug);
     } catch (err) {
       console.error('Failed to toggle star:', err);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!spaceSlug) return;
+    setShowMenu(false);
+    const url = `${window.location.origin}/s/${spaceSlug}/p/${page.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy link:', err);
+    }
+  };
+
+  const handleDuplicate = async () => {
+    if (!spaceSlug) return;
+    setShowMenu(false);
+    try {
+      await duplicatePage(spaceSlug, page.id);
+      await refreshPageTree();
+    } catch (err) {
+      console.error('Failed to duplicate page:', err);
+    }
+  };
+
+  const handleMove = async (targetParentId: number | null) => {
+    if (!spaceSlug) return;
+    setShowMoveDialog(false);
+    try {
+      await movePage(spaceSlug, page.id, targetParentId);
+      await refreshPageTree();
+    } catch (err) {
+      console.error('Failed to move page:', err);
     }
   };
 
@@ -169,21 +206,26 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
           </span>
         )}
 
-        {/* Quick add sub-page button */}
-        <button
-          onClick={(e) => { e.stopPropagation(); handleAddSubPage(); }}
-          className="flex items-center justify-center w-5 h-5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
-          title="添加子页面"
-        >
-          <Plus className="w-4 h-4 text-[#8e8b86]" />
-        </button>
+        {/* Copy feedback toast */}
+        {copyFeedback && (
+          <span className="text-xs text-green-600 flex-shrink-0 mr-1">已复制</span>
+        )}
 
         {/* More menu button */}
         <button
           onClick={openMenu}
-          className="flex items-center justify-center w-5 h-5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0 ml-1"
+          className="flex items-center justify-center w-5 h-5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
         >
           <MoreHorizontal className="w-4 h-4 text-[#8e8b86]" />
+        </button>
+
+        {/* Quick add sub-page button */}
+        <button
+          onClick={(e) => { e.stopPropagation(); handleAddSubPage(); }}
+          className="flex items-center justify-center w-5 h-5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0 ml-1"
+          title="添加子页面"
+        >
+          <Plus className="w-4 h-4 text-[#8e8b86]" />
         </button>
       </div>
 
@@ -203,18 +245,32 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
             {page.is_starred ? '取消收藏' : '添加收藏'}
           </button>
           <button
-            onClick={handleAddSubPage}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
-          >
-            <Plus className="w-4 h-4 text-notion-textSecondary" />
-            添加子页面
-          </button>
-          <button
             onClick={() => { setShowMenu(false); setIsRenaming(true); }}
             className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
           >
             <Edit3 className="w-4 h-4 text-notion-textSecondary" />
             重命名
+          </button>
+          <button
+            onClick={handleCopyLink}
+            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+          >
+            <Link className="w-4 h-4 text-notion-textSecondary" />
+            拷贝链接
+          </button>
+          <button
+            onClick={handleDuplicate}
+            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+          >
+            <Copy className="w-4 h-4 text-notion-textSecondary" />
+            创建副本
+          </button>
+          <button
+            onClick={() => { setShowMenu(false); setShowMoveDialog(true); }}
+            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+          >
+            <FolderInput className="w-4 h-4 text-notion-textSecondary" />
+            移动到
           </button>
           <hr className="my-1 border-notion-border" />
           <button
@@ -225,6 +281,16 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
             移到回收站
           </button>
         </div>
+      )}
+
+      {/* Move-to dialog */}
+      {showMoveDialog && (
+        <MoveToDialog
+          pageId={page.id}
+          pageTree={useSpaceStore.getState().pageTree}
+          onClose={() => setShowMoveDialog(false)}
+          onMove={handleMove}
+        />
       )}
 
       {/* Children */}

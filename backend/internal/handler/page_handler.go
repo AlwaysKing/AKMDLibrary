@@ -241,6 +241,87 @@ func (h *PageHandler) ServeAsset(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filePath)
 }
 
+// Duplicate handles POST /api/spaces/{slug}/pages/{id}/duplicate
+func (h *PageHandler) Duplicate(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if !h.checkSpaceAccess(w, r, slug) {
+		return
+	}
+
+	pageIDStr := chi.URLParam(r, "id")
+	pageID, err := strconv.Atoi(pageIDStr)
+	if err != nil {
+		http.Error(w, "Invalid page ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		TargetParentID *int `json:"target_parent_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	space, err := h.spaceService.GetBySlug(slug)
+	if err != nil {
+		http.Error(w, "Space not found", http.StatusNotFound)
+		return
+	}
+
+	page, err := h.pageService.Duplicate(slug, pageID, req.TargetParentID, space.ID)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") {
+			http.Error(w, errMsg, http.StatusNotFound)
+		} else {
+			http.Error(w, errMsg, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(page)
+}
+
+// Move handles PUT /api/spaces/{slug}/pages/{id}/move
+func (h *PageHandler) Move(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if !h.checkSpaceAccess(w, r, slug) {
+		return
+	}
+
+	pageIDStr := chi.URLParam(r, "id")
+	pageID, err := strconv.Atoi(pageIDStr)
+	if err != nil {
+		http.Error(w, "Invalid page ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		TargetParentID *int `json:"target_parent_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	page, err := h.pageService.Move(slug, pageID, req.TargetParentID)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "cannot") {
+			http.Error(w, errMsg, http.StatusBadRequest)
+		} else {
+			http.Error(w, errMsg, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(page)
+}
+
 // ListStarred handles GET /api/spaces/{slug}/pages/starred
 func (h *PageHandler) ListStarred(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")

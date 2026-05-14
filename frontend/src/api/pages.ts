@@ -68,6 +68,20 @@ export const pagesApi = {
     return response.data;
   },
 
+  duplicate: async (spaceSlug: string, pageId: number, targetParentId?: number | null): Promise<Page> => {
+    const response = await apiClient.post<Page>(`/spaces/${spaceSlug}/pages/${pageId}/duplicate`, {
+      target_parent_id: targetParentId ?? null,
+    });
+    return response.data;
+  },
+
+  move: async (spaceSlug: string, pageId: number, targetParentId: number | null): Promise<Page> => {
+    const response = await apiClient.put<Page>(`/spaces/${spaceSlug}/pages/${pageId}/move`, {
+      target_parent_id: targetParentId,
+    });
+    return response.data;
+  },
+
   delete: async (spaceSlug: string, pageId: number): Promise<void> => {
     await apiClient.delete(`/spaces/${spaceSlug}/pages/${pageId}`);
   },
