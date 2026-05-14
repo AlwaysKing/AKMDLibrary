@@ -499,6 +499,34 @@ const SuggestionMenuRoot: React.FC<{
   );
 };
 
+// Markdown shortcuts shown on the right side of each slash menu item
+const SLASH_MENU_SHORTCUTS: Record<string, string> = {
+  heading: '#',
+  heading_2: '##',
+  heading_3: '###',
+  heading_4: '####',
+  heading_5: '#####',
+  heading_6: '######',
+  toggle_heading: '#>',
+  toggle_heading_2: '##>',
+  toggle_heading_3: '###>',
+  paragraph: '',
+  bullet_list: '-',
+  numbered_list: '1.',
+  check_list: '[]',
+  toggle_list: '>',
+  quote: '""',
+  code_block: '```',
+  divider: '---',
+  table: '||',
+  image: '',
+  video: '',
+  audio: '',
+  file: '',
+  emoji: '',
+  page_break: '---',
+};
+
 const SuggestionMenuItem: React.FC<{
   className?: string;
   id?: string;
@@ -507,6 +535,7 @@ const SuggestionMenuItem: React.FC<{
   item: any;
 }> = (props) => {
   const { className, id, isSelected, onClick, item } = props;
+  const shortcut = SLASH_MENU_SHORTCUTS[item.key] || '';
   return (
     <div
       id={id}
@@ -515,10 +544,8 @@ const SuggestionMenuItem: React.FC<{
       data-selected={isSelected || undefined}
     >
       {item.icon && <span className="bn-suggestion-menu-item-icon">{item.icon}</span>}
-      <span className="bn-suggestion-menu-item-text">
-        <span className="bn-suggestion-menu-item-title">{item.title || item.name}</span>
-        {item.subtext && <span className="bn-suggestion-menu-item-subtext">{item.subtext}</span>}
-      </span>
+      <span className="bn-suggestion-menu-item-title">{item.title || item.name}</span>
+      {shortcut && <span className="bn-suggestion-menu-item-shortcut">{shortcut}</span>}
     </div>
   );
 };
