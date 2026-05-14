@@ -8,10 +8,11 @@ import { useSpaceStore } from '../../stores/spaceStore';
 interface PageTreeItemProps {
   page: Page;
   level: number;
+  expandedPageIds: Set<number>;
+  onToggleExpand: (pageId: number, expanded: boolean) => void;
 }
 
-export default function PageTreeItem({ page, level }: PageTreeItemProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+export default function PageTreeItem({ page, level, expandedPageIds, onToggleExpand }: PageTreeItemProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState(page.title);
@@ -23,6 +24,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
   const { createPage, deletePage, updateMetadata, refreshPageTree } = usePageStore();
   const hasChildren = page.children && page.children.length > 0;
   const isActive = location.pathname.includes(`/p/${page.id}`);
+  const isExpanded = expandedPageIds.has(page.id);
 
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
 
@@ -122,7 +124,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
         {/* Icon/Chevron — shared position: icon by default, chevron on hover */}
         {page.icon ? (
           <button
-            onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+            onClick={(e) => { e.stopPropagation(); onToggleExpand(page.id, !isExpanded); }}
             className="flex items-center justify-center flex-shrink-0 mr-2 hover:bg-notion-border rounded transition-colors group/icon"
             style={{ width: '22px', height: '18px' }}
           >
@@ -135,7 +137,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
           </button>
         ) : (
           <button
-            onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+            onClick={(e) => { e.stopPropagation(); onToggleExpand(page.id, !isExpanded); }}
             className="flex items-center justify-center flex-shrink-0 mr-2 hover:bg-notion-border rounded transition-colors group/icon"
             style={{ width: '22px', height: '18px' }}
           >
@@ -229,7 +231,7 @@ export default function PageTreeItem({ page, level }: PageTreeItemProps) {
       {hasChildren && isExpanded && (
         <div>
           {page.children!.map((child) => (
-            <PageTreeItem key={child.id} page={child} level={level + 1} />
+            <PageTreeItem key={child.id} page={child} level={level + 1} expandedPageIds={expandedPageIds} onToggleExpand={onToggleExpand} />
           ))}
         </div>
       )}

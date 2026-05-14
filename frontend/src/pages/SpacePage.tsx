@@ -2,7 +2,18 @@ import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSpaceStore } from '../stores/spaceStore';
 import { usePageStore } from '../stores/pageStore';
+import { usePreferenceStore } from '../stores/preferenceStore';
 import { Plus, Hash, Lock } from 'lucide-react';
+import { Page } from '../api/pages';
+
+// Recursively check if a page ID exists in the tree
+function findPageInTree(pages: Page[], targetId: number): boolean {
+  for (const page of pages) {
+    if (page.id === targetId) return true;
+    if (page.children && findPageInTree(page.children, targetId)) return true;
+  }
+  return false;
+}
 
 export default function SpacePage() {
   const { spaceSlug } = useParams<{ spaceSlug: string }>();
@@ -22,10 +33,14 @@ export default function SpacePage() {
     }
   }, [spaceSlug, currentSpace, setCurrentSpace]);
 
-  // Auto-navigate to first page if available
+  // Auto-navigate: prefer last viewed page, else first page
   useEffect(() => {
     if (pageTree.length > 0 && spaceSlug) {
-      navigate(`/s/${spaceSlug}/p/${pageTree[0].id}`, { replace: true });
+      const lastViewedId = usePreferenceStore.getState().getLastViewedPageId(spaceSlug);
+      // Check if the stored page ID still exists in the tree
+      const pageExists = lastViewedId && findPageInTree(pageTree, lastViewedId);
+      const targetId = pageExists ? lastViewedId! : pageTree[0].id;
+      navigate(`/s/${spaceSlug}/p/${targetId}`, { replace: true });
     }
   }, [pageTree, spaceSlug, navigate]);
 

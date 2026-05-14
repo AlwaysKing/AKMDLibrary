@@ -2,6 +2,7 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { usePageStore } from '../stores/pageStore';
 import { useSpaceStore } from '../stores/spaceStore';
+import { usePreferenceStore } from '../stores/preferenceStore';
 import Breadcrumb from '../components/Editor/Breadcrumb';
 import CoverImage from '../components/Editor/CoverImage';
 import PageIcon from '../components/Editor/PageIcon';
@@ -33,6 +34,7 @@ export default function PageViewPage() {
       if (space) {
         setCurrentSpace(space);
       }
+      usePreferenceStore.getState().setLastViewedPage(spaceSlug, parseInt(pageId));
     }
   }, [spaceSlug, pageId, fetchPage, setCurrentSpace]);
 

@@ -3,6 +3,7 @@ import { ChevronDown, Landmark } from 'lucide-react';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { Space } from '../../api/spaces';
 import { useNavigate, useParams } from 'react-router-dom';
+import { usePreferenceStore } from '../../stores/preferenceStore';
 
 export default function SpaceSelector() {
   const [isOpen, setIsOpen] = useState(false);
@@ -20,6 +21,7 @@ export default function SpaceSelector() {
       const spaceFromUrl = spaces.find(s => s.slug === spaceSlug);
       if (spaceFromUrl && (!currentSpace || currentSpace.slug !== spaceSlug)) {
         setCurrentSpace(spaceFromUrl);
+        usePreferenceStore.getState().setLastActiveSpace(spaceFromUrl.slug);
       }
     } else if (spaces.length > 0 && !currentSpace && !spaceSlug) {
       setCurrentSpace(spaces[0]);
@@ -29,6 +31,7 @@ export default function SpaceSelector() {
   const handleSelectSpace = (space: Space) => {
     setCurrentSpace(space);
     setIsOpen(false);
+    usePreferenceStore.getState().setLastActiveSpace(space.slug);
     navigate(`/s/${space.slug}`);
   };
 

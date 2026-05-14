@@ -86,6 +86,23 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_pages_space_id ON pages(space_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_space_members_space_id ON space_members(space_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_space_members_user_id ON space_members(user_id)`,
+		`CREATE TABLE IF NOT EXISTS user_global_preferences (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL UNIQUE,
+			last_active_space_slug TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS user_space_preferences (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			space_slug TEXT NOT NULL,
+			last_viewed_page_id INTEGER,
+			expanded_page_ids TEXT DEFAULT '[]',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			UNIQUE(user_id, space_slug)
+		)`,
 	}
 
 	for _, schema := range schemas {

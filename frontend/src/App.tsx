@@ -10,15 +10,26 @@ import TrashPage from './pages/TrashPage';
 import WelcomePage from './pages/WelcomePage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
+import { usePreferenceStore } from './stores/preferenceStore';
 
 function HomeRedirect() {
   const { isAuthenticated } = useAuthStore();
 
   useEffect(() => {
     if (isAuthenticated) {
-      useSpaceStore.getState().fetchSpaces().then(() => {
+      Promise.all([
+        useSpaceStore.getState().fetchSpaces(),
+        usePreferenceStore.getState().fetchPreferences(),
+      ]).then(() => {
         const spaces = useSpaceStore.getState().spaces;
-        if (spaces.length > 0) {
+        const prefs = usePreferenceStore.getState().preferences;
+        const lastSlug = prefs.last_active_space_slug;
+        const targetSpace = lastSlug
+          ? spaces.find((s: { slug: string }) => s.slug === lastSlug)
+          : null;
+        if (targetSpace) {
+          window.location.href = `/s/${targetSpace.slug}`;
+        } else if (spaces.length > 0) {
           window.location.href = `/s/${spaces[0].slug}`;
         } else {
           window.location.href = '/welcome';

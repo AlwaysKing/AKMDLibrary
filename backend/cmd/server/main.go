@@ -45,12 +45,14 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	spaceRepo := repository.NewSpaceRepository(db)
 	memberRepo := repository.NewMemberRepository(db)
+	prefRepo := repository.NewPreferenceRepository(db)
 
 	// Initialize services
 	authService := service.NewAuthService(userRepo, jwtSecret)
 	userService := service.NewUserService(userRepo, authService)
 	pageService := service.NewPageService(docsDir)
 	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageService, docsDir)
+	prefService := service.NewPreferenceService(prefRepo)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -63,6 +65,7 @@ func main() {
 	spaceHandler := handler.NewSpaceHandler(spaceService, authService)
 	pageHandler := handler.NewPageHandler(pageService, spaceService, authService)
 	uploadHandler := handler.NewUploadHandler(pageService, uploadDir, iconDir, coverDir)
+	prefHandler := handler.NewPreferenceHandler(prefService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -91,6 +94,10 @@ func main() {
 		r.Get("/api/auth/me", authHandler.Me)
 			r.Put("/api/auth/profile", authHandler.UpdateProfile)
 			r.Put("/api/auth/password", authHandler.ChangePassword)
+
+		// Preferences
+		r.Get("/api/user/preferences", prefHandler.Get)
+		r.Put("/api/user/preferences", prefHandler.Update)
 
 		// Spaces
 		r.Get("/api/spaces", spaceHandler.List)

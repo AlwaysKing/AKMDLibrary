@@ -1,8 +1,23 @@
 import PageTreeItem from './PageTreeItem';
 import { useSpaceStore } from '../../stores/spaceStore';
+import { usePreferenceStore } from '../../stores/preferenceStore';
 
 export default function PageTree() {
   const { pageTree, currentSpace } = useSpaceStore();
+  const { getExpandedPageIds, setExpandedPageIds } = usePreferenceStore();
+
+  const expandedPageIds = new Set(
+    currentSpace ? getExpandedPageIds(currentSpace.slug) : []
+  );
+
+  const handleToggleExpand = (pageId: number, expanded: boolean) => {
+    if (!currentSpace) return;
+    const current = getExpandedPageIds(currentSpace.slug);
+    const next = expanded
+      ? [...current, pageId]
+      : current.filter((id: number) => id !== pageId);
+    setExpandedPageIds(currentSpace.slug, next);
+  };
 
   if (!currentSpace) {
     return (
@@ -23,7 +38,7 @@ export default function PageTree() {
   return (
     <div data-page-tree="true" className="space-y-[2px]">
       {pageTree.map((page) => (
-        <PageTreeItem key={page.id} page={page} level={0} />
+        <PageTreeItem key={page.id} page={page} level={0} expandedPageIds={expandedPageIds} onToggleExpand={handleToggleExpand} />
       ))}
     </div>
   );
