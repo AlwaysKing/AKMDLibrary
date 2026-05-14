@@ -313,7 +313,7 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
   }, [activeItem]);
 
   return (
-    <div className="flex items-center justify-between text-base text-notion-textSecondary h-11 px-4">
+    <div className="flex items-center justify-between text-base text-notion-textSecondary h-11 px-4 select-none">
       <div className="flex items-center gap-1">
       {sidebarCollapsed && (
         <button
@@ -338,7 +338,7 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
         </button>
 
         {showMenu && (
-          <div className="absolute left-0 top-full mt-1 w-[240px] bg-white border border-notion-border rounded-lg shadow-lg z-50 py-1.5 px-1.5">
+          <div className="absolute left-0 top-full mt-1 w-[240px] bg-white border border-notion-border rounded-lg shadow-lg z-50 py-1.5 px-1.5 select-none">
             {spaces.map(space => (
               <SpaceMenuItem
                 key={space.id}

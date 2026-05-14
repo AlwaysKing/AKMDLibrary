@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { pagesApi, TrashedItem } from '../api/pages';
 import { useSpaceStore } from '../stores/spaceStore';
-import { RotateCcw, Trash2, ArrowLeft } from 'lucide-react';
+import { RotateCcw, Trash2 } from 'lucide-react';
 
 export default function TrashPage() {
   const { spaceSlug } = useParams<{ spaceSlug: string }>();
@@ -55,59 +55,55 @@ export default function TrashPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto py-8 px-4">
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={() => navigate(-1)}
-          className="p-1 hover:bg-notion-hover rounded transition-colors"
-        >
-          <ArrowLeft className="w-5 h-5 text-notion-textSecondary" />
-        </button>
-        <div>
-          <h1 className="text-2xl font-semibold text-notion-text">回收站</h1>
-          <p className="text-sm text-notion-textSecondary mt-0.5">删除的页面可以在这里还原</p>
+    <div className="flex-1 flex flex-col overflow-hidden bg-notion-bg">
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-[912px] mx-auto px-24 py-8 pb-32">
+          <div className="mb-6">
+            <h1 className="text-2xl font-semibold text-notion-text">回收站</h1>
+            <p className="text-sm text-notion-textSecondary mt-0.5">删除的页面可以在这里还原</p>
+          </div>
+
+          {items.length === 0 ? (
+            <div className="text-center py-16">
+              <p className="text-notion-textSecondary">回收站是空的</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {items.map((item) => (
+                <div
+                  key={item.trash_path}
+                  className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-notion-hover transition-colors group"
+                >
+                  <div>
+                    <p className="text-notion-text font-medium">{item.name}</p>
+                    <p className="text-xs text-notion-textSecondary mt-0.5">
+                      原路径：{item.parent_path || '根目录'}/{item.file_name}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => handleRestore(item)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-border rounded transition-colors"
+                      title="还原"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      还原
+                    </button>
+                    <button
+                      onClick={() => handlePermanentDelete(item)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 rounded transition-colors"
+                      title="永久删除"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      永久删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-
-      {items.length === 0 ? (
-        <div className="text-center py-16">
-          <p className="text-notion-textSecondary">回收站是空的</p>
-        </div>
-      ) : (
-        <div className="space-y-1">
-          {items.map((item) => (
-            <div
-              key={item.trash_path}
-              className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-notion-hover transition-colors group"
-            >
-              <div>
-                <p className="text-notion-text font-medium">{item.name}</p>
-                <p className="text-xs text-notion-textSecondary mt-0.5">
-                  原路径：{item.parent_path || '根目录'}/{item.file_name}
-                </p>
-              </div>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => handleRestore(item)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-notion-text hover:bg-notion-border rounded transition-colors"
-                  title="还原"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  还原
-                </button>
-                <button
-                  onClick={() => handlePermanentDelete(item)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 rounded transition-colors"
-                  title="永久删除"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  永久删除
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

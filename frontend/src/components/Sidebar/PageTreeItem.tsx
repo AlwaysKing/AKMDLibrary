@@ -65,13 +65,20 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
     navigate(`/s/${spaceSlug}/p/${page.id}`);
   };
 
-  const openMenu = (e: React.MouseEvent) => {
+  const openMenu = (e: React.MouseEvent, isContextMenu = false) => {
     e.stopPropagation();
-    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    if (isContextMenu) e.preventDefault();
     const menuWidth = 180;
     const menuHeight = 280;
-    let top = rect.bottom + 4;
-    let left = rect.left;
+    let top: number, left: number;
+    if (isContextMenu) {
+      top = e.clientY;
+      left = e.clientX;
+    } else {
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      top = rect.bottom + 4;
+      left = rect.left;
+    }
     // Clamp to viewport
     if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
     if (left < 8) left = 8;
@@ -95,9 +102,32 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
   const handleDelete = async () => {
     if (!spaceSlug) return;
     setShowMenu(false);
+
+    // 删除前先算好跳转目标：同级第一个兄弟，没有则跳父级，都没有则跳空间根
+    let target = `/s/${spaceSlug}`;
+    if (isActive) {
+      const tree = useSpaceStore.getState().pageTree;
+      const findTarget = (nodes: Page[], parentId: number | null): string | null => {
+        for (const node of nodes) {
+          if (node.id === page.id) {
+            const remaining = nodes.filter(s => s.id !== page.id);
+            if (remaining.length > 0) return `/s/${spaceSlug}/p/${remaining[0].id}`;
+            if (parentId) return `/s/${spaceSlug}/p/${parentId}`;
+            return `/s/${spaceSlug}`;
+          }
+          if (node.children) {
+            const result = findTarget(node.children, node.id);
+            if (result) return result;
+          }
+        }
+        return null;
+      };
+      target = findTarget(tree, null) || target;
+    }
+
     try {
       if (isActive) {
-        navigate(`/s/${spaceSlug}`, { replace: true });
+        navigate(target, { replace: true });
       }
       await deletePage(spaceSlug, page.id);
       await refreshPageTree();
@@ -187,6 +217,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
           isActive ? 'bg-notion-hover' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px`, paddingRight: '8px' }}
+        onContextMenu={(e) => openMenu(e, true)}
       >
         {/* Icon/Chevron — icon by default, chevron on row hover */}
         <button

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -278,6 +279,7 @@ func (s *PageService) EnrichTreeWithDB(spaceSlug string, nodes []*model.PageNode
 	}
 
 	s.enrichNodes(spaceSlug, nodes, pathMap, repo)
+	sortNodesByOrder(nodes)
 }
 
 func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pathMap map[string]*model.Page, repo *repository.PageRepository) {
@@ -309,6 +311,18 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 
 		if len(node.Children) > 0 {
 			s.enrichNodes(spaceSlug, node.Children, pathMap, repo)
+		}
+	}
+}
+
+// sortNodesByOrder recursively sorts page nodes by sort_order ASC.
+func sortNodesByOrder(nodes []*model.PageNode) {
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].SortOrder < nodes[j].SortOrder
+	})
+	for _, node := range nodes {
+		if len(node.Children) > 0 {
+			sortNodesByOrder(node.Children)
 		}
 	}
 }
@@ -371,6 +385,9 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 
 	title := req.Title
 
+	maxSort, _ := repo.MaxSortOrder()
+	sortOrder := maxSort + 1
+
 	if req.ParentID != nil {
 		parentPage, err := repo.GetByID(*req.ParentID)
 		if err != nil {
@@ -404,7 +421,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 			Title:     title,
 			FilePath:  childRelPath,
 			Icon:      req.Icon,
-			SortOrder: float64(time.Now().Unix()),
+			SortOrder: sortOrder,
 		}
 		return repo.Create(page)
 	}
@@ -426,7 +443,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 		Title:     title,
 		FilePath:  relPath,
 		Icon:      req.Icon,
-		SortOrder: float64(time.Now().Unix()),
+		SortOrder: sortOrder,
 	}
 	return repo.Create(page)
 }
@@ -775,10 +792,11 @@ func (s *PageService) RestoreFromTrash(spaceSlug string, trashRelPath string, sp
 		os.Rename(trashChildDir, targetChildDir)
 	}
 
+	maxSort, _ := repo.MaxSortOrder()
 	page := &model.Page{
 		Title:     title,
 		FilePath:  targetRelPath,
-		SortOrder: float64(time.Now().Unix()),
+		SortOrder: maxSort + 1,
 	}
 	return repo.Create(page)
 }

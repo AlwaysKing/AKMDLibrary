@@ -7,7 +7,7 @@ interface PageState {
   isLoading: boolean;
   isSaving: boolean;
   error: string | null;
-  fetchPage: (spaceSlug: string, pageId: number) => Promise<void>;
+  fetchPage: (spaceSlug: string, pageId: number, signal?: AbortSignal) => Promise<void>;
   savePage: (spaceSlug: string, pageId: number, content: string) => Promise<void>;
   createPage: (spaceSlug: string, title: string, parentId?: number) => Promise<Page>;
   deletePage: (spaceSlug: string, pageId: number) => Promise<void>;
@@ -25,10 +25,10 @@ export const usePageStore = create<PageState>((set) => ({
   isSaving: false,
   error: null,
 
-  fetchPage: async (spaceSlug, pageId) => {
+  fetchPage: async (spaceSlug, pageId, signal) => {
     set({ isLoading: true, error: null });
     try {
-      const page = await pagesApi.get(spaceSlug, pageId);
+      const page = await pagesApi.get(spaceSlug, pageId, signal);
       const content = page.content || '';
       set({
         currentPage: page,
@@ -36,6 +36,8 @@ export const usePageStore = create<PageState>((set) => ({
         isLoading: false,
       });
     } catch (error: any) {
+      // 请求被取消（组件已卸载），静默忽略
+      if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError') return;
       set({ error: error.message, isLoading: false });
     }
   },

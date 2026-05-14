@@ -9,15 +9,16 @@ import PageIcon from '../components/Editor/PageIcon';
 import PageEditor from '../components/Editor/PageEditor';
 import { MoreHorizontal, Loader2, Check, Lock } from 'lucide-react';
 
-// Separate component so useEffect runs in its own render cycle
-function PageNotFound({ spaceSlug }: { spaceSlug?: string }) {
-  const navigate = useNavigate();
-  useEffect(() => {
-    if (spaceSlug) {
-      navigate(`/s/${spaceSlug}`, { replace: true });
-    }
-  }, [spaceSlug, navigate]);
-  return null;
+// 页面不存在时的提示
+function PageNotFound() {
+  return (
+    <div className="flex-1 flex items-center justify-center bg-notion-bg">
+      <div className="text-center">
+        <h1 className="text-6xl font-bold text-notion-textSecondary mb-2">404</h1>
+        <p className="text-notion-textSecondary">页面不存在或已被删除</p>
+      </div>
+    </div>
+  );
 }
 
 export default function PageViewPage() {
@@ -27,16 +28,20 @@ export default function PageViewPage() {
   const { setCurrentSpace } = useSpaceStore();
 
   useEffect(() => {
-    if (spaceSlug && pageId) {
-      fetchPage(spaceSlug, parseInt(pageId));
-      const spaces = useSpaceStore.getState().spaces;
-      const space = spaces.find((s) => s.slug === spaceSlug);
-      if (space) {
-        setCurrentSpace(space);
-      }
-      usePreferenceStore.getState().setLastViewedPage(spaceSlug, parseInt(pageId));
-      useSpaceStore.getState().fetchRecent(spaceSlug);
+    if (!spaceSlug || !pageId) return;
+    const controller = new AbortController();
+    // 延迟到下一个微任务，让导航先生效；如果组件已卸载则不发出请求
+    const timer = setTimeout(() => {
+      fetchPage(spaceSlug, parseInt(pageId), controller.signal);
+    }, 0);
+    const spaces = useSpaceStore.getState().spaces;
+    const space = spaces.find((s) => s.slug === spaceSlug);
+    if (space) {
+      setCurrentSpace(space);
     }
+    usePreferenceStore.getState().setLastViewedPage(spaceSlug, parseInt(pageId));
+    useSpaceStore.getState().fetchRecent(spaceSlug);
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [spaceSlug, pageId, fetchPage, setCurrentSpace]);
 
   const handleSave = useCallback(async (content: string) => {
@@ -131,12 +136,12 @@ export default function PageViewPage() {
         </div>
       );
     }
-    return <PageNotFound spaceSlug={spaceSlug} />;
+    return <PageNotFound />;
   }
 
   if (!currentPage) {
     // Not loading, no error, but no page — page was deleted or doesn't exist
-    return <PageNotFound spaceSlug={spaceSlug} />;
+    return <PageNotFound />;
   }
 
   const showCover = !!currentPage.cover_url;

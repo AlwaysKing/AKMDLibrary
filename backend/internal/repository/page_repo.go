@@ -192,6 +192,20 @@ func (r *PageRepository) Delete(id int) error {
 	return nil
 }
 
+// MaxSortOrder returns the maximum sort_order value among all pages.
+// Returns 0 if there are no pages.
+func (r *PageRepository) MaxSortOrder() (float64, error) {
+	var maxSort sql.NullFloat64
+	err := r.db.QueryRow(`SELECT MAX(sort_order) FROM pages`).Scan(&maxSort)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get max sort_order: %w", err)
+	}
+	if !maxSort.Valid {
+		return 0, nil
+	}
+	return maxSort.Float64, nil
+}
+
 // TouchAccess updates last_accessed_at to now for a page (tracks recent access)
 func (r *PageRepository) TouchAccess(id int) error {
 	_, err := r.db.Exec("UPDATE pages SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?", id)

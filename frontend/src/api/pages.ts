@@ -48,8 +48,8 @@ export const pagesApi = {
     return response.data;
   },
 
-  get: async (spaceSlug: string, pageId: number): Promise<Page> => {
-    const response = await apiClient.get<Page>(`/spaces/${spaceSlug}/pages/${pageId}`);
+  get: async (spaceSlug: string, pageId: number, signal?: AbortSignal): Promise<Page> => {
+    const response = await apiClient.get<Page>(`/spaces/${spaceSlug}/pages/${pageId}`, { signal });
     return response.data;
   },
 
