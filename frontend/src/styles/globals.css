@@ -453,7 +453,7 @@ h4[contenteditable],
   padding: 4px !important;
   max-height: 340px !important;
   overflow-y: auto !important;
-  min-width: 240px !important;
+  min-width: 300px !important;
   scrollbar-width: thin !important;
   scrollbar-color: #e9e9e7 transparent !important;
 }
