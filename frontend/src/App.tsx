@@ -54,6 +54,7 @@ function App() {
 
   useEffect(() => {
     useAuthStore.getState().initialize();
+    usePreferenceStore.getState().fetchPreferences();
   }, []);
 
   return (
