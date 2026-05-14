@@ -157,20 +157,20 @@ function BreadcrumbPageItem({ page, siblings, spaceSlug, isLast, isOpen, onMouse
   );
 }
 
-function SpaceMenuItem({ space, isCurrent, pageTree, onClose }: {
+function SpaceMenuItem({ space, isCurrent, pageTree, onClose, isOpen, onMouseEnter }: {
   space: Space;
   isCurrent: boolean;
   pageTree: Page[];
   onClose: () => void;
+  isOpen: boolean;
+  onMouseEnter: () => void;
 }) {
   const navigate = useNavigate();
-  const [showSubmenu, setShowSubmenu] = useState(false);
   const [flipLeft, setFlipLeft] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const itemRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (showSubmenu && itemRef.current) {
+    if (isOpen && itemRef.current) {
       const rect = itemRef.current.getBoundingClientRect();
       const spaceRight = window.innerWidth - rect.right;
       const spaceLeft = rect.left;
@@ -183,16 +183,7 @@ function SpaceMenuItem({ space, isCurrent, pageTree, onClose }: {
         setFlipLeft(spaceLeft > spaceRight);
       }
     }
-  }, [showSubmenu]);
-
-  const handleMouseEnter = () => {
-    clearTimeout(timeoutRef.current);
-    setShowSubmenu(true);
-  };
-
-  const handleMouseLeave = () => {
-    timeoutRef.current = setTimeout(() => setShowSubmenu(false), SUBMENU_CLOSE_DELAY);
-  };
+  }, [isOpen]);
 
   const handleClick = () => {
     navigate(`/s/${space.slug}`);
@@ -203,8 +194,7 @@ function SpaceMenuItem({ space, isCurrent, pageTree, onClose }: {
     <div
       ref={itemRef}
       className="relative"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      onMouseEnter={onMouseEnter}
     >
       <div
         onClick={handleClick}
@@ -224,7 +214,7 @@ function SpaceMenuItem({ space, isCurrent, pageTree, onClose }: {
         </span>
         <ChevronRight className={`w-3 h-3 text-[#ada9a3] ml-1 flex-shrink-0 transition-transform duration-150 ${flipLeft ? 'rotate-180' : ''}`} />
       </div>
-      {showSubmenu && (
+      {isOpen && (
         <div
           className={`absolute top-0 w-[260px] bg-white border border-notion-border rounded-lg shadow-lg z-30 py-1 ${
             flipLeft ? 'right-full mr-0.5' : 'left-full ml-0.5'
@@ -266,6 +256,7 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
   const currentPageId = pageId ? parseInt(pageId) : null;
   const pagePath = currentPageId ? findPagePath(pageTree, currentPageId) : null;
   const [activeItem, setActiveItem] = useState<ActiveItem>(null);
+  const [activeSpaceId, setActiveSpaceId] = useState<number | null>(null);
   const showMenu = activeItem === 'space';
   const [spaceTrees, setSpaceTrees] = useState<Record<string, Page[]>>({});
   const menuRef = useRef<HTMLDivElement>(null);
@@ -278,7 +269,10 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
   };
 
   const handleItemLeave = () => {
-    closeTimeoutRef.current = setTimeout(() => setActiveItem(null), ROOT_CLOSE_DELAY);
+    closeTimeoutRef.current = setTimeout(() => {
+      setActiveItem(null);
+      setActiveSpaceId(null);
+    }, ROOT_CLOSE_DELAY);
   };
 
   // Sync current space's pageTree into cache
@@ -352,6 +346,8 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
                 isCurrent={space.slug === currentSpace?.slug}
                 pageTree={spaceTrees[space.slug] || []}
                 onClose={() => setActiveItem(null)}
+                isOpen={activeSpaceId === space.id}
+                onMouseEnter={() => setActiveSpaceId(space.id)}
               />
             ))}
           </div>
