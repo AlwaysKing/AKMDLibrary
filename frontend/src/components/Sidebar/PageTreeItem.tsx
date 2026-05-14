@@ -297,9 +297,9 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
         ) : (
           <div
             className="flex items-center h-[30px] rounded-md text-left"
-            style={{ paddingLeft: `${(level + 1) * 16 + 16 + 22 + 8}px`, paddingRight: '8px' }}
+            style={{ paddingLeft: `${level * 16 + 32}px`, paddingRight: '8px' }}
           >
-            <span className="text-sm text-notion-textSecondary">内无页面</span>
+            <span className="text-sm font-semibold text-notion-textSecondary">内无页面</span>
           </div>
         )
       )}
