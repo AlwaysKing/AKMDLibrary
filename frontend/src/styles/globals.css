@@ -537,6 +537,7 @@ h4[contenteditable],
 }
 
 /* Drag Handle Menu Notion Style */
+/* 定位由 JS 动态计算（fixed），这里只负责视觉样式 */
 .bn-drag-handle-menu {
   border: 1px solid #e9e9e7 !important;
   border-radius: 8px !important;

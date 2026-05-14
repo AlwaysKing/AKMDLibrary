@@ -11,9 +11,11 @@ import React, {
   useCallback,
   useRef,
   useEffect,
+  useMemo,
   ComponentType,
   ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useBlockNoteEditor } from '@blocknote/react';
 
 // ==================== Menu Context ====================
@@ -230,24 +232,75 @@ const GenericMenuTrigger: React.FC<{ children?: ReactNode; sub?: boolean }> = (p
 };
 
 const GenericMenuDropdown: React.FC<{ className?: string; children?: ReactNode; sub?: boolean }> = forwardRef((props, ref) => {
-  const { className, children } = props;
+  const { className, children, sub } = props;
   const { isOpen, setOpen, position } = useContext(MenuContext);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Calculate fixed position for drag handle menu during render (before DOM commit).
+  // Portal to document.body so position:fixed is truly viewport-relative,
+  // unaffected by the floating-ui ancestor's CSS transform.
+  const dragHandleStyle = useMemo(() => {
+    if (!isOpen || sub) return null;
+
+    // Find the currently visible drag handle button
+    const allHandles = document.querySelectorAll('[aria-label="打开菜单"]');
+    let dragHandle: HTMLElement | null = null;
+    for (const h of allHandles) {
+      const r = h.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        dragHandle = h as HTMLElement;
+        break;
+      }
+    }
+    if (!dragHandle) return null;
+
+    const handleRect = dragHandle.getBoundingClientRect();
+    const menuWidth = 150; // match CSS min-width
+    const gap = 4;
+
+    // Left space from viewport left edge to drag handle left edge (includes sidebar)
+    const leftSpace = handleRect.left;
+
+    let left: number;
+    let top: number;
+
+    if (leftSpace >= menuWidth + gap) {
+      // Enough space on the left — pop left
+      left = handleRect.left - menuWidth - gap;
+      top = handleRect.top;
+    } else {
+      // Not enough space on the left — pop right, start after the drag handle
+      left = handleRect.right + gap;
+      top = handleRect.top;
+
+      // Clamp if overflows right edge
+      if (left + menuWidth > window.innerWidth - gap) {
+        left = window.innerWidth - menuWidth - gap;
+      }
+    }
+
+    // Clamp top to viewport
+    top = Math.max(4, Math.min(top, window.innerHeight - 100));
+
+    return {
+      position: 'fixed' as const,
+      left: `${left}px`,
+      top: `${top}px`,
+      zIndex: 10000,
+    };
+  }, [isOpen, sub]);
 
   useEffect(() => {
     if (!isOpen) return;
 
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
-      // Don't close if clicking inside dropdown or on the trigger button
       if (dropdownRef.current?.contains(target)) return;
-      // Check if clicking on a side menu button (the trigger)
       const sideMenu = document.querySelector('.bn-side-menu');
       if (sideMenu?.contains(target)) return;
       setOpen(false);
     };
 
-    // Use setTimeout to avoid the current click event
     const timer = setTimeout(() => {
       document.addEventListener('mousedown', handleClickOutside);
     }, 0);
@@ -257,7 +310,6 @@ const GenericMenuDropdown: React.FC<{ className?: string; children?: ReactNode; 
     };
   }, [isOpen, setOpen]);
 
-  // Handle escape key
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -271,13 +323,26 @@ const GenericMenuDropdown: React.FC<{ className?: string; children?: ReactNode; 
 
   if (!isOpen) return null;
 
+  const setRefs = (node: HTMLDivElement | null) => {
+    (dropdownRef as any).current = node;
+    if (typeof ref === 'function') ref(node);
+    else if (ref) (ref as any).current = node;
+  };
+
+  // Drag handle menu — portal to body, fixed positioning (avoids transform ancestor)
+  if (dragHandleStyle) {
+    return createPortal(
+      <div ref={setRefs} className={className} style={dragHandleStyle}>
+        {children}
+      </div>,
+      document.body
+    );
+  }
+
+  // Other menus / sub-menus — absolute positioning within parent
   return (
     <div
-      ref={(node) => {
-        (dropdownRef as any).current = node;
-        if (typeof ref === 'function') ref(node);
-        else if (ref) (ref as any).current = node;
-      }}
+      ref={setRefs}
       className={className}
       style={{
         position: 'absolute',
