@@ -6,6 +6,7 @@ import { usePageStore } from '../../stores/pageStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import MoveToDialog from './MoveToDialog';
 import PageIcon from '../Editor/PageIcon';
+import { showToast } from '../Toast';
 
 interface PageTreeItemProps {
   page: Page;
@@ -20,7 +21,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
   const [renameTitle, setRenameTitle] = useState(page.title);
   const [renamePanelPos, setRenamePanelPos] = useState({ top: 0, left: 0 });
   const [showMoveDialog, setShowMoveDialog] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState(false);
+
   const menuRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
   const renamePanelRef = useRef<HTMLDivElement>(null);
@@ -181,8 +182,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
     const url = `${window.location.origin}/s/${spaceSlug}/p/${page.id}`;
     try {
       await navigator.clipboard.writeText(url);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
+      showToast('链接已复制');
     } catch (err) {
       console.error('Failed to copy link:', err);
     }
@@ -244,11 +244,6 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
         >
           {page.title || '未命名页面'}
         </span>
-
-        {/* Copy feedback toast */}
-        {copyFeedback && (
-          <span className="text-xs text-green-600 flex-shrink-0 mr-1">已复制</span>
-        )}
 
         {/* More menu button */}
         <button

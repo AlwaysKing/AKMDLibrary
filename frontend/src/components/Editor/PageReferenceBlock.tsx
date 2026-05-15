@@ -16,14 +16,15 @@ function findPageInTree(tree: Page[], pageId: number): Page | null {
   return null;
 }
 
-function PageReferenceComponent({ block }: any) {
+function PageReferenceComponent({ block, editor }: any) {
   const pageId = parseInt(block.props.pageId || '0');
   const navigate = useNavigate();
   const { currentSpace, pageTree } = useSpaceStore();
   const [page, setPage] = useState<Page | null>(null);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    if (!pageId) return;
+    if (!pageId) { setNotFound(true); return; }
     // Try pageTree first
     const found = findPageInTree(pageTree, pageId);
     if (found) {
@@ -32,9 +33,41 @@ function PageReferenceComponent({ block }: any) {
     }
     // Fallback: fetch from API
     if (currentSpace?.slug) {
-      pagesApi.get(currentSpace.slug, pageId).then(p => setPage(p)).catch(() => {});
+      pagesApi.get(currentSpace.slug, pageId)
+        .then(p => { setPage(p); setNotFound(false); })
+        .catch(() => setNotFound(true));
     }
   }, [pageId, pageTree, currentSpace?.slug]);
+
+  // Keyboard: Backspace/Delete removes the block when selected
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        const selected = document.querySelector('.ProseMirror-selectednode');
+        if (selected && selected.contains(document.activeElement)) {
+          // Check if it's our block
+          const ref = selected.querySelector('[data-content-type="pageReference"]');
+          if (ref && ref.getAttribute('data-page-id') === String(pageId)) {
+            e.preventDefault();
+            editor.removeBlocks([block]);
+          }
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [block, editor, pageId]);
+
+  if (notFound || !pageId) {
+    return (
+      <div className="py-1">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-notion-sidebarBg text-notion-textSecondary text-sm">
+          <FileText className="w-4 h-4 flex-shrink-0" strokeWidth={1.7} />
+          <span>页面不存在或已删除</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!page) {
     return (
@@ -47,7 +80,7 @@ function PageReferenceComponent({ block }: any) {
     );
   }
 
-  const handleClick = () => {
+  const handleDoubleClick = () => {
     const slug = currentSpace?.slug;
     if (slug) {
       navigate(`/s/${slug}/p/${page.id}`);
@@ -55,10 +88,11 @@ function PageReferenceComponent({ block }: any) {
   };
 
   return (
-    <div className="py-1">
+    <div className="w-full">
       <div
-        onClick={handleClick}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-notion-sidebarBg hover:bg-[#e8e7e3] cursor-pointer transition-colors max-w-fit"
+        onDoubleClick={handleDoubleClick}
+        className="flex items-center gap-1.5 px-1 py-1 rounded hover:bg-notion-hover cursor-pointer transition-colors w-full"
+        title="双击打开页面"
       >
         <span className="flex-shrink-0" style={{ width: '18px', height: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {page.icon ? (

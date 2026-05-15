@@ -7,6 +7,8 @@ import Breadcrumb from '../components/Editor/Breadcrumb';
 import CoverImage from '../components/Editor/CoverImage';
 import PageIcon from '../components/Editor/PageIcon';
 import PageEditor from '../components/Editor/PageEditor';
+import { getLatestMirror } from '../services/mirrorStore';
+import { onSyncStatusChange, flushSync } from '../services/syncModule';
 import { MoreHorizontal, Loader2, Check, Lock } from 'lucide-react';
 
 // 页面不存在时的提示
@@ -24,7 +26,7 @@ function PageNotFound() {
 export default function PageViewPage() {
   const { spaceSlug, pageId } = useParams<{ spaceSlug: string; pageId: string }>();
   const navigate = useNavigate();
-  const { currentPage, currentContent, fetchPage, isLoading, error, savePage, refreshPageTree, updateMetadata } = usePageStore();
+  const { currentPage, currentContent, fetchPage, isLoading, error, refreshPageTree, updateMetadata } = usePageStore();
   const { setCurrentSpace } = useSpaceStore();
 
   useEffect(() => {
@@ -44,15 +46,9 @@ export default function PageViewPage() {
     return () => { clearTimeout(timer); controller.abort(); };
   }, [spaceSlug, pageId, fetchPage, setCurrentSpace]);
 
-  const handleSave = useCallback(async (content: string) => {
-    if (!spaceSlug || !pageId) return;
-    await savePage(spaceSlug, parseInt(pageId), content);
-    await refreshPageTree();
-  }, [spaceSlug, pageId, savePage, refreshPageTree]);
-
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [showPageMenu, setShowPageMenu] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'unsaved' | 'syncing' | 'synced' | null>(null);
   const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
   const [, setTick] = useState(0);
 
@@ -74,12 +70,43 @@ export default function PageViewPage() {
     return `同步于: ${y}/${m}/${d} ${h}:${min}`;
   }, []);
 
-  const handleSyncStatusChange = useCallback((status: 'syncing' | 'synced') => {
-    setSyncStatus(status);
-    if (status === 'synced') {
-      setLastSyncDate(new Date());
+  const handleSyncStatusChange = useCallback((status: 'unsaved' | 'syncing' | 'synced') => {
+    // Only handle 'unsaved' from editor — 'syncing'/'synced' come from syncModule subscription
+    if (status === 'unsaved') {
+      setSyncStatus('unsaved');
     }
   }, []);
+
+  // Subscribe to syncModule events for syncing/synced status
+  useEffect(() => {
+    const pageIdNum = pageId ? parseInt(pageId) : 0;
+    if (!spaceSlug || !pageIdNum) return;
+
+    const unsubscribe = onSyncStatusChange((event) => {
+      if (event.spaceSlug === spaceSlug && event.pageId === pageIdNum) {
+        if (event.type === 'syncing') {
+          setSyncStatus('syncing');
+        } else if (event.type === 'synced') {
+          setSyncStatus('synced');
+          setLastSyncDate(new Date());
+        }
+      }
+    });
+    return unsubscribe;
+  }, [spaceSlug, pageId]);
+
+  // On page load: check for pending mirrors from previous sessions
+  useEffect(() => {
+    if (!spaceSlug || !pageId) return;
+    const pageIdNum = parseInt(pageId);
+    getLatestMirror(spaceSlug, pageIdNum).then(mirror => {
+      if (mirror && !mirror.synced) {
+        // There is unsynced content from a previous session — trigger immediate sync
+        flushSync();
+        setSyncStatus('syncing');
+      }
+    });
+  }, [spaceSlug, pageId]);
 
   const handleFullPageToggle = useCallback(async () => {
     if (!spaceSlug || !pageId || !currentPage) return;
@@ -154,6 +181,11 @@ export default function PageViewPage() {
         spaceSlug={spaceSlug!}
         actions={
           <div className="flex items-center gap-2">
+            {syncStatus === 'unsaved' && (
+              <span className="text-xs text-notion-textSecondary">
+                有内容尚未同步
+              </span>
+            )}
             {syncStatus === 'syncing' && (
               <span className="flex items-center gap-1 text-xs text-notion-textSecondary">
                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -272,7 +304,7 @@ export default function PageViewPage() {
             <PageEditor
               key={currentPage.id}
               initialContent={currentContent}
-              onSave={handleSave}
+              pageIdentity={{ spaceSlug: spaceSlug!, pageId: currentPage.id }}
               onSyncStatusChange={handleSyncStatusChange}
               readOnly={false}
             />

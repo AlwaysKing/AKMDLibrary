@@ -45,12 +45,13 @@ export const usePageStore = create<PageState>((set) => ({
   savePage: async (spaceSlug, pageId, content) => {
     set({ isSaving: true, error: null });
     try {
-      const page = await pagesApi.update(spaceSlug, pageId, content);
-      set({
-        currentPage: page,
-        currentContent: content,
-        isSaving: false,
-      });
+      await pagesApi.update(spaceSlug, pageId, content);
+      set({ isSaving: false });
+      // Only update currentPage/currentContent if user is still viewing this page
+      const { currentPage } = usePageStore.getState();
+      if (currentPage && currentPage.id === pageId) {
+        set({ currentContent: content });
+      }
     } catch (error: any) {
       set({ error: error.message, isSaving: false });
       throw error;

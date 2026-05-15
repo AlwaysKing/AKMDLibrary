@@ -8,6 +8,8 @@ import { blockNoteComponents, clearBlockSelection } from './BlockNoteComponents'
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import LinkPasteMenu from './LinkPasteMenu';
+import { createMirror } from '../../services/mirrorStore';
+import { flushSync } from '../../services/syncModule';
 
 // Custom schema: default blocks + pageReference + bookmark
 const schema = BlockNoteSchema.create({
@@ -51,16 +53,23 @@ const customZh = {
 
 interface PageEditorProps {
   initialContent: string;
-  onSave: (content: string) => void | Promise<void>;
-  onSyncStatusChange?: (status: 'syncing' | 'synced') => void;
+  pageIdentity: { spaceSlug: string; pageId: number };
+  onSyncStatusChange?: (status: 'unsaved' | 'syncing' | 'synced') => void;
   readOnly?: boolean;
 }
 
-export function PageEditor({ initialContent, onSave, onSyncStatusChange, readOnly = false }: PageEditorProps) {
-  const [isSaving, setIsSaving] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
+export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const editorRef = useRef<HTMLDivElement>(null);
+
+  // Refs for values read inside callbacks — avoid stale closures
+  const hasChangesRef = useRef(false);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const identityRef = useRef(pageIdentity);
+  identityRef.current = pageIdentity;
+  const onSyncStatusChangeRef = useRef(onSyncStatusChange);
+  onSyncStatusChangeRef.current = onSyncStatusChange;
 
   // Paste menu state
   const [pasteMenu, setPasteMenu] = useState<{
@@ -75,72 +84,97 @@ export function PageEditor({ initialContent, onSave, onSyncStatusChange, readOnl
     dictionary: customZh as any,
   });
 
-  const triggerSave = useCallback(async () => {
-    if (!hasChanges || isSaving || readOnly) return;
+  // Write mirror to IndexedDB — fast, local, no network
+  const triggerMirror = useCallback(() => {
+    if (!hasChangesRef.current || readOnlyRef.current) return;
 
-    setIsSaving(true);
-    onSyncStatusChange?.('syncing');
-    try {
-      const currentBlocks = editor.document;
-      const markdown = blocksToMarkdown(currentBlocks);
-      await onSave(markdown);
-      setHasChanges(false);
-      onSyncStatusChange?.('synced');
-    } catch (error) {
-      console.error('Failed to save:', error);
-    } finally {
-      setIsSaving(false);
-    }
-  }, [editor, hasChanges, isSaving, onSave, readOnly]);
+    const currentBlocks = editor.document;
+    const markdown = blocksToMarkdown(currentBlocks);
+    const { spaceSlug, pageId } = identityRef.current;
+    createMirror(spaceSlug, pageId, markdown);
+
+    hasChangesRef.current = false;
+    onSyncStatusChangeRef.current?.('syncing');
+  }, [editor]);
+
+  // Cmd+S / Ctrl+S: immediate mirror + flush sync
+  useEffect(() => {
+    if (readOnly) return;
+    const handleSaveShortcut = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+
+        const currentBlocks = editor.document;
+        const markdown = blocksToMarkdown(currentBlocks);
+        const { spaceSlug, pageId } = identityRef.current;
+        createMirror(spaceSlug, pageId, markdown);
+
+        hasChangesRef.current = false;
+        onSyncStatusChangeRef.current?.('syncing');
+        flushSync();
+      }
+    };
+    document.addEventListener('keydown', handleSaveShortcut);
+    return () => document.removeEventListener('keydown', handleSaveShortcut);
+  }, [editor, readOnly]);
 
   const handleChange = useCallback(() => {
-    setHasChanges(true);
+    hasChangesRef.current = true;
+    onSyncStatusChangeRef.current?.('unsaved');
 
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
     saveTimeoutRef.current = setTimeout(() => {
-      triggerSave();
-    }, 2000);
-  }, [triggerSave]);
+      triggerMirror();
+    }, 1000);
+  }, [triggerMirror]);
 
-  // Paste handler
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const text = e.clipboardData.getData('text/plain').trim();
-    if (!URL_RE.test(text)) return; // Not a URL, let default paste handle it
+  // Paste handler — capture phase to intercept before BlockNote/ProseMirror processes
+  useEffect(() => {
+    const container = editorRef.current;
+    if (!container || readOnly) return;
 
-    e.preventDefault();
+    const handlePaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData('text/plain')?.trim();
+      if (!text || !URL_RE.test(text)) return; // Not a URL, let default paste handle it
 
-    // Check if internal URL
-    const internalMatch = text.match(INTERNAL_URL_RE);
-    if (internalMatch) {
-      const pageId = internalMatch[2];
-      // Insert page reference block
-      const currentBlock = editor.getTextCursorPosition().block;
-      const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+      e.preventDefault();
+      e.stopPropagation();
 
-      const newBlock: any = { type: 'pageReference', props: { pageId } };
+      // Check if internal URL
+      const internalMatch = text.match(INTERNAL_URL_RE);
+      if (internalMatch) {
+        const pageId = internalMatch[2];
+        const currentBlock = editor.getTextCursorPosition().block;
+        const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
 
-      if (isEmpty) {
-        editor.updateBlock(currentBlock, newBlock);
-      } else {
-        editor.insertBlocks([newBlock], currentBlock, 'after');
+        const newBlock: any = { type: 'pageReference', props: { pageId } };
+
+        if (isEmpty) {
+          editor.updateBlock(currentBlock, newBlock);
+        } else {
+          editor.insertBlocks([newBlock], currentBlock, 'after');
+        }
+        return;
       }
-      return;
-    }
 
-    // External URL: show menu
-    const selection = window.getSelection();
-    let x = 100, y = 100;
-    if (selection && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      x = rect.left;
-      y = rect.bottom + 4;
-    }
-    setPasteMenu({ url: text, position: { x, y } });
-  }, [editor]);
+      // External URL: show menu
+      const selection = window.getSelection();
+      let x = 100, y = 100;
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        x = rect.left;
+        y = rect.bottom + 4;
+      }
+      setPasteMenu({ url: text, position: { x, y } });
+    };
+
+    container.addEventListener('paste', handlePaste, true); // capture phase
+    return () => container.removeEventListener('paste', handlePaste, true);
+  }, [editor, readOnly]);
 
   const handleInsertLink = useCallback((url: string, title: string) => {
     setPasteMenu(null);
@@ -193,21 +227,47 @@ export function PageEditor({ initialContent, onSave, onSyncStatusChange, readOnl
     };
   }, [readOnly]);
 
+  // Unmount: write final mirror if there are unsaved changes
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      if (hasChanges && !readOnly) {
-        triggerSave();
+      if (hasChangesRef.current && !readOnlyRef.current) {
+        try {
+          const currentBlocks = editor.document;
+          const markdown = blocksToMarkdown(currentBlocks);
+          const { spaceSlug, pageId } = identityRef.current;
+          createMirror(spaceSlug, pageId, markdown);
+        } catch (error) {
+          console.error('Failed to create mirror on unmount:', error);
+        }
       }
     };
-  }, [hasChanges, readOnly, triggerSave]);
+  }, [editor]);
+
+  // Browser/tab close: write final mirror
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (hasChangesRef.current && !readOnlyRef.current) {
+        try {
+          const currentBlocks = editor.document;
+          const markdown = blocksToMarkdown(currentBlocks);
+          const { spaceSlug, pageId } = identityRef.current;
+          createMirror(spaceSlug, pageId, markdown);
+        } catch {
+          // Best effort — IndexedDB write may not complete in all browsers
+        }
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [editor]);
 
   return (
     <div className="relative" ref={editorRef}>
       <ComponentsContext.Provider value={blockNoteComponents as any}>
-        <div onPaste={handlePaste}>
+        <div>
           <BlockNoteViewRaw
             editor={editor}
             editable={!readOnly}
