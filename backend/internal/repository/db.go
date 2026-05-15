@@ -103,6 +103,20 @@ func (db *DB) migrate() error {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			UNIQUE(user_id, space_slug)
 		)`,
+		`CREATE TABLE IF NOT EXISTS site_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS bookmark_meta (
+			url TEXT PRIMARY KEY,
+			title TEXT,
+			description TEXT,
+			favicon_url TEXT,
+			image_url TEXT,
+			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL
+		)`,
 	}
 
 	for _, schema := range schemas {

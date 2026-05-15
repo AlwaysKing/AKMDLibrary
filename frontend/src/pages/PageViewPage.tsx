@@ -208,7 +208,7 @@ export default function PageViewPage() {
         )}
 
         {/* Page content area */}
-        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} pb-32 relative group/page-header ${!showCover ? (currentPage.icon ? (currentPage.icon_large ? 'pt-[125px]' : 'pt-[96px]') : 'pt-[64px]') : ''}`}>
+        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} pb-32 ${!showCover ? (currentPage.icon ? (currentPage.icon_large ? 'pt-[125px]' : 'pt-[96px]') : 'pt-[64px]') : ''}`}>
 
           {/* Icon */}
           {currentPage.icon && (
@@ -219,9 +219,9 @@ export default function PageViewPage() {
                 spaceSlug={spaceSlug!}
                 pageId={currentPage.id}
               />
-              {/* Add cover button in icon-title gap, only on hover, no layout impact */}
+              {/* Add cover button in icon-title gap, hover self to show */}
               {!showCover && (
-                <div className="h-0 translate-y-2 -ml-2 overflow-visible opacity-0 pointer-events-none group-hover/page-header:opacity-100 group-hover/page-header:pointer-events-auto transition-opacity duration-100">
+                <div className="h-0 translate-y-2 -ml-2 overflow-visible opacity-0 hover:opacity-100 transition-opacity duration-100">
                   <CoverImage
                     coverUrl={currentPage.cover_url}
                     coverOffset={currentPage.cover_offset}
@@ -234,10 +234,9 @@ export default function PageViewPage() {
             </div>
           )}
 
-          {/* Page controls - 添加图标/封面 buttons, hidden by default, visible on hover */}
-          {/* No icon: controls in flow (takes space like Notion) */}
+          {/* Page controls - 添加图标/封面 buttons, hover self to show */}
           {!currentPage.icon && (
-            <div className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover/page-header:opacity-100 group-hover/page-header:pointer-events-auto transition-opacity duration-100 py-3">
+            <div className="flex items-center gap-0.5 opacity-0 hover:opacity-100 transition-opacity duration-100 py-3">
               <PageIcon
                 icon={currentPage.icon}
                 spaceSlug={spaceSlug!}

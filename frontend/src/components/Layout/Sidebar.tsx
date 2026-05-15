@@ -66,6 +66,35 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
         <div className="border-t border-notion-border/60 mx-2" />
         <nav className="px-2 py-2 space-y-0.5">
+          {/* 设置组 */}
+          <p className="px-2 pt-1 pb-0.5 text-[11px] font-medium text-notion-sidebarSecHeader uppercase tracking-wider">设置</p>
+          {isAdminRole && (
+            <button
+              onClick={() => navigate('/admin?tab=site')}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
+                adminTab === 'site'
+                  ? 'bg-notion-hover text-notion-text font-medium'
+                  : 'text-notion-text hover:bg-notion-hover'
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              <span>站点设置</span>
+            </button>
+          )}
+          <button
+            onClick={() => navigate('/admin?tab=profile')}
+            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
+              adminTab === 'profile'
+                ? 'bg-notion-hover text-notion-text font-medium'
+                : 'text-notion-text hover:bg-notion-hover'
+            }`}
+          >
+            <User className="w-4 h-4" />
+            <span>个人设置</span>
+          </button>
+
+          {/* 管理组 */}
+          <p className="px-2 pt-3 pb-0.5 text-[11px] font-medium text-notion-sidebarSecHeader uppercase tracking-wider">管理</p>
           {isAdminRole && (
             <>
               <button
@@ -102,17 +131,6 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           >
             <Image className="w-4 h-4" />
             <span>资源管理</span>
-          </button>
-          <button
-            onClick={() => navigate('/admin?tab=profile')}
-            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
-              adminTab === 'profile'
-                ? 'bg-notion-hover text-notion-text font-medium'
-                : 'text-notion-text hover:bg-notion-hover'
-            }`}
-          >
-            <User className="w-4 h-4" />
-            <span>个人设置</span>
           </button>
         </nav>
       </aside>

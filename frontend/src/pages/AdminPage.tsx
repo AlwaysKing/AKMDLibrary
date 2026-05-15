@@ -6,7 +6,9 @@ import { spacesApi, Space, SpaceMember } from '../api/spaces';
 import { authApi } from '../api/auth';
 import { fetchIconLibrary, uploadToIconLibrary, deleteIcon, renameIcon, IconLibraryItem } from '../api/icons';
 import { fetchCoverLibrary, uploadToCoverLibrary, deleteCover, renameCover, CoverLibraryItem } from '../api/covers';
-import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon } from 'lucide-react';
+import { siteSettingsApi, SiteSettings } from '../api/siteSettings';
+import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen } from 'lucide-react';
+import PageIcon from '../components/Editor/PageIcon';
 
 interface EditingUser {
   id: number;
@@ -31,7 +33,7 @@ export default function AdminPage() {
 
   const { user: currentUser } = useAuthStore();
   const isAdminUser = currentUser?.role === 'admin';
-  const activeTab = new URLSearchParams(location.search).get('tab') || (isAdminUser ? 'users' : 'resources');
+  const activeTab = new URLSearchParams(location.search).get('tab') || (isAdminUser ? 'users' : 'profile');
 
   // ---- 用户管理状态 ----
   const [users, setUsers] = useState<EditingUser[]>([]);
@@ -42,12 +44,36 @@ export default function AdminPage() {
   const [showUserRoleDropdown, setShowUserRoleDropdown] = useState(false);
   const [showUserAvatarPicker, setShowUserAvatarPicker] = useState(false);
   const userAvatarPickerRef = useRef<HTMLDivElement>(null);
-  const [listAvatarPickerUserId, setListAvatarPickerUserId] = useState<number | null>(null);
-  const listAvatarPickerRef = useRef<HTMLDivElement>(null);
   const [showUserPasswordPanel, setShowUserPasswordPanel] = useState(false);
   const [passwordTargetUserId, setPasswordTargetUserId] = useState<number | null>(null);
   const [userNewPassword, setUserNewPassword] = useState('');
   const [error, setError] = useState('');
+  const [userSpaceCounts, setUserSpaceCounts] = useState<Record<number, number>>({});
+
+  // ---- 用户列表内联编辑显示名 ----
+  const [editingDisplayNameUserId, setEditingDisplayNameUserId] = useState<number | null>(null);
+  const [editingDisplayNameValue, setEditingDisplayNameValue] = useState('');
+  const [roleDropdownUserId, setRoleDropdownUserId] = useState<number | null>(null);
+  const roleDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (roleDropdownUserId === null) return;
+    const handler = (e: MouseEvent) => {
+      if (roleDropdownRef.current && !roleDropdownRef.current.contains(e.target as Node)) {
+        setRoleDropdownUserId(null);
+      }
+    };
+    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
+  }, [roleDropdownUserId]);
+
+  const handleInlineRoleChange = async (userId: number, role: string) => {
+    try {
+      const updated = await usersApi.update(userId, { role: role as 'admin' | 'user' });
+      setUsers(prev => prev.map(u => u.id === userId ? updated : u));
+    } catch (err: any) { setError(err.message); }
+    setRoleDropdownUserId(null);
+  };
 
   // ---- 用户空间成员管理状态 ----
   interface UserSpaceMembership {
@@ -83,6 +109,12 @@ export default function AdminPage() {
   const [showIconPicker, setShowIconPicker] = useState(false);
   const iconPickerRef = useRef<HTMLDivElement>(null);
 
+  // ---- 空间列表内联编辑名称 ----
+  const [editingSpaceNameSlug, setEditingSpaceNameSlug] = useState<string | null>(null);
+  const [editingSpaceNameValue, setEditingSpaceNameValue] = useState('');
+  const [editingSpaceDescSlug, setEditingSpaceDescSlug] = useState<string | null>(null);
+  const [editingSpaceDescValue, setEditingSpaceDescValue] = useState('');
+
   // ---- 成员管理状态 ----
   const [members, setMembers] = useState<SpaceMember[]>([]);
   const [memberCounts, setMemberCounts] = useState<Record<string, number>>({});
@@ -105,9 +137,19 @@ export default function AdminPage() {
   const iconFileRef = useRef<HTMLInputElement>(null);
   const coverFileRef = useRef<HTMLInputElement>(null);
 
+  // ---- 站点设置状态 ----
+  const [siteSettings, setSiteSettings] = useState<SiteSettings>({});
+  const [siteSettingsLoading, setSiteSettingsLoading] = useState(false);
+  const [siteSettingsMsg, setSiteSettingsMsg] = useState('');
+  const [editingSiteName, setEditingSiteName] = useState(false);
+  const [editingSiteNameValue, setEditingSiteNameValue] = useState('');
+  const [confirmReset, setConfirmReset] = useState<'favicon' | 'logo' | 'site_name' | null>(null);
+  const faviconFileRef = useRef<HTMLInputElement>(null);
+  const logoFileRef = useRef<HTMLInputElement>(null);
+
   // ---- 图标选择器点击外部关闭 ----
   useEffect(() => {
-    if (!showIconPicker && !showAvatarPicker && !showUserAvatarPicker && listAvatarPickerUserId === null) return;
+    if (!showIconPicker && !showAvatarPicker && !showUserAvatarPicker) return;
     const handler = (e: MouseEvent) => {
       if (iconPickerRef.current && !iconPickerRef.current.contains(e.target as Node)) {
         setShowIconPicker(false);
@@ -118,13 +160,10 @@ export default function AdminPage() {
       if (userAvatarPickerRef.current && !userAvatarPickerRef.current.contains(e.target as Node)) {
         setShowUserAvatarPicker(false);
       }
-      if (listAvatarPickerRef.current && !listAvatarPickerRef.current.contains(e.target as Node)) {
-        setListAvatarPickerUserId(null);
-      }
     };
     const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0);
     return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
-  }, [showIconPicker, showAvatarPicker, listAvatarPickerUserId]);
+  }, [showIconPicker, showAvatarPicker]);
 
   // ---- 自定义下拉菜单点击外部关闭 ----
   useEffect(() => {
@@ -185,11 +224,105 @@ export default function AdminPage() {
     }
   }, [activeTab]);
 
+  // 加载站点设置
+  useEffect(() => {
+    if (activeTab === 'site') {
+      setSiteSettingsLoading(true);
+      siteSettingsApi.get().then(data => {
+        setSiteSettings(data);
+        setSiteSettingsLoading(false);
+      }).catch(() => {
+        setSiteSettingsLoading(false);
+      });
+      setSiteSettingsMsg('');
+    }
+  }, [activeTab]);
+
+  const updateFaviconLink = (url: string | null) => {
+    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = url || '/vite.svg';
+  };
+
+  const handleFaviconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { url } = await siteSettingsApi.uploadFavicon(file);
+      setSiteSettings(prev => ({ ...prev, favicon: url }));
+      updateFaviconLink(url);
+    } catch (err: any) {
+      setSiteSettingsMsg(err.message || '上传失败');
+    }
+    e.target.value = '';
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { url } = await siteSettingsApi.uploadLogo(file);
+      setSiteSettings(prev => ({ ...prev, logo: url }));
+    } catch (err: any) {
+      setSiteSettingsMsg(err.message || '上传失败');
+    }
+    e.target.value = '';
+  };
+
+  const handleSiteNameSave = async (value: string) => {
+    try {
+      const updated = await siteSettingsApi.updateSiteName(value);
+      setSiteSettings(updated);
+      document.title = updated.site_name || 'MD Library';
+    } catch (err: any) {
+      setSiteSettingsMsg(err.message || '保存失败');
+    }
+  };
+
+  const handleReset = async (type: 'favicon' | 'logo' | 'site_name') => {
+    try {
+      if (type === 'favicon') {
+        await siteSettingsApi.resetFavicon();
+        setSiteSettings(prev => ({ ...prev, favicon: undefined }));
+        updateFaviconLink(null);
+      } else if (type === 'logo') {
+        await siteSettingsApi.resetLogo();
+        setSiteSettings(prev => ({ ...prev, logo: undefined }));
+      } else if (type === 'site_name') {
+        await siteSettingsApi.updateSiteName('');
+        setSiteSettings(prev => ({ ...prev, site_name: undefined }));
+        document.title = 'MD Library';
+      }
+    } catch (err: any) {
+      setSiteSettingsMsg(err.message || '重置失败');
+    }
+    setConfirmReset(null);
+  };
+
   const fetchUsers = async () => {
     try {
       const data = await usersApi.list();
-      setUsers(data.sort((a, b) => a.id - b.id));
+      const sorted = data.sort((a, b) => a.id - b.id);
+      setUsers(sorted);
       setIsLoading(false);
+      // 获取每个用户的空间数量
+      const allSpaces = await spacesApi.listAll();
+      const counts: Record<number, number> = {};
+      await Promise.all(sorted.map(async (u: EditingUser) => {
+        let count = 0;
+        await Promise.all(allSpaces.map(async (s: Space) => {
+          try {
+            const members = await spacesApi.getMembers(s.slug);
+            if (members.some((m: SpaceMember) => m.user_id === u.id)) count++;
+          } catch { /* ignore */ }
+        }));
+        counts[u.id] = count;
+      }));
+      setUserSpaceCounts(counts);
     } catch (err: any) {
       setError(err.message);
       setIsLoading(false);
@@ -535,50 +668,7 @@ export default function AdminPage() {
 
     return (
     <form onSubmit={handleSaveUserPanel} className="p-6">
-      {isEditing ? (
-        // 编辑模式：显示名称（带即时✔✗） + 角色下拉（即时保存）
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-notion-textSecondary min-w-fit">@{userFormData.username}</span>
-          <input
-            type="text"
-            value={userFormData.display_name}
-            onChange={(e) => setUserFormData({ ...userFormData, display_name: e.target.value })}
-            placeholder="显示名称"
-            className="flex-1 px-3 py-2 border border-notion-border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-            required
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveDisplayNameOnly(); } if (e.key === 'Escape') handleRevertDisplayName(); }}
-          />
-          {/* ✔ 保存显示名 */}
-          <button type="button" onClick={handleSaveDisplayNameOnly} disabled={!displayNameChanged} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="保存显示名">
-            <Check className="w-4 h-4" />
-          </button>
-          {/* ✗ 还原显示名 */}
-          <button type="button" onClick={handleRevertDisplayName} disabled={!displayNameChanged} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="还原显示名">
-            <X className="w-4 h-4" />
-          </button>
-          {/* 角色下拉 — 即时保存 */}
-          <div className="relative" ref={dropdownsRef}>
-            <button
-              type="button"
-              onClick={() => setShowUserRoleDropdown(!showUserRoleDropdown)}
-              className="flex items-center justify-between gap-2 px-3 py-2 border border-notion-border rounded text-sm hover:bg-notion-hover transition-colors min-w-[120px]"
-            >
-              <span className="text-notion-text">{userFormData.role === 'admin' ? '管理员' : '普通用户'}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-notion-textSecondary flex-shrink-0" />
-            </button>
-            {showUserRoleDropdown && (
-              <div className="absolute top-full right-0 mt-1 bg-white border border-notion-border rounded-lg shadow-lg z-50 w-full py-1">
-                <button type="button" onClick={() => handleImmediateRoleChange('user')} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-notion-hover transition-colors ${userFormData.role === 'user' ? 'bg-notion-hover' : ''}`}>普通用户</button>
-                <button type="button" onClick={() => handleImmediateRoleChange('admin')} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-notion-hover transition-colors ${userFormData.role === 'admin' ? 'bg-notion-hover' : ''}`}>管理员</button>
-              </div>
-            )}
-          </div>
-          {/* 收起面板 */}
-          <button type="button" onClick={closeUserPanel} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="收起">
-            <ChevronUp className="w-4 h-4" />
-          </button>
-        </div>
-      ) : (
+      {isEditing ? null : (
         // 创建模式：[头像] [用户名] [显示名] [密码] [身份下拉] ✔ ✗
         <div className="flex items-center gap-2">
           {/* 头像选择 */}
@@ -655,7 +745,7 @@ export default function AdminPage() {
       )}
       {/* 空间成员管理（仅编辑模式） */}
       {isEditing && (
-        <div className="border-t border-notion-border mt-5 pt-5">
+        <div>
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-medium text-notion-text">空间</span>
             <button
@@ -790,17 +880,19 @@ export default function AdminPage() {
       <div className="bg-white rounded-lg border border-notion-border overflow-visible">
         <table className="w-full table-fixed">
           <colgroup>
-            <col className="w-[30%]" />
-            <col className="w-[18%]" />
-            <col className="w-[18%]" />
-            <col className="w-[20%]" />
+            <col className="w-[26%]" />
+            <col className="w-[16%]" />
             <col className="w-[14%]" />
+            <col className="w-[10%]" />
+            <col className="w-[18%]" />
+            <col className="w-[16%]" />
           </colgroup>
           <thead className="bg-notion-sidebarBg">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">用户</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">显示名</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">用户名</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">角色</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-notion-textSecondary uppercase tracking-wider">空间</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-notion-textSecondary uppercase tracking-wider">创建时间</th>
               <th className="px-6 py-3 text-right text-xs font-medium text-notion-textSecondary uppercase tracking-wider">操作</th>
             </tr>
@@ -809,63 +901,96 @@ export default function AdminPage() {
             {/* 创建面板 — 插入到列表顶部 */}
             {userPanelId === 'new' && (
               <tr className="bg-notion-sidebarBg/30">
-                <td colSpan={5}>{renderUserPanel(false)}</td>
+                <td colSpan={6}>{renderUserPanel(false)}</td>
               </tr>
             )}
             {users.map((user) => (
               <Fragment key={user.id}>
                 {/* 正常行 — 始终显示 */}
-                <tr className="hover:bg-notion-hover transition-colors">
+                <tr className="transition-colors">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="relative" ref={listAvatarPickerUserId === user.id ? listAvatarPickerRef : undefined}>
-                        <button
-                          onClick={() => setListAvatarPickerUserId(listAvatarPickerUserId === user.id ? null : user.id)}
-                          className="w-8 h-8 flex items-center justify-center overflow-hidden rounded hover:border hover:border-notion-border transition-colors cursor-pointer"
-                          title="更换头像"
-                        >
-                          {user.avatar_url
-                            ? (user.avatar_url.startsWith('http') ? <img src={user.avatar_url} alt={user.display_name} className="w-8 h-8" /> : <span className="text-lg">{user.avatar_url}</span>)
-                            : <span className="text-lg">👤</span>}
-                        </button>
-                        {listAvatarPickerUserId === user.id && (
-                          <div className="absolute top-full left-0 mt-1 bg-white border border-notion-border rounded-lg shadow-lg p-2 z-50 w-[260px]">
-                            <div className="grid grid-cols-8 gap-1">
-                              {ICON_OPTIONS.map((emoji) => (
-                                <button
-                                  key={emoji}
-                                  type="button"
-                                  onClick={async () => {
-                                    try {
-                                      const updated = await usersApi.update(user.id, { avatar_url: emoji } as any);
-                                      setUsers(prev => prev.map(u => u.id === user.id ? updated : u));
-                                      setListAvatarPickerUserId(null);
-                                    } catch (err) {
-                                      console.error('Failed to update avatar:', err);
-                                    }
-                                  }}
-                                  className={`w-8 h-8 rounded hover:bg-notion-hover flex items-center justify-center text-base transition-colors ${user.avatar_url === emoji ? 'bg-notion-hover ring-1 ring-blue-400' : ''}`}
-                                >
-                                  {emoji}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                      <div className="relative">
+                        <PageIcon
+                          compact
+                          icon={user.avatar_url || null}
+                          onSelect={async (value) => {
+                            try {
+                              const updated = await usersApi.update(user.id, { avatar_url: value } as any);
+                              setUsers(prev => prev.map(u => u.id === user.id ? updated : u));
+                            } catch (err) {
+                              console.error('Failed to update avatar:', err);
+                            }
+                          }}
+                        />
                       </div>
-                      <span className="font-medium text-notion-text">{user.display_name}</span>
+                      {editingDisplayNameUserId === user.id ? (
+                        <input
+                          type="text"
+                          value={editingDisplayNameValue}
+                          onChange={(e) => setEditingDisplayNameValue(e.target.value)}
+                          onBlur={async () => {
+                            if (editingDisplayNameValue.trim() && editingDisplayNameValue !== user.display_name) {
+                              try {
+                                const updated = await usersApi.update(user.id, { display_name: editingDisplayNameValue });
+                                setUsers(prev => prev.map(u => u.id === user.id ? updated : u));
+                              } catch (err: any) { setError(err.message); }
+                            }
+                            setEditingDisplayNameUserId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                            if (e.key === 'Escape') { setEditingDisplayNameUserId(null); }
+                          }}
+                          className="flex-1 font-medium text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1 -mx-2 -my-1"
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          onClick={() => { setEditingDisplayNameUserId(user.id); setEditingDisplayNameValue(user.display_name); }}
+                          className="flex-1 font-medium text-notion-text cursor-pointer border border-transparent hover:border-notion-border rounded px-2 py-1 -mx-2 -my-1 transition-colors"
+                        >
+                          {user.display_name}
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-notion-textSecondary">{user.username}</td>
                   <td className="px-6 py-4">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-700'}`}>
-                      {user.role === 'admin' ? '管理员' : '普通用户'}
-                    </span>
+                    <div className="relative inline-block" ref={roleDropdownUserId === user.id ? roleDropdownRef : undefined}>
+                      <button
+                        onClick={() => setRoleDropdownUserId(roleDropdownUserId === user.id ? null : user.id)}
+                        className={`px-2 py-1 rounded text-xs font-medium cursor-pointer border border-transparent transition-colors ${
+                          user.role === 'admin'
+                            ? 'bg-purple-100 text-purple-700 hover:border-purple-300'
+                            : 'bg-gray-100 text-gray-700 hover:border-gray-300'
+                        }`}
+                      >
+                        {user.role === 'admin' ? '管理员' : '普通用户'}
+                      </button>
+                      {roleDropdownUserId === user.id && (
+                        <div className="absolute top-full left-0 mt-1 bg-white border border-notion-border rounded-lg shadow-lg z-50 p-1 min-w-[100px]">
+                          <button
+                            onClick={() => handleInlineRoleChange(user.id, 'user')}
+                            className={`w-full text-left px-3 py-1.5 rounded text-sm transition-colors ${
+                              user.role === 'user' ? 'bg-gray-100 text-gray-700' : 'hover:bg-gray-50 text-gray-700'
+                            }`}
+                          >普通用户</button>
+                          <button
+                            onClick={() => handleInlineRoleChange(user.id, 'admin')}
+                            className={`w-full text-left px-3 py-1.5 rounded text-sm transition-colors ${
+                              user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'hover:bg-purple-50 text-purple-700'
+                            }`}
+                          >管理员</button>
+                        </div>
+                      )}
+                    </div>
                   </td>
+                  <td className="px-6 py-4 text-center text-notion-textSecondary text-sm">{userSpaceCounts[user.id] ?? '-'}</td>
                   <td className="px-6 py-4 text-notion-textSecondary">{new Date(user.created_at).toLocaleDateString()}</td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      <button onClick={() => openEditUserPanel(user)} className="text-notion-textSecondary hover:text-notion-text" title="编辑"><Edit2 className="w-4 h-4" /></button>
+                      <button onClick={() => openEditUserPanel(user)} className="text-notion-textSecondary hover:text-notion-text" title="展开">{userPanelId === user.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</button>
                       <div className="relative">
                         <button onClick={() => { if (passwordTargetUserId === user.id && showUserPasswordPanel) { setShowUserPasswordPanel(false); setPasswordTargetUserId(null); } else { setShowUserPasswordPanel(true); setPasswordTargetUserId(user.id); setUserNewPassword(''); } }} className="text-notion-textSecondary hover:text-notion-text" title="重置密码"><Key className="w-4 h-4" /></button>
                         {passwordTargetUserId === user.id && showUserPasswordPanel && (
@@ -898,7 +1023,7 @@ export default function AdminPage() {
                 {/* 编辑面板 — 在下方插入 */}
                 {userPanelId === user.id && (
                   <tr className="bg-notion-sidebarBg/30">
-                    <td colSpan={5}>{renderUserPanel(true)}</td>
+                    <td colSpan={6}>{renderUserPanel(true)}</td>
                   </tr>
                 )}
               </Fragment>
@@ -915,7 +1040,7 @@ export default function AdminPage() {
 
     return (
       <form onSubmit={handleSavePanel} className="p-6">
-        {/* 第一行：图标 + 名称 + 描述 + (编辑)保存/取消 / (创建)✔✗ */}
+        {isEditing ? null : (
         <div className="flex items-center gap-2">
           {/* 图标按钮 */}
           <div className="relative" ref={iconPickerRef}>
@@ -963,13 +1088,14 @@ export default function AdminPage() {
             placeholder="描述（可选）"
             className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <button type="submit" className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title={isEditing ? '保存' : '创建'}><Check className="w-4 h-4" /></button>
+          <button type="submit" className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="创建"><Check className="w-4 h-4" /></button>
           <button type="button" onClick={closePanel} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="取消"><X className="w-4 h-4" /></button>
         </div>
+        )}
 
         {/* 成员区域（仅编辑模式） */}
         {isEditing && (
-          <div className="border-t border-notion-border mt-5 pt-5">
+          <div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-notion-text">成员</span>
               <button
@@ -1134,19 +1260,88 @@ export default function AdminPage() {
               {spaces.map((space) => (
                 <Fragment key={space.slug}>
                   {/* 正常行 — 始终显示 */}
-                  <tr className="hover:bg-notion-hover transition-colors">
+                  <tr className="transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        {space.icon && <span>{space.icon}</span>}
-                        <span className="font-medium text-notion-text">{space.name}</span>
+                        <PageIcon
+                          compact
+                          icon={space.icon || null}
+                          onSelect={async (value) => {
+                            try {
+                              const updated = await spacesApi.update(space.slug, { icon: value, name: space.name, description: space.description || '' });
+                              fetchSpaces();
+                            } catch (err) {
+                              console.error('Failed to update icon:', err);
+                            }
+                          }}
+                        />
+                        {editingSpaceNameSlug === space.slug ? (
+                          <input
+                            type="text"
+                            value={editingSpaceNameValue}
+                            onChange={(e) => setEditingSpaceNameValue(e.target.value)}
+                            onBlur={async () => {
+                              if (editingSpaceNameValue.trim() && editingSpaceNameValue !== space.name) {
+                                try {
+                                  await spacesApi.update(space.slug, { name: editingSpaceNameValue, description: space.description || '', icon: space.icon || '' });
+                                  fetchSpaces();
+                                } catch (err: any) { setError(err.message); }
+                              }
+                              setEditingSpaceNameSlug(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                              if (e.key === 'Escape') { setEditingSpaceNameSlug(null); }
+                            }}
+                            className="flex-1 min-w-0 font-medium text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1 -mx-2 -my-1"
+                            autoFocus
+                          />
+                        ) : (
+                          <span
+                            onClick={() => { setEditingSpaceNameSlug(space.slug); setEditingSpaceNameValue(space.name); }}
+                            className="flex-1 min-w-0 font-medium text-notion-text cursor-pointer border border-transparent hover:border-notion-border rounded px-2 py-1 -mx-2 -my-1 transition-colors truncate"
+                          >
+                            {space.name}
+                          </span>
+                        )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-notion-textSecondary">{space.description || '-'}</td>
+                    <td className="px-6 py-4">
+                      {editingSpaceDescSlug === space.slug ? (
+                        <input
+                          type="text"
+                          value={editingSpaceDescValue}
+                          onChange={(e) => setEditingSpaceDescValue(e.target.value)}
+                          onBlur={async () => {
+                            if (editingSpaceDescValue !== (space.description || '')) {
+                              try {
+                                await spacesApi.update(space.slug, { name: space.name, description: editingSpaceDescValue, icon: space.icon || '' });
+                                fetchSpaces();
+                              } catch (err: any) { setError(err.message); }
+                            }
+                            setEditingSpaceDescSlug(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                            if (e.key === 'Escape') { setEditingSpaceDescSlug(null); }
+                          }}
+                          className="w-full text-notion-textSecondary bg-transparent outline-none border border-blue-300 rounded px-2 py-1 min-w-0"
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          onClick={() => { setEditingSpaceDescSlug(space.slug); setEditingSpaceDescValue(space.description || ''); }}
+                          className="text-notion-textSecondary cursor-pointer border border-transparent hover:border-notion-border rounded px-2 py-1 transition-colors block truncate"
+                        >
+                          {space.description || '-'}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-notion-textSecondary">{new Date(space.created_at).toLocaleDateString()}</td>
                     <td className="px-6 py-4 text-center text-notion-textSecondary text-sm">{memberCounts[space.slug] ?? '-'}</td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => openEditPanel(space)} className="text-notion-textSecondary hover:text-notion-text" title="编辑"><Edit2 className="w-4 h-4" /></button>
+                        <button onClick={() => openEditPanel(space)} className="text-notion-textSecondary hover:text-notion-text" title="展开">{spacePanelSlug === space.slug ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</button>
                         <button onClick={() => handleRefreshSpace(space.slug)} disabled={refreshingSlug === space.slug} className="text-notion-textSecondary hover:text-notion-text disabled:pointer-events-none" title="刷新">
                           <RefreshCw className={`w-4 h-4 ${refreshingSlug === space.slug ? 'animate-spin' : ''}`} />
                         </button>
@@ -1421,6 +1616,130 @@ export default function AdminPage() {
     }
   };
 
+  // ---- 站点设置视图 ----
+  const renderSiteSettings = () => {
+    const DEFAULT_FAVICON = '/vite.svg';
+    const DEFAULT_SITE_NAME = 'MD Library';
+
+    // 重置确认弹窗
+    const ConfirmDialog = () => {
+      if (!confirmReset) return null;
+      const labels = { favicon: '小图标', logo: '大图标', site_name: '站点名称' };
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setConfirmReset(null)}>
+          <div className="bg-white rounded-lg shadow-lg p-6 min-w-[300px]" onClick={e => e.stopPropagation()}>
+            <p className="text-sm text-notion-text mb-4">确定要重置{labels[confirmReset]}为默认值吗？</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmReset(null)} className="px-3 py-1.5 text-sm text-notion-textSecondary hover:bg-notion-hover rounded transition-colors">取消</button>
+              <button onClick={() => handleReset(confirmReset)} className="px-3 py-1.5 text-sm text-white bg-red-500 hover:bg-red-600 rounded transition-colors">重置</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <>
+        {confirmReset && <ConfirmDialog />}
+        <h1 className="text-xl font-semibold text-notion-text mb-8">站点设置</h1>
+
+        {siteSettingsMsg && (
+          <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-2 rounded-lg mb-4">{siteSettingsMsg}</div>
+        )}
+
+        {siteSettingsLoading ? (
+          <div className="text-sm text-notion-textSecondary">加载中...</div>
+        ) : (
+          <div className="bg-white rounded-lg border border-notion-border p-6 space-y-6">
+            {/* 站点图标 */}
+            <div>
+              {/* 第一行: label + 图标框, 底部对齐 */}
+              <div className="flex items-end gap-4">
+                <span className="text-sm leading-none text-notion-textSecondary w-24 shrink-0">站点图标</span>
+                <div className="flex items-end gap-6">
+                  <div
+                    className="w-10 h-10 rounded-lg border border-notion-border bg-notion-hover/30 flex items-center justify-center cursor-pointer hover:border-blue-400 transition-colors overflow-hidden"
+                    onClick={() => faviconFileRef.current?.click()}
+                    title="点击上传小图标"
+                  >
+                    {siteSettings.favicon ? (
+                      <img src={siteSettings.favicon} alt="favicon" className="w-full h-full object-contain p-0.5" />
+                    ) : (
+                      <img src={DEFAULT_FAVICON} alt="default favicon" className="w-full h-full object-contain p-1" />
+                    )}
+                  </div>
+                  <input ref={faviconFileRef} type="file" accept="image/*" className="hidden" onChange={handleFaviconUpload} />
+                  <div
+                    className="w-16 h-16 rounded-lg border border-notion-border bg-notion-hover/30 flex items-center justify-center cursor-pointer hover:border-blue-400 transition-colors overflow-hidden"
+                    onClick={() => logoFileRef.current?.click()}
+                    title="点击上传大图标"
+                  >
+                    {siteSettings.logo ? (
+                      <img src={siteSettings.logo} alt="logo" className="w-full h-full object-contain p-1" />
+                    ) : (
+                      <BookOpen className="w-8 h-8 text-notion-textSecondary" />
+                    )}
+                  </div>
+                  <input ref={logoFileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                </div>
+              </div>
+              {/* 第二行: 重置按钮, 宽度对齐图标 */}
+              <div className="flex gap-4 mt-1.5">
+                <span className="w-24 shrink-0" />
+                <div className="flex gap-6">
+                  <div className="w-10 text-center">
+                    {siteSettings.favicon && (
+                      <button onClick={() => setConfirmReset('favicon')} className="text-xs text-notion-textSecondary hover:text-red-500 transition-colors">重置</button>
+                    )}
+                  </div>
+                  <div className="w-16 text-center">
+                    {siteSettings.logo && (
+                      <button onClick={() => setConfirmReset('logo')} className="text-xs text-notion-textSecondary hover:text-red-500 transition-colors">重置</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 站点名称 */}
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-notion-textSecondary w-24 shrink-0">站点名称</span>
+              <div className="flex items-center gap-3">
+                {editingSiteName ? (
+                  <input
+                    className="w-64 min-w-0 text-sm text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1"
+                    value={editingSiteNameValue}
+                    onChange={e => setEditingSiteNameValue(e.target.value)}
+                    onBlur={() => {
+                      setEditingSiteName(false);
+                      const newVal = editingSiteNameValue.trim();
+                      if (newVal !== (siteSettings.site_name || '')) {
+                        handleSiteNameSave(newVal);
+                      }
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      if (e.key === 'Escape') { setEditingSiteName(false); setEditingSiteNameValue(siteSettings.site_name || ''); }
+                    }}
+                    autoFocus
+                  />
+                ) : (
+                  <span
+                    className="w-64 min-w-0 text-sm text-notion-text cursor-pointer border border-transparent hover:border-notion-border rounded px-2 py-1 transition-colors truncate"
+                    onClick={() => { setEditingSiteName(true); setEditingSiteNameValue(siteSettings.site_name || ''); }}
+                  >{siteSettings.site_name || DEFAULT_SITE_NAME}</span>
+                )}
+                {siteSettings.site_name && (
+                  <button onClick={() => setConfirmReset('site_name')} className="text-xs text-notion-textSecondary hover:text-red-500 transition-colors">重置</button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   const renderProfile = () => {
     // 属性行样式
     const row = (label: string, content: React.ReactNode) => (
@@ -1442,56 +1761,45 @@ export default function AdminPage() {
           <h3 className="text-sm font-medium text-notion-text mb-3">基本信息</h3>
           <div className="space-y-0">
             {row('用户名', <span className="text-sm text-notion-textSecondary">{currentUser?.username}</span>)}
-            {row('用户头像', (
-              <div className="relative" ref={avatarPickerRef}>
-                <button
-                  type="button"
-                  onClick={() => setShowAvatarPicker(!showAvatarPicker)}
-                  className="w-8 h-8 rounded border border-notion-border hover:bg-notion-hover flex items-center justify-center text-lg transition-colors"
-                  title="选择头像"
-                >
-                  {currentUser?.avatar_url || <Smile className="w-5 h-5 text-notion-textSecondary" />}
-                </button>
-                {showAvatarPicker && (
-                  <div className="absolute top-full left-0 mt-1 bg-white border border-notion-border rounded-lg shadow-lg p-2 z-50 w-[260px]">
-                    <div className="grid grid-cols-8 gap-1">
-                      {ICON_OPTIONS.map((emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          onClick={() => handleSelectAvatar(emoji)}
-                          className={`w-8 h-8 rounded hover:bg-notion-hover flex items-center justify-center text-base transition-colors ${currentUser?.avatar_url === emoji ? 'bg-notion-hover ring-1 ring-blue-400' : ''}`}
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+            {row('显示名', (
+              <div className="flex items-center gap-2">
+                <PageIcon
+                  compact
+                  icon={currentUser?.avatar_url || null}
+                  onSelect={async (value) => {
+                    try {
+                      await useAuthStore.getState().updateProfile({ avatar_url: value });
+                    } catch (err: any) {
+                      setProfileMsg(err.message || '保存失败');
+                    }
+                  }}
+                />
+                {isEditingDisplayName ? (
+                  <input
+                    type="text"
+                    value={editingDisplayName}
+                    onChange={(e) => setEditingDisplayName(e.target.value)}
+                    onBlur={async () => {
+                      if (editingDisplayName.trim() && editingDisplayName !== currentUser?.display_name) {
+                        try {
+                          await useAuthStore.getState().updateProfile({ display_name: editingDisplayName });
+                        } catch (err: any) { setProfileMsg(err.message || '保存失败'); }
+                      }
+                      setIsEditingDisplayName(false);
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } if (e.key === 'Escape') setIsEditingDisplayName(false); }}
+                    className="w-64 min-w-0 text-sm text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1"
+                    autoFocus
+                  />
+                ) : (
+                  <span
+                    onClick={() => { setEditingDisplayName(currentUser?.display_name || ''); setIsEditingDisplayName(true); }}
+                    className="w-64 min-w-0 text-sm text-notion-text cursor-pointer border border-transparent hover:border-notion-border rounded px-2 py-1 transition-colors truncate"
+                  >
+                    {currentUser?.display_name}
+                  </span>
                 )}
               </div>
-            ))}
-            {row('显示名', isEditingDisplayName ? (
-              <div className="flex items-center gap-2" style={{ marginLeft: '-1px' }}>
-                <input
-                  type="text"
-                  value={editingDisplayName}
-                  onChange={(e) => setEditingDisplayName(e.target.value)}
-                  className="px-1 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
-                  autoFocus
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveDisplayName(); if (e.key === 'Escape') setIsEditingDisplayName(false); }}
-                />
-                <button type="button" onClick={handleSaveDisplayName} className="p-0.5 text-notion-textSecondary hover:text-notion-text transition-colors"><Check className="w-4 h-4" /></button>
-                <button type="button" onClick={() => setIsEditingDisplayName(false)} className="p-0.5 text-notion-textSecondary hover:text-notion-text transition-colors"><X className="w-4 h-4" /></button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => { setEditingDisplayName(currentUser?.display_name || ''); setIsEditingDisplayName(true); }}
-                className="text-sm text-notion-text hover:bg-notion-hover px-1 py-0.5 rounded transition-colors"
-                title="点击修改"
-              >
-                {currentUser?.display_name}
-              </button>
             ))}
           </div>
         </div>
@@ -1500,14 +1808,14 @@ export default function AdminPage() {
         <div className="bg-white rounded-lg border border-notion-border p-6">
           <h3 className="text-sm font-medium text-notion-text mb-3">修改密码</h3>
           <div className="space-y-0">
-            {row('当前密码', <input type="password" value={passwordForm.old_password} onChange={(e) => setPasswordForm({ ...passwordForm, old_password: e.target.value })} className="w-64 px-2 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />)}
-            {row('新密码', <input type="password" value={passwordForm.new_password} onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })} className="w-64 px-2 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />)}
+            {row('当前密码', <input type="password" value={passwordForm.old_password} onChange={(e) => setPasswordForm({ ...passwordForm, old_password: e.target.value })} className="w-64 px-2 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-300" />)}
+            {row('新密码', <input type="password" value={passwordForm.new_password} onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })} className="w-64 px-2 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-300" />)}
             {row('确认密码', (
               <div className="flex items-center gap-2">
-                <input type="password" value={passwordForm.confirm_password} onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })} className={`w-64 px-2 py-1 border rounded text-sm focus:outline-none focus:ring-2 ${
+                <input type="password" value={passwordForm.confirm_password} onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })} className={`w-64 px-2 py-1 border rounded text-sm focus:outline-none focus:ring-1 ${
                   passwordForm.confirm_password && !passwordForm.new_password.startsWith(passwordForm.confirm_password)
                     ? 'border-red-400 focus:ring-red-400'
-                    : 'border-notion-border focus:ring-blue-500'
+                    : 'border-notion-border focus:ring-blue-300'
                 }`} />
                 {(passwordForm.old_password || passwordForm.new_password || passwordForm.confirm_password) && (
                   <>
@@ -1543,7 +1851,7 @@ export default function AdminPage() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto py-8 px-6">
         {(activeTab === 'users' || activeTab === 'spaces') && !isAdminUser ? renderProfile() :
-          activeTab === 'users' ? renderUsers() : activeTab === 'spaces' ? renderSpaces() : activeTab === 'resources' ? renderResources() : renderProfile()}
+          activeTab === 'users' ? renderUsers() : activeTab === 'spaces' ? renderSpaces() : activeTab === 'resources' ? renderResources() : activeTab === 'site' ? renderSiteSettings() : renderProfile()}
       </div>
     </div>
   );

@@ -33,6 +33,8 @@ func main() {
 	os.MkdirAll(iconDir, 0755)
 	coverDir := filepath.Join(dataDir, "covers")
 	os.MkdirAll(coverDir, 0755)
+	siteDir := filepath.Join(dataDir, "site")
+	os.MkdirAll(siteDir, 0755)
 
 	// Initialize database
 	db, err := repository.NewDB(dataDir)
@@ -46,6 +48,8 @@ func main() {
 	spaceRepo := repository.NewSpaceRepository(db)
 	memberRepo := repository.NewMemberRepository(db)
 	prefRepo := repository.NewPreferenceRepository(db)
+	siteSettingRepo := repository.NewSiteSettingRepository(db)
+	bookmarkRepo := repository.NewBookmarkRepository(db.DB)
 
 	// Initialize services
 	authService := service.NewAuthService(userRepo, jwtSecret)
@@ -53,6 +57,8 @@ func main() {
 	pageService := service.NewPageService(docsDir)
 	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageService, docsDir)
 	prefService := service.NewPreferenceService(prefRepo)
+	siteSettingService := service.NewSiteSettingService(siteSettingRepo)
+	bookmarkService := service.NewBookmarkService(bookmarkRepo)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -66,6 +72,8 @@ func main() {
 	pageHandler := handler.NewPageHandler(pageService, spaceService, authService)
 	uploadHandler := handler.NewUploadHandler(pageService, uploadDir, iconDir, coverDir)
 	prefHandler := handler.NewPreferenceHandler(prefService)
+	siteSettingHandler := handler.NewSiteSettingHandler(siteSettingService, siteDir)
+	bookmarkHandler := handler.NewBookmarkHandler(bookmarkService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -86,6 +94,7 @@ func main() {
 	// Public routes
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/logout", authHandler.Logout)
+	r.Get("/api/site-settings", siteSettingHandler.Get)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -130,10 +139,18 @@ func main() {
 		r.Post("/api/spaces/{slug}/trash/restore", pageHandler.RestoreFromTrash)
 		r.Post("/api/spaces/{slug}/trash/delete", pageHandler.PermanentDelete)
 
+		// Bookmark
+		r.Get("/api/bookmark/meta", bookmarkHandler.GetMeta)
+
 		// Users (admin only)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireAdmin)
 			r.Get("/api/users", userHandler.List)
+			r.Put("/api/site-settings/name", siteSettingHandler.UpdateSiteName)
+			r.Post("/api/site-settings/favicon", siteSettingHandler.UploadFavicon)
+			r.Post("/api/site-settings/favicon/reset", siteSettingHandler.ResetFavicon)
+			r.Post("/api/site-settings/logo", siteSettingHandler.UploadLogo)
+			r.Post("/api/site-settings/logo/reset", siteSettingHandler.ResetLogo)
 			r.Post("/api/users", userHandler.Create)
 			r.Get("/api/users/{id}", userHandler.GetByID)
 			r.Put("/api/users/{id}", userHandler.Update)
@@ -169,6 +186,9 @@ func main() {
 
 	// Public cover library files
 	r.Get("/api/covers/*", uploadHandler.ServeCover)
+
+	// Public site assets (favicon, logo)
+	r.Get("/api/site-assets/{filename}", siteSettingHandler.ServeAsset)
 
 	// Public page assets (cover images, etc.) — no auth needed for CSS background-image
 	r.Get("/api/spaces/{slug}/pages/{id}/assets/*", pageHandler.ServeAsset)

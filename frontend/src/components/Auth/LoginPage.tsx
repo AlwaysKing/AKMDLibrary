@@ -1,15 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { BookOpen } from 'lucide-react';
+import { siteSettingsApi, SiteSettings } from '../../api/siteSettings';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [siteSettings, setSiteSettings] = useState<SiteSettings>({});
   const login = useAuthStore((state) => state.login);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    siteSettingsApi.get().then(setSiteSettings).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,11 +43,15 @@ export default function LoginPage() {
       <div className="w-full max-w-[340px]">
         {/* Logo */}
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-notion-text rounded-xl mb-4">
-            <BookOpen className="w-6 h-6 text-white" />
-          </div>
+          {siteSettings.logo ? (
+            <img src={siteSettings.logo} alt="Logo" className="w-12 h-12 object-contain mx-auto mb-4" />
+          ) : (
+            <div className="inline-flex items-center justify-center w-12 h-12 bg-notion-text rounded-xl mb-4">
+              <BookOpen className="w-6 h-6 text-white" />
+            </div>
+          )}
           <h1 className="text-xl font-bold text-notion-text">
-            MD Library
+            {siteSettings.site_name || 'MD Library'}
           </h1>
         </div>
 
@@ -101,7 +111,6 @@ export default function LoginPage() {
 
         {/* Footer hint */}
         <p className="text-center text-xs text-notion-textSecondary/60 mt-6">
-          默认账号：admin / admin123
         </p>
       </div>
     </div>

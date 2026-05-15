@@ -7,11 +7,13 @@ import { fetchIconLibrary, checkIconName, useIconFromLibrary, IconLibraryItem } 
 interface PageIconProps {
   icon: string | null | undefined;
   iconLarge?: boolean;
-  spaceSlug: string;
-  pageId: number;
+  spaceSlug?: string;
+  pageId?: number;
   compact?: boolean;
   onOpenChange?: (open: boolean) => void;
   onChange?: () => void;
+  /** 自定义选择回调，提供时跳过内部 updateMetadata 逻辑 */
+  onSelect?: (value: string) => void;
 }
 
 const EMOJI_CATEGORIES: Record<string, string[]> = {
@@ -41,7 +43,7 @@ const CATEGORY_ICONS = [
   { key: '符号', icon: '🔴' },
 ];
 
-export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, onOpenChange, onChange }: PageIconProps) {
+export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, onOpenChange, onChange, onSelect }: PageIconProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [tab, setTab] = useState<'emoji' | 'upload'>('emoji');
   const [search, setSearch] = useState('');
@@ -80,25 +82,10 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
     if (left < 8) left = 8;
     if (left + pickerWidth > window.innerWidth - 8) left = window.innerWidth - pickerWidth - 8;
 
-    // Anchor bottom edge of picker to top of trigger
-    const bottomEdge = rect.top - gap;
     const actualHeight = pickerRef.current?.offsetHeight ?? 0;
     const height = actualHeight > 0 ? actualHeight : 420;
 
-    // In compact mode (inside rename panel): pin bottom to trigger top
-    if (compact) {
-      let top = bottomEdge - height;
-      if (top < 8) top = 8; // clamp to viewport top
-      setPopupStyle({
-        position: 'fixed',
-        left,
-        top,
-        width: `${pickerWidth}px`,
-      });
-      return;
-    }
-
-    // Normal mode: prefer below, fallback above
+    // Prefer below, fallback above
     const spaceBelow = window.innerHeight - rect.bottom - 8;
     if (spaceBelow >= height) {
       setPopupStyle({
@@ -108,7 +95,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
         width: `${pickerWidth}px`,
       });
     } else {
-      let top = bottomEdge - height;
+      let top = rect.top - gap - height;
       if (top < 8) top = 8;
       setPopupStyle({
         position: 'fixed',
@@ -117,7 +104,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
         width: `${pickerWidth}px`,
       });
     }
-  }, [compact]);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -160,7 +147,13 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   };
 
   const handleSelectEmoji = async (emoji: string) => {
-    await updateMetadata(spaceSlug, pageId, { icon: emoji, icon_large: false });
+    if (onSelect) {
+      onSelect(emoji);
+      setOpen(false);
+      setSearch('');
+      return;
+    }
+    await updateMetadata(spaceSlug!, pageId!, { icon: emoji, icon_large: false });
     onChange?.();
     setOpen(false);
     setSearch('');
@@ -179,7 +172,12 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   };
 
   const handleRemove = async () => {
-    await updateMetadata(spaceSlug, pageId, { icon: '' });
+    if (onSelect) {
+      onSelect('');
+      setOpen(false);
+      return;
+    }
+    await updateMetadata(spaceSlug!, pageId!, { icon: '' });
     onChange?.();
     setOpen(false);
   };
@@ -187,7 +185,12 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   const handleRandom = async () => {
     const all = Object.values(EMOJI_CATEGORIES).flat();
     const randomEmoji = all[Math.floor(Math.random() * all.length)];
-    await updateMetadata(spaceSlug, pageId, { icon: randomEmoji });
+    if (onSelect) {
+      onSelect(randomEmoji);
+      setOpen(false);
+      return;
+    }
+    await updateMetadata(spaceSlug!, pageId!, { icon: randomEmoji });
     onChange?.();
     setOpen(false);
   };
@@ -558,7 +561,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
           ref={triggerRef as React.Ref<HTMLButtonElement>}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setOpen(true)}
-          className="flex items-center justify-center w-7 h-7 hover:bg-notion-hover rounded border border-notion-border transition-colors"
+          className="flex items-center justify-center w-7 h-7 rounded border border-transparent hover:border-notion-border transition-colors"
         >
           {icon ? (
             isIconUrl ? (
@@ -590,7 +593,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
         <button
           ref={triggerRef as React.Ref<HTMLButtonElement>}
           onClick={() => setOpen(true)}
-          className="hover:opacity-80 transition-opacity"
+          className=""
           style={{ width: `${displaySize}px`, height: `${displaySize}px`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         >
           {isIconUrl ? (

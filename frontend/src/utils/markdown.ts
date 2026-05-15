@@ -127,6 +127,28 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Page reference: <!-- pageref:123 -->
+    const pagerefMatch = trimmed.match(/^<!--\s*pageref:(\d+)\s*-->$/);
+    if (pagerefMatch) {
+      blocks.push({
+        type: 'pageReference',
+        props: { pageId: pagerefMatch[1] },
+      });
+      i++;
+      continue;
+    }
+
+    // Bookmark: <!-- bookmark:https://example.com -->
+    const bookmarkMatch = trimmed.match(/^<!--\s*bookmark:(https?:\/\/.+)\s*-->$/);
+    if (bookmarkMatch) {
+      blocks.push({
+        type: 'bookmark',
+        props: { url: bookmarkMatch[1] },
+      });
+      i++;
+      continue;
+    }
+
     // Paragraph with inline formatting
     blocks.push({
       type: 'paragraph',
@@ -285,6 +307,14 @@ export function blocksToMarkdown(blocks: any[]): string {
         const url = block.props?.url || '';
         const caption = block.props?.caption || '';
         lines.push(`![${caption}](${url})`);
+        break;
+
+      case 'pageReference':
+        lines.push(`<!-- pageref:${block.props?.pageId || '0'} -->`);
+        break;
+
+      case 'bookmark':
+        lines.push(`<!-- bookmark:${block.props?.url || ''} -->`);
         break;
 
       case 'table':

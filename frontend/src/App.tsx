@@ -11,6 +11,7 @@ import WelcomePage from './pages/WelcomePage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 import { usePreferenceStore } from './stores/preferenceStore';
+import { siteSettingsApi } from './api/siteSettings';
 
 function HomeRedirect() {
   const { isAuthenticated } = useAuthStore();
@@ -55,6 +56,24 @@ function App() {
 
   useEffect(() => {
     useAuthStore.getState().initialize();
+  }, []);
+
+  // 加载站点设置并更新 favicon 和 title
+  useEffect(() => {
+    siteSettingsApi.get().then(settings => {
+      if (settings.favicon) {
+        let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+        if (!link) {
+          link = document.createElement('link');
+          link.rel = 'icon';
+          document.head.appendChild(link);
+        }
+        link.href = settings.favicon;
+      }
+      if (settings.site_name) {
+        document.title = settings.site_name;
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
