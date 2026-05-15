@@ -149,6 +149,17 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Subpage: <!-- subpage:123 -->
+    const subpageMatch = trimmed.match(/^<!--\s*subpage:(\d+)\s*-->$/);
+    if (subpageMatch) {
+      blocks.push({
+        type: 'subpage',
+        props: { pageId: subpageMatch[1] },
+      });
+      i++;
+      continue;
+    }
+
     // Paragraph with inline formatting
     blocks.push({
       type: 'paragraph',
@@ -315,6 +326,10 @@ export function blocksToMarkdown(blocks: any[]): string {
 
       case 'bookmark':
         lines.push(`<!-- bookmark:${block.props?.url || ''} -->`);
+        break;
+
+      case 'subpage':
+        lines.push(`<!-- subpage:${block.props?.pageId || '0'} -->`);
         break;
 
       case 'table':

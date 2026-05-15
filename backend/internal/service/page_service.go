@@ -368,6 +368,14 @@ func (s *PageService) GetByID(spaceSlug string, pageID int) (*model.Page, error)
 	// Track page access for "recent" feature
 	repo.TouchAccess(pageID)
 
+	// Maintain subpage blocks: add missing, remove stale
+	maintained := s.maintainSubpageBlocks(page.Content, repo, page.FilePath)
+	if maintained != page.Content {
+		assembled := frontmatter.Render(fm, maintained)
+		os.WriteFile(filePath, assembled, 0644)
+		page.Content = maintained
+	}
+
 	return page, nil
 }
 
@@ -423,7 +431,13 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 			Icon:      req.Icon,
 			SortOrder: sortOrder,
 		}
-		return repo.Create(page)
+		created, err := repo.Create(page)
+		if err != nil {
+			return nil, err
+		}
+		// Append subpage block to parent
+		s.appendSubpageToParent(repo, *req.ParentID, created.ID)
+		return created, nil
 	}
 
 	// Root level
@@ -610,6 +624,12 @@ func (s *PageService) Delete(spaceSlug string, pageID int) error {
 	if _, err := os.Stat(childDir); err == nil {
 		trashChild := strings.TrimSuffix(trashFile, ".md")
 		os.Rename(childDir, trashChild)
+	}
+
+	// Remove subpage block from parent page
+	parentID := s.findParentPageID(repo, page.FilePath)
+	if parentID != nil {
+		s.removeSubpageFromParent(repo, *parentID, pageID)
 	}
 
 	return repo.Delete(pageID)
@@ -935,6 +955,9 @@ func (s *PageService) Move(spaceSlug string, pageID int, targetParentID *int) (*
 	parentDir := filepath.Dir(absPath)
 	childDir := filepath.Join(parentDir, pageName)
 
+	// Remember old parent before move (paths change after move)
+	oldParentID := s.findParentPageID(repo, page.FilePath)
+
 	// Determine target directory
 	var targetDir string    // absolute
 	var targetRelDir string // relative to docsDir
@@ -998,6 +1021,15 @@ func (s *PageService) Move(spaceSlug string, pageID int, targetParentID *int) (*
 	if err != nil {
 		return nil, err
 	}
+
+	// Maintain subpage blocks: remove from old parent, add to new parent
+	if oldParentID != nil {
+		s.removeSubpageFromParent(repo, *oldParentID, pageID)
+	}
+	if targetParentID != nil {
+		s.appendSubpageToParent(repo, *targetParentID, pageID)
+	}
+
 	return repo.GetByPath(newRelPath)
 }
 
@@ -1020,4 +1052,196 @@ func (s *PageService) ListRecent(spaceSlug string, limit int) ([]*model.Page, er
 		limit = 10
 	}
 	return repo.ListRecent(limit)
+}
+
+// ==================== Subpage Block Maintenance ====================
+//
+// Subpage blocks are HTML comments in markdown: <!-- subpage:123 -->
+// They represent direct child pages. All maintenance is done server-side
+// so the frontend only needs to render them.
+
+// subpageRe matches <!-- subpage:123 --> lines
+var subpageRe = regexp.MustCompile(`^<!--\s*subpage:(\d+)\s*-->$`)
+
+// getDirectChildIDs returns the database IDs of a page's direct child pages.
+// Children are determined by filesystem structure: if page is "space/parent.md",
+// children are *.md files in "space/parent/" directory.
+func (s *PageService) getDirectChildIDs(repo *repository.PageRepository, filePath string) ([]int, error) {
+	pageName := strings.TrimSuffix(filepath.Base(filePath), ".md")
+	parentDir := filepath.Dir(filePath)
+	childDir := filepath.Join(parentDir, pageName)
+	childAbsDir := filepath.Join(s.docsDir, childDir)
+
+	entries, err := os.ReadDir(childAbsDir)
+	if err != nil {
+		// No child directory = no children
+		return nil, nil
+	}
+
+	var ids []int
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		childRelPath := filepath.Join(childDir, entry.Name())
+		childPage, err := repo.GetByPath(childRelPath)
+		if err == nil && childPage != nil {
+			ids = append(ids, childPage.ID)
+		}
+	}
+	return ids, nil
+}
+
+// maintainSubpageBlocks ensures the markdown body has exactly one <!-- subpage:ID -->
+// for each direct child page, removing stale ones and appending missing ones.
+// Returns the (possibly modified) body.
+func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRepository, filePath string) string {
+	childIDs, err := s.getDirectChildIDs(repo, filePath)
+	if err != nil {
+		return body
+	}
+
+	// Parse existing subpage lines from body
+	childIDSet := make(map[int]bool)
+	for _, id := range childIDs {
+		childIDSet[id] = true
+	}
+
+	existingSubpageSet := make(map[int]bool)
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		matches := subpageRe.FindStringSubmatch(trimmed)
+		if len(matches) == 2 {
+			id := 0
+			fmt.Sscanf(matches[1], "%d", &id)
+			if id > 0 {
+				existingSubpageSet[id] = true
+			}
+			// Only keep this line if the ID is a valid direct child
+			if id > 0 && childIDSet[id] {
+				lines = append(lines, line)
+			}
+			// else: stale subpage line, drop it
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	// Find missing subpages (child exists but no line in body)
+	var missing []int
+	for _, id := range childIDs {
+		if !existingSubpageSet[id] {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) == 0 && len(existingSubpageSet) == len(childIDSet) {
+		// Nothing changed
+		// Rejoin and check equality
+		result := strings.Join(lines, "\n")
+		// Clean up trailing newlines to match original behavior
+		result = strings.TrimRight(result, "\n")
+		if result == strings.TrimRight(body, "\n") {
+			return body
+		}
+		return result
+	}
+
+	// Append missing subpages at the end
+	for _, id := range missing {
+		lines = append(lines, fmt.Sprintf("<!-- subpage:%d -->", id))
+	}
+
+	result := strings.Join(lines, "\n")
+	return strings.TrimRight(result, "\n")
+}
+
+// appendSubpageToParent adds <!-- subpage:childID --> to the end of parent page's content.
+func (s *PageService) appendSubpageToParent(repo *repository.PageRepository, parentID int, childID int) {
+	parent, err := repo.GetByID(parentID)
+	if err != nil {
+		return
+	}
+
+	filePath := filepath.Join(s.docsDir, parent.FilePath)
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+
+	fm, body, _ := frontmatter.Parse(raw)
+
+	// Check if subpage line already exists
+	target := fmt.Sprintf("<!-- subpage:%d -->", childID)
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) == target {
+			return // Already exists
+		}
+	}
+
+	// Append
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += target
+
+	assembled := frontmatter.Render(fm, body)
+	os.WriteFile(filePath, assembled, 0644)
+}
+
+// removeSubpageFromParent removes <!-- subpage:childID --> from parent page's content.
+func (s *PageService) removeSubpageFromParent(repo *repository.PageRepository, parentID int, childID int) {
+	parent, err := repo.GetByID(parentID)
+	if err != nil {
+		return
+	}
+
+	filePath := filepath.Join(s.docsDir, parent.FilePath)
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+
+	fm, body, _ := frontmatter.Parse(raw)
+
+	target := fmt.Sprintf("<!-- subpage:%d -->", childID)
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) != target {
+			lines = append(lines, line)
+		}
+	}
+
+	newBody := strings.Join(lines, "\n")
+	newBody = strings.TrimRight(newBody, "\n")
+
+	if newBody == strings.TrimRight(body, "\n") {
+		return // Nothing changed
+	}
+
+	assembled := frontmatter.Render(fm, newBody)
+	os.WriteFile(filePath, assembled, 0644)
+}
+
+// findParentPageID determines the parent page ID from a child page's file_path.
+// For example, "space/parent/child.md" → looks up "space/parent.md" → returns parent's ID.
+// Returns nil if the page is at root level (no parent).
+func (s *PageService) findParentPageID(repo *repository.PageRepository, filePath string) *int {
+	dir := filepath.Dir(filePath)
+	// If the directory is the root (e.g., "space"), there's no parent
+	if !strings.Contains(dir, "/") && !strings.Contains(dir, string(filepath.Separator)) {
+		return nil
+	}
+
+	// Parent .md file is at dir/../dirname.md where dirname is the last path segment
+	parentDir := filepath.Dir(dir)
+	parentName := filepath.Base(dir)
+	parentPath := filepath.Join(parentDir, parentName+".md")
+
+	parent, err := repo.GetByPath(parentPath)
+	if err != nil || parent == nil {
+		return nil
+	}
+	return &parent.ID
 }

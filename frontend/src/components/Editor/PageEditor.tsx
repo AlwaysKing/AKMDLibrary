@@ -7,6 +7,7 @@ import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
 import { blockNoteComponents, setBlockSelection } from './BlockNoteComponents';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { BookmarkBlockSpec } from './BookmarkBlock';
+import { SubpageBlockSpec } from './SubpageBlock';
 import LinkPasteMenu from './LinkPasteMenu';
 import { createMirror } from '../../services/mirrorStore';
 import { flushSync } from '../../services/syncModule';
@@ -17,6 +18,7 @@ const schema = BlockNoteSchema.create({
     ...defaultBlockSpecs,
     pageReference: PageReferenceBlockSpec(),
     bookmark: BookmarkBlockSpec(),
+    subpage: SubpageBlockSpec(),
   },
 });
 
