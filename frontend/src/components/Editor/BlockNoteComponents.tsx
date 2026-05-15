@@ -326,40 +326,38 @@ const SideMenuButton: React.FC<{
       const captured = multiDragRef.current;
       multiDragRef.current = null;
 
-      setTimeout(() => {
-        const { primaryId, otherIds, beforeBlocks, afterBlocks } = captured;
-        const currentDoc = editor.document;
+      const { primaryId, otherIds, beforeBlocks, afterBlocks } = captured;
+      const currentDoc = editor.document;
 
-        // Remove other selected blocks (skip if already gone)
-        const existingOtherIds = otherIds.filter(id => currentDoc.some(b => b.id === id));
-        if (existingOtherIds.length > 0) {
-          editor.removeBlocks(existingOtherIds as any);
-        }
+      // Remove other selected blocks (skip if already gone)
+      const existingOtherIds = otherIds.filter(id => currentDoc.some(b => b.id === id));
+      if (existingOtherIds.length > 0) {
+        editor.removeBlocks(existingOtherIds as any);
+      }
 
-        // Re-fetch primary after removal (position may have changed)
-        const docAfterRemove = editor.document;
-        if (!docAfterRemove.some(b => b.id === primaryId)) {
-          setBlockSelection(null);
-          return;
-        }
-
-        // Insert "after" blocks after the primary (in order)
-        if (afterBlocks.length > 0) {
-          editor.insertBlocks(afterBlocks.map(b => b.data) as any, primaryId as any, 'after');
-        }
-
-        // Insert "before" blocks before the primary (in order)
-        if (beforeBlocks.length > 0) {
-          editor.insertBlocks(beforeBlocks.map(b => b.data) as any, primaryId as any, 'before');
-        }
-
+      // Re-fetch primary after removal (position may have changed)
+      const docAfterRemove = editor.document;
+      if (!docAfterRemove.some(b => b.id === primaryId)) {
         setBlockSelection(null);
+        return;
+      }
 
-        // Clean up multi-drag visual feedback
-        document.querySelectorAll('[data-multi-drag]').forEach(el => {
-          delete (el as HTMLElement).dataset.multiDrag;
-        });
-      }, 100);
+      // Insert "after" blocks after the primary (in order)
+      if (afterBlocks.length > 0) {
+        editor.insertBlocks(afterBlocks.map(b => b.data) as any, primaryId as any, 'after');
+      }
+
+      // Insert "before" blocks before the primary (in order)
+      if (beforeBlocks.length > 0) {
+        editor.insertBlocks(beforeBlocks.map(b => b.data) as any, primaryId as any, 'before');
+      }
+
+      setBlockSelection(null);
+
+      // Clean up multi-drag visual feedback
+      document.querySelectorAll('[data-multi-drag]').forEach(el => {
+        delete (el as HTMLElement).dataset.multiDrag;
+      });
     };
 
     btn.addEventListener('click', handleNativeClick);
