@@ -14,3 +14,5 @@ test-*.cjs
 .env
 *.exe
 .claude/
+notion导出/
+notion导出.zip

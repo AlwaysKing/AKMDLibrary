@@ -75,9 +75,10 @@ export const pagesApi = {
     return response.data;
   },
 
-  move: async (spaceSlug: string, pageId: string, targetParentId: string | null): Promise<Page> => {
+  move: async (spaceSlug: string, pageId: string, targetParentId: string | null, afterId?: string | null): Promise<Page> => {
     const response = await apiClient.put<Page>(`/spaces/${spaceSlug}/pages/${pageId}/move`, {
       target_parent_id: targetParentId,
+      after_id: afterId ?? null,
     });
     return response.data;
   },

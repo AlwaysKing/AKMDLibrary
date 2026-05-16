@@ -991,7 +991,7 @@ func copyDirRecursive(src, dst string) error {
 }
 
 // Move relocates a page (and its subtree) to a new parent.
-func (s *PageService) Move(spaceSlug string, pageID string, targetParentID *string) (*model.Page, error) {
+func (s *PageService) Move(spaceSlug string, pageID string, targetParentID *string, afterID *string) (*model.Page, error) {
 	repo, err := s.getRepo(spaceSlug)
 	if err != nil {
 		return nil, err
@@ -1046,44 +1046,106 @@ func (s *PageService) Move(spaceSlug string, pageID string, targetParentID *stri
 		return nil, fmt.Errorf("failed to create target directory: %w", err)
 	}
 
-	// Resolve unique title (skip own directory which will be vacated)
-	newTitle := s.resolveUniqueTitle(targetDir, page.Title, "")
+	// Check if this is a same-directory reorder (no file move needed)
+	isSameDir := targetDir == parentDir
+	var newRelPath string
 
-	// Move .md file
-	newRelPath := filepath.Join(targetRelDir, newTitle+".md")
-	newAbsPath := filepath.Join(s.docsDir, newRelPath)
-	if err := os.Rename(absPath, newAbsPath); err != nil {
-		return nil, fmt.Errorf("failed to move page file: %w", err)
-	}
+	if isSameDir {
+		// Same directory: just update sort_order, no file rename/move
+		newRelPath = page.FilePath
+	} else {
+		// Cross-directory move: resolve unique title and move files
+		newTitle := s.resolveUniqueTitle(targetDir, page.Title, childDir)
 
-	// Move child directory if exists
-	if info, err := os.Stat(childDir); err == nil && info.IsDir() {
-		newChildDir := filepath.Join(targetDir, newTitle)
-		if err := os.Rename(childDir, newChildDir); err != nil {
-			return nil, fmt.Errorf("failed to move child directory: %w", err)
+		// Move .md file
+		newRelPath = filepath.Join(targetRelDir, newTitle+".md")
+		newAbsPath := filepath.Join(s.docsDir, newRelPath)
+		if err := os.Rename(absPath, newAbsPath); err != nil {
+			return nil, fmt.Errorf("failed to move page file: %w", err)
+		}
+
+		// Move child directory if exists
+		if info, err := os.Stat(childDir); err == nil && info.IsDir() {
+			newChildDir := filepath.Join(targetDir, newTitle)
+			if err := os.Rename(childDir, newChildDir); err != nil {
+				return nil, fmt.Errorf("failed to move child directory: %w", err)
+			}
 		}
 	}
 
-	// Rebuild cache to update all paths
-	if err := s.RebuildCache(spaceSlug); err != nil {
-		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
+		// Update cache DB: just fix file_path prefixes, no full rebuild needed
+		if !isSameDir {
+			// Update the moved page and all its children's file_path in cache
+			oldRelPrefix := strings.TrimSuffix(page.FilePath, ".md")
+			newRelPrefix := strings.TrimSuffix(newRelPath, ".md")
+			if err := repo.UpdateFilePathPrefix(oldRelPrefix, newRelPrefix); err != nil {
+				return nil, fmt.Errorf("failed to update cache paths: %w", err)
+			}
+		}
+
+	// Maintain subpage blocks: remove from old parent, add to new parent (skip if same dir)
+	if !isSameDir {
+		if oldParentID != nil {
+			s.removeSubpageFromParent(repo, *oldParentID, pageID)
+		}
+		if targetParentID != nil {
+			s.appendSubpageToParent(repo, *targetParentID, pageID)
+		}
 	}
 
-	// Find the moved page by its new file path
-	repo, err = s.getRepo(spaceSlug)
-	if err != nil {
-		return nil, err
-	}
-
-	// Maintain subpage blocks: remove from old parent, add to new parent
-	if oldParentID != nil {
-		s.removeSubpageFromParent(repo, *oldParentID, pageID)
-	}
-	if targetParentID != nil {
-		s.appendSubpageToParent(repo, *targetParentID, pageID)
-	}
+	// Recalculate sort_order for siblings in the target directory
+	s.recalculateSortOrder(repo, targetRelDir, pageID, afterID)
 
 	return repo.GetByPath(newRelPath)
+}
+
+// recalculateSortOrder reorders siblings so the moved page lands at the correct position.
+// afterID = nil → first position; afterID = "some-id" → after that sibling.
+func (s *PageService) recalculateSortOrder(repo *repository.PageRepository, parentRelDir string, movedPageID string, afterID *string) {
+	siblings, err := repo.GetSiblings(parentRelDir)
+	if err != nil || len(siblings) == 0 {
+		return
+	}
+
+	// Remove moved page from list, find insertion index
+	var sorted []*model.Page
+	var movedPage *model.Page
+	for _, p := range siblings {
+		if p.ID == movedPageID {
+			movedPage = p
+			continue
+		}
+		sorted = append(sorted, p)
+	}
+	if movedPage == nil {
+		return // shouldn't happen
+	}
+
+	// Find insertion index
+	insertIdx := 0
+	if afterID != nil {
+		for i, p := range sorted {
+			if p.ID == *afterID {
+				insertIdx = i + 1
+				break
+			}
+		}
+	}
+
+	// Insert moved page at the correct position
+	tail := append([]*model.Page{movedPage}, sorted[insertIdx:]...)
+	sorted = append(sorted[:insertIdx], tail...)
+
+	// Assign sort_order with gap of 1000
+	updates := make([]repository.SortOrderUpdate, len(sorted))
+	for i, p := range sorted {
+		updates[i] = repository.SortOrderUpdate{
+			ID:        p.ID,
+			SortOrder: float64((i + 1) * 1000),
+		}
+	}
+
+	repo.UpdateSortOrders(updates)
 }
 
 // ListStarred returns all starred pages for a space

@@ -261,13 +261,14 @@ func (h *PageHandler) Move(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		TargetParentID *string `json:"target_parent_id"`
+		AfterID        *string `json:"after_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	page, err := h.pageService.Move(slug, pageID, req.TargetParentID)
+	page, err := h.pageService.Move(slug, pageID, req.TargetParentID, req.AfterID)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "cannot") {

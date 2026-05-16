@@ -228,6 +228,77 @@ func (r *PageRepository) ListStarred() ([]*model.Page, error) {
 	return pages, nil
 }
 
+// GetSiblings returns all pages that are direct children of the given parent directory.
+// parentRelDir is the relative directory path (e.g., "my-space" for root or "my-space/Parent/Child" for nested).
+// It matches only "*.md" files directly in that directory (no nested subdirectories).
+func (r *PageRepository) GetSiblings(parentRelDir string) ([]*model.Page, error) {
+	pattern := parentRelDir + "/%.md"
+	// Exclude nested paths: only entries with no extra "/" after the prefix
+	query := `SELECT ` + pageColumns + ` FROM pages WHERE file_path LIKE ? ESCAPE '\' AND file_path NOT LIKE ? ESCAPE '\' ORDER BY sort_order ASC, created_at ASC`
+
+	// We need: file_path LIKE 'dir/%.md' but NOT LIKE 'dir/%/%.md'
+	// The first LIKE catches all .md files in subdirectories of parentRelDir.
+	// To filter to only direct children, we exclude any path that has an additional slash.
+	// Pattern: 'dir/%.md' and NOT 'dir/%/%'
+	nestedPattern := parentRelDir + "/%/%"
+
+	rows, err := r.db.Query(query, pattern, nestedPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get siblings: %w", err)
+	}
+	defer rows.Close()
+
+	var pages []*model.Page
+	for rows.Next() {
+		page, err := scanPage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan page: %w", err)
+		}
+		pages = append(pages, page)
+	}
+	return pages, nil
+}
+
+// SortOrderUpdate represents a batch sort_order update for a page.
+type SortOrderUpdate struct {
+	ID        string
+	SortOrder float64
+}
+
+// UpdateSortOrders batch-updates sort_order for multiple pages in a single transaction.
+func (r *PageRepository) UpdateSortOrders(updates []SortOrderUpdate) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	stmt, err := tx.Prepare("UPDATE pages SET sort_order = ? WHERE id = ?")
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if _, err := stmt.Exec(u.SortOrder, u.ID); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to update sort_order: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// UpdateFilePathPrefix updates all file_path values that start with oldPrefix to start with newPrefix.
+// Used when moving a page (and its children) to a new directory without rebuilding the entire cache.
+func (r *PageRepository) UpdateFilePathPrefix(oldPrefix string, newPrefix string) error {
+	_, err := r.db.Exec(
+		"UPDATE pages SET file_path = REPLACE(file_path, ?, ?) WHERE file_path LIKE ?",
+		oldPrefix, newPrefix, oldPrefix+"%",
+	)
+	return err
+}
+
 // ListRecent returns pages ordered by last access time (most recent first)
 func (r *PageRepository) ListRecent(limit int) ([]*model.Page, error) {
 	query := `SELECT ` + pageColumns + ` FROM pages WHERE last_accessed_at IS NOT NULL ORDER BY last_accessed_at DESC LIMIT ?`

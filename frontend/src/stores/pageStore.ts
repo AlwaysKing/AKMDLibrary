@@ -13,7 +13,7 @@ interface PageState {
   deletePage: (spaceSlug: string, pageId: string) => Promise<void>;
   updateMetadata: (spaceSlug: string, pageId: string, data: any) => Promise<void>;
   duplicatePage: (spaceSlug: string, pageId: string, targetParentId?: string | null) => Promise<Page>;
-  movePage: (spaceSlug: string, pageId: string, targetParentId: string | null) => Promise<Page>;
+  movePage: (spaceSlug: string, pageId: string, targetParentId: string | null, afterId?: string | null) => Promise<Page>;
   clearCurrentPage: () => void;
   refreshPageTree: () => Promise<void>;
 }
@@ -107,10 +107,10 @@ export const usePageStore = create<PageState>((set) => ({
     }
   },
 
-  movePage: async (spaceSlug, pageId, targetParentId) => {
+  movePage: async (spaceSlug, pageId, targetParentId, afterId?) => {
     set({ isLoading: true, error: null });
     try {
-      const page = await pagesApi.move(spaceSlug, pageId, targetParentId);
+      const page = await pagesApi.move(spaceSlug, pageId, targetParentId, afterId);
       set({ isLoading: false });
       return page;
     } catch (error: any) {

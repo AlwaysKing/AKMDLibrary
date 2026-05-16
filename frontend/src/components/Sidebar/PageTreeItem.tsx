@@ -13,9 +13,14 @@ interface PageTreeItemProps {
   level: number;
   expandedPageIds: Set<string>;
   onToggleExpand: (pageId: string, expanded: boolean) => void;
+  dragHandleProps?: React.HTMLAttributes<HTMLElement>;
+  isDragging?: boolean;
+  isDropTarget?: 'before' | 'after' | 'on' | null;
+  /** Custom renderer for children section (replaces default recursive PageTreeItem rendering) */
+  renderChildren?: (page: Page, level: number) => React.ReactNode;
 }
 
-export default function PageTreeItem({ page, level, expandedPageIds, onToggleExpand }: PageTreeItemProps) {
+export default function PageTreeItem({ page, level, expandedPageIds, onToggleExpand, dragHandleProps, isDragging, isDropTarget, renderChildren }: PageTreeItemProps) {
   const [showMenu, setShowMenu] = useState(false);
   const [showRenamePanel, setShowRenamePanel] = useState(false);
   const [renameTitle, setRenameTitle] = useState(page.title);
@@ -211,10 +216,14 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
   };
 
   return (
-    <div>
+    <div className={isDropTarget === 'on' ? 'rounded-md' : ''} style={isDropTarget === 'on' ? { backgroundColor: 'rgba(35, 131, 226, 0.08)' } : undefined}>
       <div
-        className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left group ${
-          isActive ? 'bg-notion-hover' : ''
+        {...dragHandleProps}
+        data-page-row
+        className={`w-full flex items-center h-[30px] rounded-md transition-colors text-left group ${
+          isDragging ? 'opacity-40' : ''
+        } ${
+          isActive ? 'bg-notion-hover' : 'hover:bg-notion-hover'
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px`, paddingRight: '8px' }}
         onContextMenu={(e) => openMenu(e, true)}
@@ -371,7 +380,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
       {isExpanded && (
         hasChildren ? (
           <div>
-            {page.children!.map((child) => (
+            {renderChildren ? renderChildren(page, level) : page.children!.map((child) => (
               <PageTreeItem key={child.id} page={child} level={level + 1} expandedPageIds={expandedPageIds} onToggleExpand={onToggleExpand} />
             ))}
           </div>
