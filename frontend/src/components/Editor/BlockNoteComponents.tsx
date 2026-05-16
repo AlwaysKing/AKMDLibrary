@@ -74,7 +74,7 @@ function setBlockSelection(blockIds: string[] | null) {
       .bn-block-outer:has(> [data-id="${id}"])::after {
         content: '';
         position: absolute;
-        inset: 2px;
+        inset: 1px 2px;
         background: rgba(35, 131, 226, 0.14);
         border-radius: 4px;
         pointer-events: none;

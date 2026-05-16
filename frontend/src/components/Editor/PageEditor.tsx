@@ -470,7 +470,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       {!readOnly && (
         <div
           className="w-full cursor-text"
-          style={{ minHeight: '20vh' }}
+          style={{ minHeight: '5vh' }}
           onClick={handleClickBelow}
         />
       )}

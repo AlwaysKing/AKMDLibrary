@@ -116,16 +116,33 @@ h4[contenteditable],
   padding: 2px 0 !important;
 }
 
-/* Custom blocks (pageReference, bookmark): remove BlockNote's default selection outline (#64a0ff) */
+/* Custom blocks (pageReference, bookmark, subpage): remove BlockNote's default selection outline (#64a0ff) */
 .bn-editor .bn-block-content[data-content-type="pageReference"],
-.bn-editor .bn-block-content[data-content-type="bookmark"] {
+.bn-editor .bn-block-content[data-content-type="bookmark"],
+.bn-editor .bn-block-content[data-content-type="subpage"] {
   padding: 0 !important;
 }
 .bn-block-content.ProseMirror-selectednode > [data-content-type="pageReference"] > *,
 .bn-block-content.ProseMirror-selectednode > [data-content-type="bookmark"] > *,
+.bn-block-content.ProseMirror-selectednode > [data-content-type="subpage"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="pageReference"] > *,
-.ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > * {
+.ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > * {
   outline: none !important;
+}
+
+/* Subpage blocks in a stack: match Notion's asymmetric padding for first/middle/last */
+.bn-editor .bn-block-outer:has([data-stack-pos="first"]) {
+  padding-top: 6px !important;
+  padding-bottom: 1px !important;
+}
+.bn-editor .bn-block-outer:has([data-stack-pos="middle"]) {
+  padding-top: 1px !important;
+  padding-bottom: 1px !important;
+}
+.bn-editor .bn-block-outer:has([data-stack-pos="last"]) {
+  padding-top: 1px !important;
+  padding-bottom: 6px !important;
 }
 
 /* Inline content: Notion 文本属性 */

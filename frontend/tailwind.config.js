@@ -14,7 +14,7 @@ export default {
           sidebarBg: '#f9f8f7',
           sidebarText: '#5f5e59',
           sidebarSecHeader: '#91918e',
-          hover: '#ebebea',
+          hover: '#eeedec',
           border: '#e9e9e7',
           selection: '#d4ebfb',
         },
