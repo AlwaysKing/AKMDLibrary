@@ -15,8 +15,18 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Empty line - skip
+    // Empty line - skip (paragraph separator in markdown)
     if (!trimmed) {
+      i++;
+      continue;
+    }
+
+    // Zero-width space marker = preserved empty paragraph
+    if (trimmed === '\u200B') {
+      blocks.push({
+        type: 'paragraph',
+        content: [{ type: 'text', text: '', styles: {} }],
+      });
       i++;
       continue;
     }
@@ -281,6 +291,9 @@ export function blocksToMarkdown(blocks: any[]): string {
         const paragraphText = getFormattedText(block.content);
         if (paragraphText) {
           lines.push(paragraphText);
+        } else {
+          // Empty paragraph: use zero-width space marker to survive markdown round-trip
+          lines.push('\u200B');
         }
         break;
 

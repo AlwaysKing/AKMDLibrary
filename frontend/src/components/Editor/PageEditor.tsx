@@ -295,6 +295,20 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         // Exit editing mode — blur editor to hide cursor
         const pmEl = container?.querySelector('.ProseMirror') as HTMLElement;
         if (pmEl) pmEl.blur();
+      } else if (e.key === 'Backspace') {
+        // Allow deleting empty first block (BlockNote default doesn't support this)
+        const blocks = editor.document;
+        if (blocks.length > 1) {
+          const currentBlock = editor.getTextCursorPosition().block;
+          const isFirstBlock = blocks[0].id === currentBlock.id;
+          const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+          if (isFirstBlock && isEmpty) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            editor.removeBlocks([{ id: currentBlock.id } as any]);
+            editor.focus();
+          }
+        }
       }
     };
 
