@@ -4,7 +4,7 @@ import { BlockNoteSchema, defaultBlockSpecs } from '@blocknote/core';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
-import { blockNoteComponents, setBlockSelection } from './BlockNoteComponents';
+import { blockNoteComponents, setBlockSelection, getSelectedBlockIds } from './BlockNoteComponents';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
@@ -261,16 +261,30 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       setBlockSelection(ids.length > 0 ? ids : null);
     }
 
-    // Escape: toggle between editing ↔ selected
+    // Keyboard: Escape toggles selection, Delete/Backspace removes selected blocks
+    // Uses module-level getSelectedBlockIds() to avoid stale closure issues
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        if (selectedIds.length > 0) {
+      const ids = getSelectedBlockIds();
+      if (ids.length > 0) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
           updateSelection([]);
-        } else {
-          const currentBlock = editor.getTextCursorPosition().block;
-          updateSelection([currentBlock.id as string]);
+        } else if (e.key === 'Backspace' || e.key === 'Delete') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          editor.removeBlocks(ids.map(id => ({ id } as any)));
+          updateSelection([]);
+          // Clean up: blur focused buttons and dismiss floating menus
+          (document.activeElement as HTMLElement)?.blur?.();
+          document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          editor.focus();
         }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const currentBlock = editor.getTextCursorPosition().block;
+        updateSelection([currentBlock.id as string]);
       }
     };
 
@@ -369,14 +383,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keydown', handleKeyDown, true);
     document.addEventListener('mousedown', handleMouseDown);
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
     document.addEventListener('click', handleClick);
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -412,6 +426,30 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     }
     editor.focus();
   }, [editor, readOnly]);
+
+  // Listen for clicks on the scroll container's empty space below editor
+  useEffect(() => {
+    if (readOnly) return;
+    const container = editorRef.current;
+    if (!container) return;
+
+    const scrollArea = container.closest('.overflow-y-auto');
+    if (!scrollArea) return;
+
+    const handleScrollAreaClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.bn-block-outer, button, a, input, [contenteditable="true"]')) return;
+      if (target.closest('[data-floating-ui-focusable]')) return;
+
+      const editorBottom = container.getBoundingClientRect().bottom;
+      if (e.clientY >= editorBottom - 10) {
+        handleClickBelow();
+      }
+    };
+
+    scrollArea.addEventListener('click', handleScrollAreaClick);
+    return () => scrollArea.removeEventListener('click', handleScrollAreaClick);
+  }, [readOnly, handleClickBelow]);
 
   // Unmount: write final mirror if there are unsaved changes
   useEffect(() => {

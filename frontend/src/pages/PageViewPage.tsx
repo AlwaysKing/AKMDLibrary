@@ -239,8 +239,8 @@ export default function PageViewPage() {
           />
         )}
 
-        {/* Page content area */}
-        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} pb-32 ${!showCover ? (currentPage.icon ? (currentPage.icon_large ? 'pt-[125px]' : 'pt-[96px]') : 'pt-[64px]') : ''}`}>
+        {/* Page content area — min-h-full fills scroll viewport so clickable area covers all whitespace */}
+        <div className={`${currentPage.full_page ? 'w-full px-24' : 'max-w-[912px] mx-auto px-24'} min-h-full pb-32 ${!showCover ? (currentPage.icon ? (currentPage.icon_large ? 'pt-[125px]' : 'pt-[96px]') : 'pt-[64px]') : ''}`}>
 
           {/* Icon */}
           {currentPage.icon && (

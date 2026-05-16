@@ -5,6 +5,7 @@
 @layer base {
   * {
     @apply border-notion-border;
+    outline: none;
   }
 
   body {
