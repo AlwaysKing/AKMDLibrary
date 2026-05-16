@@ -18,6 +18,7 @@ import { useSpaceStore } from '../../stores/spaceStore';
 import { usePreferenceStore } from '../../stores/preferenceStore';
 import { usePageStore } from '../../stores/pageStore';
 import { Page } from '../../api/pages';
+import { useUndoStore } from '../../stores/undoStore';
 
 // Collect all descendant IDs of a page (to prevent circular moves)
 function collectDescendantIds(page: Page): string[] {
@@ -130,6 +131,42 @@ function findParentId(pages: Page[], pageId: string, parentId: string | null = n
     }
   }
   return undefined as unknown as string | null;
+}
+
+// DragGhost: renders a mini page tree for the drag overlay, matching real item appearance
+function DragGhost({ page, level, expandedPageIds }: { page: Page; level: number; expandedPageIds: Set<string> }) {
+  const hasChildren = page.children && page.children.length > 0;
+  const isExpanded = expandedPageIds.has(page.id);
+
+  return (
+    <div>
+      <div
+        className="w-full flex items-center h-[30px] rounded-md"
+        style={{ paddingLeft: `${level * 16 + 8}px`, paddingRight: '8px' }}
+      >
+        {/* Icon */}
+        <div className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
+          {page.icon ? (
+            (page.icon.startsWith('/') || page.icon.startsWith('http')) ? (
+              <img src={page.icon} alt="" className="w-[18px] h-[18px] object-contain" />
+            ) : (
+              <span className="text-[18px] leading-none" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"' }}>{page.icon}</span>
+            )
+          ) : (
+            <FileText className="w-[18px] h-[18px] text-[#91918e]" strokeWidth={1.7} />
+          )}
+        </div>
+        {/* Title */}
+        <span className="text-sm font-medium truncate text-notion-sidebarText">
+          {page.title || '未命名页面'}
+        </span>
+      </div>
+      {/* Recursively render expanded children */}
+      {isExpanded && hasChildren && page.children!.map((child) => (
+        <DragGhost key={child.id} page={child} level={level + 1} expandedPageIds={expandedPageIds} />
+      ))}
+    </div>
+  );
 }
 
 // Find the level (depth) of a page in the tree
@@ -265,6 +302,8 @@ export default function PageTree() {
     setOverInfo({ id: over.id as string, position });
   }, [activeId, descendantIds]);
 
+  const { pushAction } = useUndoStore();
+
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event;
 
@@ -285,33 +324,53 @@ export default function PageTree() {
     const overPage = over.data.current?.page as Page;
     if (!overPage) return;
 
+    // Record the FROM position for undo
+    const fromParentId = findParentId(pageTree, active.id as string) ?? null;
+    const fromFound = findPageInTree(pageTree, active.id as string);
+    const fromAfterId = fromFound && fromFound.index > 0
+      ? fromFound.parentChildren[fromFound.index - 1].id
+      : null;
+
     // Use the saved position from the last dragOver
     const position = savedOverInfo?.position || 'on';
 
+    let toParentId: string | null;
+    let toAfterId: string | null;
+
     if (position === 'on') {
       // Drop ON → become child of over page
-      await movePage(currentSpace.slug, active.id as string, overPage.id);
+      toParentId = overPage.id;
+      toAfterId = null;
     } else {
       // Drop BEFORE/AFTER → insert among siblings of over page
-      const parentId = findParentId(pageTree, overPage.id) ?? null;
+      toParentId = findParentId(pageTree, overPage.id) ?? null;
 
-      let afterId: string | null = null;
       if (position === 'after') {
-        afterId = overPage.id;
+        toAfterId = overPage.id;
       } else {
         // 'before': find the sibling before overPage
         const found = findPageInTree(pageTree, overPage.id);
         if (found && found.index > 0) {
-          afterId = found.parentChildren[found.index - 1].id;
+          toAfterId = found.parentChildren[found.index - 1].id;
+        } else {
+          toAfterId = null;
         }
-        // If index === 0, afterId stays null (insert at beginning)
       }
-
-      await movePage(currentSpace.slug, active.id as string, parentId, afterId);
     }
 
+    await movePage(currentSpace.slug, active.id as string, toParentId, toAfterId);
+
+    // Push undo action after successful move
+    pushAction({
+      type: 'move',
+      spaceSlug: currentSpace.slug,
+      pageId: active.id as string,
+      from: { parentId: fromParentId, afterId: fromAfterId },
+      to: { parentId: toParentId, afterId: toAfterId },
+    });
+
     refreshPageTree();
-  }, [currentSpace, pageTree, overInfo, movePage, refreshPageTree]);
+  }, [currentSpace, pageTree, overInfo, movePage, refreshPageTree, pushAction]);
 
   // Early returns AFTER all hooks
   if (!currentSpace) {
@@ -356,23 +415,7 @@ export default function PageTree() {
       </SortableContext>
       <DragOverlay dropAnimation={null}>
         {activePage ? (
-          <div
-            className="flex items-center h-[30px] bg-white border border-notion-border rounded-md shadow-lg px-2 gap-2 opacity-90"
-            style={{ paddingLeft: '8px', maxWidth: '220px' }}
-          >
-            {activePage.icon ? (
-              (activePage.icon.startsWith('/') || activePage.icon.startsWith('http')) ? (
-                <img src={activePage.icon} alt="" className="w-[16px] h-[16px] object-contain flex-shrink-0" />
-              ) : (
-                <span className="text-[16px] leading-none flex-shrink-0" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"' }}>{activePage.icon}</span>
-              )
-            ) : (
-              <FileText className="w-[16px] h-[16px] text-[#91918e] flex-shrink-0" strokeWidth={1.7} />
-            )}
-            <span className="text-sm text-notion-text truncate">
-              {activePage.title || '未命名页面'}
-            </span>
-          </div>
+          <DragGhost page={activePage} level={0} expandedPageIds={expandedPageIds} />
         ) : null}
       </DragOverlay>
     </DndContext>
