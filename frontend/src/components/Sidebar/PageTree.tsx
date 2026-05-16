@@ -19,6 +19,7 @@ import { usePreferenceStore } from '../../stores/preferenceStore';
 import { usePageStore } from '../../stores/pageStore';
 import { Page } from '../../api/pages';
 import { useUndoStore } from '../../stores/undoStore';
+import { showToastWithAction } from '../Toast';
 
 // Collect all descendant IDs of a page (to prevent circular moves)
 function collectDescendantIds(page: Page): string[] {
@@ -367,6 +368,11 @@ export default function PageTree() {
       pageId: active.id as string,
       from: { parentId: fromParentId, afterId: fromAfterId },
       to: { parentId: toParentId, afterId: toAfterId },
+    });
+
+    // Show toast with undo button
+    showToastWithAction('已移动页面', '撤销', async () => {
+      await useUndoStore.getState().undo();
     });
 
     refreshPageTree();

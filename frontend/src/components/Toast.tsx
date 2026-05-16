@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 
 interface ToastItem {
   id: number;
   message: string;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }
 
 let toastQueue: ToastItem[] = [];
@@ -20,7 +24,29 @@ function showToast(message: string, duration = 2000) {
   }, duration);
 }
 
-export { showToast };
+function showToastWithAction(message: string, actionLabel: string, onAction: () => void, duration = 5000) {
+  const id = nextId++;
+  // Dismiss callback: also triggers the action cleanup
+  const dismiss = () => {
+    toastQueue = toastQueue.filter(t => t.id !== id);
+    setToastsExternal?.(toastQueue);
+  };
+  toastQueue = [...toastQueue, {
+    id,
+    message,
+    action: {
+      label: actionLabel,
+      onClick: () => {
+        onAction();
+        dismiss();
+      },
+    },
+  }];
+  setToastsExternal?.(toastQueue);
+  setTimeout(dismiss, duration);
+}
+
+export { showToast, showToastWithAction };
 
 function ToastContainer() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -29,17 +55,16 @@ function ToastContainer() {
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2 pointer-events-none">
       {toasts.map(t => (
-        <ToastMessage key={t.id} message={t.message} />
+        <ToastMessage key={t.id} message={t.message} action={t.action} />
       ))}
     </div>
   );
 }
 
-function ToastMessage({ message }: { message: string }) {
+function ToastMessage({ message, action }: { message: string; action?: ToastItem['action'] }) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // Trigger enter animation on next frame
     requestAnimationFrame(() => setVisible(true));
   }, []);
 
@@ -47,11 +72,21 @@ function ToastMessage({ message }: { message: string }) {
     <div
       className={`
         px-4 py-2 rounded-lg bg-[#2f2f2f] text-white text-sm shadow-lg
-        transition-all duration-300 ease-in-out
+        transition-all duration-300 ease-in-out pointer-events-auto
         ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}
       `}
     >
-      {message}
+      <div className="flex items-center gap-3">
+        <span>{message}</span>
+        {action && (
+          <button
+            onClick={action.onClick}
+            className="text-blue-400 hover:text-blue-300 font-medium transition-colors"
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
