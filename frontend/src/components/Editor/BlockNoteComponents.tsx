@@ -19,6 +19,7 @@ import React, {
 import { createPortal } from 'react-dom';
 import { useBlockNoteEditor } from '@blocknote/react';
 import { showToast } from '../Toast';
+import { removeBlocksEnhanced } from './blockHelpers';
 
 // ==================== Menu Context ====================
 interface MenuContextValue {
@@ -1450,7 +1451,7 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
 
   const handleDelete = () => {
     if (!blockId) return;
-    editor.removeBlocks([blockId] as any);
+    removeBlocksEnhanced(editor, [blockId]);
     onClose();
   };
 

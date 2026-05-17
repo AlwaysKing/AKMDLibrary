@@ -99,7 +99,10 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
     try {
       const newPage = await createPage(spaceSlug, '未命名页面', page.id);
       await refreshPageTree();
-      navigate(`/s/${spaceSlug}/p/${newPage.id}`);
+      // Notify editor if parent is currently viewed page
+      if (isActive) {
+        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: newPage.id } }));
+      }
     } catch (err) {
       console.error('Failed to create sub-page:', err);
     }
@@ -132,11 +135,32 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
     }
 
     try {
+      // Find parent of the page being deleted, to check if editor needs sync
+      const findParentId = (nodes: Page[], parentId: string | null): string | null => {
+        for (const node of nodes) {
+          if (node.id === page.id) return parentId;
+          if (node.children) {
+            const result = findParentId(node.children, node.id);
+            if (result !== null) return result;
+          }
+        }
+        return null;
+      };
+      const currentPath = location.pathname;
+      const currentPageId = currentPath.match(/\/p\/([^/]+)$/)?.[1] || null;
+      const parentId = findParentId(useSpaceStore.getState().pageTree, null);
+      const parentIsCurrent = currentPageId && parentId === currentPageId;
+
       if (isActive) {
         navigate(target, { replace: true });
       }
       await deletePage(spaceSlug, page.id);
       await refreshPageTree();
+
+      // Notify editor if the deleted page's parent is currently viewed
+      if (parentIsCurrent) {
+        document.dispatchEvent(new CustomEvent('subpage-deleted', { detail: { pageId: page.id } }));
+      }
     } catch (err) {
       console.error('Failed to delete page:', err);
     }
@@ -208,8 +232,31 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
     if (!spaceSlug) return;
     setShowMoveDialog(false);
     try {
+      // Find current parent before move
+      const tree = useSpaceStore.getState().pageTree;
+      const findParentId = (nodes: Page[], parentId: string | null): string | null => {
+        for (const node of nodes) {
+          if (node.id === page.id) return parentId;
+          if (node.children) {
+            const result = findParentId(node.children, node.id);
+            if (result !== null) return result;
+          }
+        }
+        return null;
+      };
+      const oldParentId = findParentId(tree, null);
+      const currentPageId = location.pathname.match(/\/p\/([^/]+)$/)?.[1] || null;
+
       await movePage(spaceSlug, page.id, targetParentId);
       await refreshPageTree();
+
+      // Notify editor if the move affects the currently viewed page's children
+      if (currentPageId && oldParentId === currentPageId && oldParentId !== targetParentId) {
+        document.dispatchEvent(new CustomEvent('subpage-deleted', { detail: { pageId: page.id } }));
+      }
+      if (currentPageId && targetParentId === currentPageId && targetParentId !== oldParentId) {
+        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: page.id } }));
+      }
     } catch (err) {
       console.error('Failed to move page:', err);
     }

@@ -5,6 +5,7 @@ import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
 import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen } from './BlockNoteComponents';
+import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
@@ -86,6 +87,40 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     dictionary: customZh as any,
     trailingBlock: false,
   } as any);
+
+  // Sync subpage blocks with sidebar create/delete events
+  useEffect(() => {
+    if (readOnly) return;
+
+    const handleSubpageCreated = (e: Event) => {
+      const { pageId } = (e as CustomEvent).detail;
+      // Guard: skip if block already exists (prevent duplicate from event or backend)
+      const exists = editor.document.some((b: any) => b.type === 'subpage' && b.props?.pageId === pageId);
+      if (exists) return;
+      // Insert subpage block at the end of the document
+      const blocks = editor.document;
+      const lastBlock = blocks[blocks.length - 1];
+      if (lastBlock) {
+        editor.insertBlocks([{ type: 'subpage', props: { pageId } } as any], lastBlock, 'after');
+      }
+    };
+
+    const handleSubpageDeleted = (e: Event) => {
+      const { pageId } = (e as CustomEvent).detail;
+      // Find and remove ALL subpage blocks with matching pageId (in case of duplicates)
+      const targets = editor.document.filter((b: any) => b.type === 'subpage' && b.props?.pageId === pageId);
+      if (targets.length > 0) {
+        editor.removeBlocks(targets);
+      }
+    };
+
+    document.addEventListener('subpage-created', handleSubpageCreated);
+    document.addEventListener('subpage-deleted', handleSubpageDeleted);
+    return () => {
+      document.removeEventListener('subpage-created', handleSubpageCreated);
+      document.removeEventListener('subpage-deleted', handleSubpageDeleted);
+    };
+  }, [editor, readOnly]);
 
   // Write mirror to IndexedDB — fast, local, no network
   const triggerMirror = useCallback(() => {
@@ -280,7 +315,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         } else if (e.key === 'Backspace' || e.key === 'Delete') {
           e.preventDefault();
           e.stopImmediatePropagation();
-          editor.removeBlocks(ids.map(id => ({ id } as any)));
+          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
           updateSelection([]);
           // Clean up: blur focused buttons and dismiss floating menus
           (document.activeElement as HTMLElement)?.blur?.();
@@ -305,7 +340,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (isFirstBlock && isEmpty) {
             e.preventDefault();
             e.stopImmediatePropagation();
-            editor.removeBlocks([{ id: currentBlock.id } as any]);
+            removeBlocksEnhanced(editor, [{ id: currentBlock.id } as any]);
             editor.focus();
           }
         }

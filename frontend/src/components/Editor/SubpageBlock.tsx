@@ -4,6 +4,7 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { FileText } from 'lucide-react';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { pagesApi, Page } from '../../api/pages';
+import { removeBlocksEnhanced } from './blockHelpers';
 
 function findPageInTree(tree: Page[], pageId: string): Page | null {
   for (const page of tree) {
@@ -53,7 +54,7 @@ function SubpageComponent({ block, editor }: any) {
           const ref = selected.querySelector('[data-content-type="subpage"]');
           if (ref && ref.getAttribute('data-page-id') === String(pageId)) {
             e.preventDefault();
-            editor.removeBlocks([block]);
+            removeBlocksEnhanced(editor, [block]);
           }
         }
       }

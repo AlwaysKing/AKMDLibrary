@@ -361,6 +361,17 @@ export default function PageTree() {
 
     await movePage(currentSpace.slug, active.id as string, toParentId, toAfterId);
 
+    // Notify editor of subpage block changes
+    const currentPageId = window.location.pathname.match(/\/p\/([^/]+)$/)?.[1] || null;
+    const movedId = active.id as string;
+    if (currentPageId && fromParentId !== toParentId) {
+      if (fromParentId === currentPageId) {
+        document.dispatchEvent(new CustomEvent('subpage-deleted', { detail: { pageId: movedId } }));
+      } else if (toParentId === currentPageId) {
+        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: movedId } }));
+      }
+    }
+
     // Push undo action after successful move
     pushAction({
       type: 'move',

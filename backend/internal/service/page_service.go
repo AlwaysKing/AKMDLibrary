@@ -520,7 +520,11 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 		return nil, fmt.Errorf("failed to read page file: %w", err)
 	}
 	fm, _, _ := frontmatter.Parse(raw)
-	assembled := frontmatter.Render(fm, req.Content)
+
+	// Maintain subpage blocks: ensure content matches actual children
+	maintained := s.maintainSubpageBlocks(req.Content, repo, page.FilePath)
+
+	assembled := frontmatter.Render(fm, maintained)
 	if err := os.WriteFile(filePath, assembled, 0644); err != nil {
 		return nil, fmt.Errorf("failed to update page content: %w", err)
 	}

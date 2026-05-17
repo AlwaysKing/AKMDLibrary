@@ -18,7 +18,7 @@ interface PageState {
   refreshPageTree: () => Promise<void>;
 }
 
-export const usePageStore = create<PageState>((set) => ({
+export const usePageStore = create<PageState>((set, get) => ({
   currentPage: null,
   currentContent: '',
   isLoading: false,
@@ -59,22 +59,24 @@ export const usePageStore = create<PageState>((set) => ({
   },
 
   createPage: async (spaceSlug, title, parentId) => {
-    set({ isLoading: true, error: null });
     try {
       const page = await pagesApi.create(spaceSlug, { title, parent_id: parentId });
-      set({ isLoading: false });
       return page;
     } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+      set({ error: error.message });
       throw error;
     }
   },
 
   deletePage: async (spaceSlug, pageId) => {
-    set({ isLoading: true, error: null });
+    const { currentPage } = get();
+    const isCurrent = currentPage?.id === pageId;
+    if (isCurrent) set({ isLoading: true });
     try {
       await pagesApi.delete(spaceSlug, pageId);
-      set({ isLoading: false, currentPage: null, currentContent: '' });
+      if (isCurrent) {
+        set({ isLoading: false, currentPage: null, currentContent: '' });
+      }
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
       throw error;
@@ -85,8 +87,9 @@ export const usePageStore = create<PageState>((set) => ({
     set({ isSaving: true, error: null });
     try {
       const page = await pagesApi.updateMetadata(spaceSlug, pageId, data);
+      const { currentPage } = get();
       set({
-        currentPage: page,
+        currentPage: currentPage?.id === pageId ? page : currentPage,
         isSaving: false,
       });
     } catch (error: any) {
@@ -96,25 +99,21 @@ export const usePageStore = create<PageState>((set) => ({
   },
 
   duplicatePage: async (spaceSlug, pageId, targetParentId) => {
-    set({ isLoading: true, error: null });
     try {
       const page = await pagesApi.duplicate(spaceSlug, pageId, targetParentId);
-      set({ isLoading: false });
       return page;
     } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+      set({ error: error.message });
       throw error;
     }
   },
 
   movePage: async (spaceSlug, pageId, targetParentId, afterId?) => {
-    set({ isLoading: true, error: null });
     try {
       const page = await pagesApi.move(spaceSlug, pageId, targetParentId, afterId);
-      set({ isLoading: false });
       return page;
     } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+      set({ error: error.message });
       throw error;
     }
   },
