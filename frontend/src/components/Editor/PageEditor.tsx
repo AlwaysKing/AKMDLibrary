@@ -9,12 +9,14 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection } from '@tiptap/pm/state';
+import { setClipboardData, getClipboardData } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import LinkPasteMenu from './LinkPasteMenu';
 import { getBlockDragData, markDragHandled } from './blockDragState';
 import { pagesApi } from '../../api/pages';
 import { createMirror } from '../../services/mirrorStore';
+import { useSpaceStore } from '../../stores/spaceStore';
 import { flushSync } from '../../services/syncModule';
 
 // Custom schema: default blocks + pageReference + bookmark
@@ -621,6 +623,88 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const pmEl = container?.querySelector('.ProseMirror') as HTMLElement;
         if (pmEl) pmEl.blur();
         window.getSelection()?.removeAllRanges();
+        return;
+      }
+
+      // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
+      if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        const ids = getSelectedBlockIds();
+        if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        const isCut = e.key === 'x';
+
+        // Collect selected block data (deep clone to avoid references to editor blocks)
+        const selectedBlocks = JSON.parse(JSON.stringify(
+          editor.document.filter((b: any) => ids.includes(b.id))
+        ));
+        const markdown = blocksToMarkdown(selectedBlocks as any);
+        setClipboardData(selectedBlocks, markdown, isCut);
+
+        // Also write to system clipboard for external paste
+        navigator.clipboard.writeText(markdown).catch(() => {});
+
+        if (isCut) {
+          // Cut: delete selected blocks after copying
+          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+          updateSelection([]);
+          (document.activeElement as HTMLElement)?.blur?.();
+          document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          editor.focus();
+        }
+        return;
+      }
+
+      // Cmd+V: paste blocks from internal clipboard
+      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        const clipData = getClipboardData();
+        if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
+
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        const ids = getSelectedBlockIds();
+        if (ids.length > 0) {
+          // Block selection mode: replace selected blocks with clipboard content
+          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+          updateSelection([]);
+        }
+
+        // Insert clipboard blocks at cursor position
+        const currentBlock = editor.getTextCursorPosition().block;
+
+        // Handle async: duplicate subpage pages for copy, then insert blocks
+        (async () => {
+          const { spaceSlug, pageId: currentPageId } = identityRef.current;
+          // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
+          if (!clipData.isCut) {
+            const subpageBlocks = clipData.blocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
+            for (const block of subpageBlocks) {
+              try {
+                const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
+                block.props.pageId = newPage.id;
+              } catch (err) {
+                console.error('[PageEditor] Failed to duplicate subpage:', err);
+              }
+            }
+          }
+
+          // Strip block IDs so BlockNote creates fresh ones
+          const blocksToInsert = clipData.blocks.map((b: any) => {
+            const { id, ...rest } = b;
+            return rest;
+          });
+          editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+          editor.focus();
+
+          // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
+          const markdown = blocksToMarkdown(editor.document);
+          await createMirror(spaceSlug, currentPageId, markdown);
+          hasChangesRef.current = false;
+          await flushSync();
+          await useSpaceStore.getState().refreshAll();
+        })();
         return;
       }
 

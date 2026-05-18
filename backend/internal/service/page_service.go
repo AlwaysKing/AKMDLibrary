@@ -975,17 +975,60 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID 
 		}
 	}
 
-	// Rebuild cache to discover all new files
-	if err := s.RebuildCache(spaceSlug); err != nil {
-		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
+	// Insert new page into cache directly (like Create does), no full RebuildCache
+	maxSort, _ := repo.MaxSortOrder()
+	created, err := repo.Create(&model.Page{
+		ID:        newPageID,
+		Title:     newTitle,
+		FilePath:  newRelPath,
+		Icon:      fm.Icon,
+		SortOrder: maxSort + 1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cache entry: %w", err)
 	}
 
-	// Find the new page by its file path
-	repo, err = s.getRepo(spaceSlug)
-	if err != nil {
-		return nil, err
+	// Register child pages in cache (if copied directory exists)
+	newChildDir := filepath.Join(targetDir, newTitle)
+	if info, err := os.Stat(newChildDir); err == nil && info.IsDir() {
+		s.registerChildPages(repo, newChildDir, newRelPath)
 	}
-	return repo.GetByPath(newRelPath)
+
+	return created, nil
+}
+
+// registerChildPages walks a directory and creates cache entries for all .md files.
+// relBase is the relative path prefix (from docsDir) for constructing file_path values.
+func (s *PageService) registerChildPages(repo *repository.PageRepository, absDir string, relBase string) {
+	maxSort, _ := repo.MaxSortOrder()
+	sortOrder := maxSort + 1
+
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// Recurse into subdirectory (its parent is the .md file with the same name)
+			childAbsDir := filepath.Join(absDir, entry.Name())
+			childRelBase := filepath.Join(relBase, entry.Name())
+			s.registerChildPages(repo, childAbsDir, childRelBase)
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+			continue
+		}
+		childRelPath := filepath.Join(relBase, entry.Name())
+		pageID := s.ensurePageUUID(childRelPath)
+		title := strings.TrimSuffix(entry.Name(), ".md")
+		repo.Create(&model.Page{
+			ID:        pageID,
+			Title:     title,
+			FilePath:  childRelPath,
+			SortOrder: float64(sortOrder),
+		})
+		sortOrder++
+	}
 }
 
 // copyDirRecursive copies a directory tree from src to dst.
@@ -1255,8 +1298,8 @@ func (s *PageService) getDirectChildIDs(repo *repository.PageRepository, filePat
 }
 
 // maintainSubpageBlocks ensures the markdown body has exactly one <sub-page data-id="UUID"></sub-page>
-// for each direct child page. It only removes stale subpage lines and appends missing ones.
-// It does NOT reorder existing subpage lines — their positions are preserved.
+// for each direct child page. It removes stale subpage lines, appends missing ones,
+// and updates database sort_order to match the order of subpage tags in the markdown.
 // Reads both new tag format and legacy comment format; always writes new tag format.
 func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRepository, filePath string) string {
 	// Use GetSiblings for sorted child IDs (sort_order ASC)
@@ -1292,8 +1335,9 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
 		return strings.TrimRight(result, "\n")
 	}
 
-	// Scan body: collect existing subpage IDs, build cleaned lines
+	// Scan body: collect existing subpage IDs in order, build cleaned lines
 	existingSubpageSet := make(map[string]bool)
+	var orderedIDs []string // subpage IDs in markdown order
 	var cleanedLines []string
 	changed := false
 
@@ -1301,7 +1345,10 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
 		id := parseSubpageID(line)
 		if id != "" {
 			if childIDSet[id] {
-				existingSubpageSet[id] = true
+				if !existingSubpageSet[id] {
+					existingSubpageSet[id] = true
+					orderedIDs = append(orderedIDs, id)
+				}
 				// Re-write in new tag format (migrates legacy comments)
 				newTag := formatSubpageTag(id)
 				if strings.TrimSpace(line) != newTag {
@@ -1327,14 +1374,37 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
 		}
 	}
 
-	// Nothing to change
-	if len(missing) == 0 && !changed {
-		return body
-	}
-
 	// Append missing subpages at the end
 	for _, id := range missing {
 		cleanedLines = append(cleanedLines, formatSubpageTag(id))
+		orderedIDs = append(orderedIDs, id)
+	}
+
+	// Update database sort_order to match markdown tag order
+	if len(orderedIDs) > 0 {
+		siblingMap := make(map[string]*model.Page)
+		for _, p := range siblings {
+			siblingMap[p.ID] = p
+		}
+		var sortUpdates []repository.SortOrderUpdate
+		for i, id := range orderedIDs {
+			if p, ok := siblingMap[id]; ok {
+				newSort := float64(i)
+				if p.SortOrder != newSort {
+					sortUpdates = append(sortUpdates, repository.SortOrderUpdate{ID: id, SortOrder: newSort})
+				}
+			}
+		}
+		if len(sortUpdates) > 0 {
+			if err := repo.UpdateSortOrders(sortUpdates); err != nil {
+				log.Printf("[maintainSubpageBlocks] failed to update sort_order: %v", err)
+			}
+		}
+	}
+
+	// Nothing to change in content
+	if len(missing) == 0 && !changed {
+		return body
 	}
 
 	result := strings.Join(cleanedLines, "\n")
