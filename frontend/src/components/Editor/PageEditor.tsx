@@ -690,12 +690,19 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             }
           }
 
+          // If current block is empty, replace it instead of inserting after it
+          const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+
           // Strip block IDs so BlockNote creates fresh ones
           const blocksToInsert = clipData.blocks.map((b: any) => {
             const { id, ...rest } = b;
             return rest;
           });
-          editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+          if (isEmpty) {
+            editor.replaceBlocks([currentBlock], blocksToInsert as any);
+          } else {
+            editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+          }
           editor.focus();
 
           // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
