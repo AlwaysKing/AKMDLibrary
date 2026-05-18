@@ -262,6 +262,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         lastHighlight.classList.remove('subpage-drop-target');
         lastHighlight = null;
       }
+      // Restore ProseMirror dropcursor if it was hidden
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = ''; });
     };
 
     const handleDragOver = (e: DragEvent) => {
@@ -272,9 +275,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const subpageEl = (el as HTMLElement)?.closest('[data-content-type="subpage"]') as HTMLElement | null;
 
       if (subpageEl && subpageEl.dataset.pageId) {
-        // Check: don't highlight if only subpage blocks are being dragged
-        const hasNonSubpage = dragData.blocks.some(b => b.type !== 'subpage');
-        if (!hasNonSubpage) { clearHighlight(); return; }
+        const targetPageId = subpageEl.dataset.pageId;
+        // Block: don't allow dropping a subpage onto itself
+        const isSelfDrop = dragData.blocks.some(
+          b => b.type === 'subpage' && b.props.pageId === targetPageId
+        );
+        if (isSelfDrop) { clearHighlight(); return; }
 
         // Only intercept if cursor is in the CENTER zone of the subpage block (middle 50%)
         // Edge zones (top/bottom 25%) are for BlockNote's before/after reorder
@@ -284,7 +290,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
         if (isInCenter) {
           e.preventDefault();
+          e.stopPropagation(); // Prevent DropCursor dragover handler from updating
           if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+
+          // Hide ProseMirror's dropcursor (blue line) — it may persist from edge zone
+          container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+            .forEach(el => { (el as HTMLElement).style.display = 'none'; });
 
           if (lastHighlight !== subpageEl) {
             clearHighlight();
@@ -318,28 +329,47 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const isInCenter = relY > 0.25 && relY < 0.75;
       if (!isInCenter) return; // Edge drop — let BlockNote handle reorder
 
-      // Filter: only move non-subpage blocks
-      const movableBlocks = dragData.blocks.filter(b => b.type !== 'subpage');
-      if (movableBlocks.length === 0) return;
+      // Separate subpage blocks from content blocks
+      const subpageBlocks = dragData.blocks.filter(b => b.type === 'subpage' && b.props.pageId && b.props.pageId !== targetPageId);
+      const contentBlocks = dragData.blocks.filter(b => b.type !== 'subpage');
+
+      if (subpageBlocks.length === 0 && contentBlocks.length === 0) return;
 
       e.preventDefault();
       e.stopPropagation();
 
-      // Sync: save data + mark handled before any async (same race pattern as sidebar drop)
+      // Sync: mark handled before any async (so handleNativeDragEnd removes blocks from editor)
       markDragHandled();
 
+      const { spaceSlug } = identityRef.current;
+
       try {
-        const { spaceSlug } = identityRef.current;
-        const markdown = blocksToMarkdown(movableBlocks as any);
-        const targetPage = await pagesApi.get(spaceSlug, targetPageId);
-        const existing = targetPage.content || '';
-        const newContent = existing
-          ? existing.trimEnd() + '\n\n' + markdown
-          : markdown;
-        await pagesApi.update(spaceSlug, targetPageId, newContent);
+        // 1. Move subpage blocks → target becomes their parent
+        for (const block of subpageBlocks) {
+          const pageId = block.props.pageId as string;
+          try {
+            await pagesApi.move(spaceSlug, pageId, targetPageId, null);
+          } catch (err) {
+            console.error('[PageEditor] Failed to move subpage into target:', err);
+          }
+        }
+
+        // 2. Append content blocks to target page
+        if (contentBlocks.length > 0) {
+          const markdown = blocksToMarkdown(contentBlocks as any);
+          const targetPage = await pagesApi.get(spaceSlug, targetPageId);
+          const existing = targetPage.content || '';
+          const newContent = existing
+            ? existing.trimEnd() + '\n\n' + markdown
+            : markdown;
+          await pagesApi.update(spaceSlug, targetPageId, newContent);
+        }
       } catch (err) {
-        console.error('[PageEditor] Failed to move blocks into subpage:', err);
+        console.error('[PageEditor] Failed to handle subpage drop:', err);
       }
+
+      // Refresh sidebar to reflect new page hierarchy
+      useSpaceStore.getState().refreshAll();
     };
 
     const handleDragLeave = (e: DragEvent) => {
