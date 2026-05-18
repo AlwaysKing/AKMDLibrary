@@ -41,3 +41,26 @@ export function removePendingRestore(pageId: string): void {
 export function isPendingRestore(pageId: string): boolean {
   return pendingRestores.has(pageId);
 }
+
+/**
+ * Subpage undo actions: maps pageId to the correct undo behavior.
+ * - 'delete': page was created by paste/duplicate, undo should delete it
+ * - 'moveBack': page was moved from another parent, undo should move it back
+ */
+export type SubpageUndoAction =
+  | { action: 'delete' }
+  | { action: 'moveBack'; spaceSlug: string; fromParentId: string };
+
+const subpageUndoActions = new Map<string, SubpageUndoAction>();
+
+export function setSubpageUndoAction(pageId: string, action: SubpageUndoAction): void {
+  subpageUndoActions.set(pageId, action);
+}
+
+export function getSubpageUndoAction(pageId: string): SubpageUndoAction | undefined {
+  return subpageUndoActions.get(pageId);
+}
+
+export function clearSubpageUndoAction(pageId: string): void {
+  subpageUndoActions.delete(pageId);
+}

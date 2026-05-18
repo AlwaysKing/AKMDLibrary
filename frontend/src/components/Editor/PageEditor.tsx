@@ -9,7 +9,7 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection } from '@tiptap/pm/state';
-import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore } from './blockClipboardState';
+import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import LinkPasteMenu from './LinkPasteMenu';
@@ -173,15 +173,51 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     if (readOnly) return;
 
     const handleSubpageCreated = (e: Event) => {
-      const { pageId } = (e as CustomEvent).detail;
+      const { pageId, afterId, fromParentId } = (e as CustomEvent).detail;
       // Guard: skip if block already exists (prevent duplicate from event or backend)
       const exists = editor.document.some((b: any) => b.type === 'subpage' && b.props?.pageId === pageId);
       if (exists) return;
-      // Insert subpage block at the end of the document
-      const blocks = editor.document;
-      const lastBlock = blocks[blocks.length - 1];
-      if (lastBlock) {
-        editor.insertBlocks([{ type: 'subpage', props: { pageId } } as any], lastBlock, 'after');
+
+      const newBlock = { type: 'subpage', props: { pageId } };
+
+      if (!afterId) {
+        // No afterId: insert before the first existing subpage block
+        const firstSubpage = editor.document.find(
+          (b: any) => b.type === 'subpage' && b.props?.pageId,
+        );
+        if (firstSubpage) {
+          editor.insertBlocks([newBlock] as any, firstSubpage, 'before');
+        } else {
+          // No subpage blocks exist, insert at end of document
+          const doc = editor.document;
+          const lastBlock = doc[doc.length - 1];
+          if (lastBlock) {
+            editor.insertBlocks([newBlock] as any, lastBlock, 'after');
+          }
+        }
+      } else {
+        // Insert after the specified sibling
+        const refBlock = editor.document.find(
+          (b: any) => b.type === 'subpage' && b.props?.pageId === afterId,
+        );
+        if (refBlock) {
+          editor.insertBlocks([newBlock] as any, refBlock, 'after');
+        } else {
+          // Fallback: insert at end
+          const doc = editor.document;
+          const lastBlock = doc[doc.length - 1];
+          if (lastBlock) {
+            editor.insertBlocks([newBlock] as any, lastBlock, 'after');
+          }
+        }
+      }
+
+      // Record undo action: if moved from another parent, undo should move back
+      if (fromParentId) {
+        const slug = useSpaceStore.getState().currentSpace?.slug;
+        if (slug) {
+          setSubpageUndoAction(pageId, { action: 'moveBack', spaceSlug: slug, fromParentId });
+        }
       }
     };
 
@@ -492,10 +528,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const pageId = (change.block.props as any).pageId;
           try {
             if (change.type === 'delete') {
-              // Undo pasted subpage: delete the backend page
-              await pagesApi.delete(slug, pageId);
+              // A subpage block was removed by undo — look up the correct action
+              const undoAction = getSubpageUndoAction(pageId);
+              clearSubpageUndoAction(pageId);
+              if (undoAction?.action === 'moveBack') {
+                // Was moved from another parent: move it back
+                await pagesApi.move(undoAction.spaceSlug, pageId, undoAction.fromParentId, null);
+              } else {
+                // Was created by paste: delete the backend page
+                await pagesApi.delete(slug, pageId);
+              }
             } else if (change.type === 'insert') {
-              // Undo deleted subpage: restore from trash
+              // A subpage block was restored by undo (undo of delete)
               addPendingRestore(pageId);
               await pagesApi.restoreById(slug, pageId);
               removePendingRestore(pageId);
@@ -745,6 +789,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
           }
           editor.focus();
+
+          // Record undo actions for pasted subpage blocks (undo should delete them)
+          for (const block of clipData.blocks) {
+            if (block.type === 'subpage' && block.props?.pageId) {
+              setSubpageUndoAction(block.props.pageId, { action: 'delete' });
+            }
+          }
 
           // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
           const markdown = blocksToMarkdown(editor.document);

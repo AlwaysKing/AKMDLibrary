@@ -371,7 +371,7 @@ export default function PageTree() {
       if (fromParentId === currentPageId) {
         document.dispatchEvent(new CustomEvent('subpage-deleted', { detail: { pageId: movedId } }));
       } else if (toParentId === currentPageId) {
-        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: movedId } }));
+        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: movedId, afterId: toAfterId, fromParentId } }));
       }
     }
 
