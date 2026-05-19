@@ -1,0 +1,319 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+new file mode 100644
+index 0000000..533d0c4
+--- /dev/null
++++ b/CLAUDE.md
+@@ -0,0 +1,15 @@
++# MDLibrary 项目规范
++
++## 项目概述
++Notion 风格的知识库应用，React + Vite 前端，Go 后端，使用 BlockNote (v0.50) 编辑器。
++
++## 规范文档
++- **工作流程**：`~/.ccgui/docs/工作流程.md` — 所有非平凡任务的执行流程
++- **前端复刻方法论**：`~/.ccgui/docs/前端复刻问题解决方法论.md` — 复刻参考产品 UI 行为时的完整方法论：讨论→测量参考→对比差异→计划→实施→自检
++- **前端产品设计方法论**：`~/.ccgui/docs/前端产品设计方法论.md` — 自己设计产品交互时的方法论：理解需求→定义交互规则→计划→实施→体验走查
++- **浏览器调试指南**：`~/.ccgui/docs/浏览器调试项目操作指南.md` — MCP 浏览器工具的操作手册：页面管理、JS 执行、测量模式、常见问题
++
++## 关键约定
++- 构建：必须 `cd frontend && npx vite build`（不是 Next.js）
++- 修改文件前先检索规范文档
++- 遇到问题先找根因，不采用补丁式修复
+diff --git a/backend/internal/service/page_service.go b/backend/internal/service/page_service.go
+index c1db598..6fc5880 100644
+--- a/backend/internal/service/page_service.go
++++ b/backend/internal/service/page_service.go
+@@ -975,17 +975,60 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID
+ 		}
+ 	}
+ 
+-	// Rebuild cache to discover all new files
+-	if err := s.RebuildCache(spaceSlug); err != nil {
+-		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
++	// Insert new page into cache directly (like Create does), no full RebuildCache
++	maxSort, _ := repo.MaxSortOrder()
++	created, err := repo.Create(&model.Page{
++		ID:        newPageID,
++		Title:     newTitle,
++		FilePath:  newRelPath,
++		Icon:      fm.Icon,
++		SortOrder: maxSort + 1,
++	})
++	if err != nil {
++		return nil, fmt.Errorf("failed to create cache entry: %w", err)
++	}
++
++	// Register child pages in cache (if copied directory exists)
++	newChildDir := filepath.Join(targetDir, newTitle)
++	if info, err := os.Stat(newChildDir); err == nil && info.IsDir() {
++		s.registerChildPages(repo, newChildDir, newRelPath)
+ 	}
+ 
+-	// Find the new page by its file path
+-	repo, err = s.getRepo(spaceSlug)
++	return created, nil
++}
++
++// registerChildPages walks a directory and creates cache entries for all .md files.
++// relBase is the relative path prefix (from docsDir) for constructing file_path values.
++func (s *PageService) registerChildPages(repo *repository.PageRepository, absDir string, relBase string) {
++	maxSort, _ := repo.MaxSortOrder()
++	sortOrder := maxSort + 1
++
++	entries, err := os.ReadDir(absDir)
+ 	if err != nil {
+-		return nil, err
++		return
++	}
++	for _, entry := range entries {
++		if entry.IsDir() {
++			// Recurse into subdirectory (its parent is the .md file with the same name)
++			childAbsDir := filepath.Join(absDir, entry.Name())
++			childRelBase := filepath.Join(relBase, entry.Name())
++			s.registerChildPages(repo, childAbsDir, childRelBase)
++			continue
++		}
++		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
++			continue
++		}
++		childRelPath := filepath.Join(relBase, entry.Name())
++		pageID := s.ensurePageUUID(childRelPath)
++		title := strings.TrimSuffix(entry.Name(), ".md")
++		repo.Create(&model.Page{
++			ID:        pageID,
++			Title:     title,
++			FilePath:  childRelPath,
++			SortOrder: float64(sortOrder),
++		})
++		sortOrder++
+ 	}
+-	return repo.GetByPath(newRelPath)
+ }
+ 
+ // copyDirRecursive copies a directory tree from src to dst.
+@@ -1255,8 +1298,8 @@ func (s *PageService) getDirectChildIDs(repo *repository.PageRepository, filePat
+ }
+ 
+ // maintainSubpageBlocks ensures the markdown body has exactly one <sub-page data-id="UUID"></sub-page>
+-// for each direct child page. It only removes stale subpage lines and appends missing ones.
+-// It does NOT reorder existing subpage lines — their positions are preserved.
++// for each direct child page. It removes stale subpage lines, appends missing ones,
++// and updates database sort_order to match the order of subpage tags in the markdown.
+ // Reads both new tag format and legacy comment format; always writes new tag format.
+ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRepository, filePath string) string {
+ 	// Use GetSiblings for sorted child IDs (sort_order ASC)
+@@ -1292,8 +1335,9 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+ 		return strings.TrimRight(result, "\n")
+ 	}
+ 
+-	// Scan body: collect existing subpage IDs, build cleaned lines
++	// Scan body: collect existing subpage IDs in order, build cleaned lines
+ 	existingSubpageSet := make(map[string]bool)
++	var orderedIDs []string // subpage IDs in markdown order
+ 	var cleanedLines []string
+ 	changed := false
+ 
+@@ -1301,7 +1345,10 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+ 		id := parseSubpageID(line)
+ 		if id != "" {
+ 			if childIDSet[id] {
+-				existingSubpageSet[id] = true
++				if !existingSubpageSet[id] {
++					existingSubpageSet[id] = true
++					orderedIDs = append(orderedIDs, id)
++				}
+ 				// Re-write in new tag format (migrates legacy comments)
+ 				newTag := formatSubpageTag(id)
+ 				if strings.TrimSpace(line) != newTag {
+@@ -1327,14 +1374,37 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+ 		}
+ 	}
+ 
+-	// Nothing to change
+-	if len(missing) == 0 && !changed {
+-		return body
+-	}
+-
+ 	// Append missing subpages at the end
+ 	for _, id := range missing {
+ 		cleanedLines = append(cleanedLines, formatSubpageTag(id))
++		orderedIDs = append(orderedIDs, id)
++	}
++
++	// Update database sort_order to match markdown tag order
++	if len(orderedIDs) > 0 {
++		siblingMap := make(map[string]*model.Page)
++		for _, p := range siblings {
++			siblingMap[p.ID] = p
++		}
++		var sortUpdates []repository.SortOrderUpdate
++		for i, id := range orderedIDs {
++			if p, ok := siblingMap[id]; ok {
++				newSort := float64(i)
++				if p.SortOrder != newSort {
++					sortUpdates = append(sortUpdates, repository.SortOrderUpdate{ID: id, SortOrder: newSort})
++				}
++			}
++		}
++		if len(sortUpdates) > 0 {
++			if err := repo.UpdateSortOrders(sortUpdates); err != nil {
++				log.Printf("[maintainSubpageBlocks] failed to update sort_order: %v", err)
++			}
++		}
++	}
++
++	// Nothing to change in content
++	if len(missing) == 0 && !changed {
++		return body
+ 	}
+ 
+ 	result := strings.Join(cleanedLines, "\n")
+diff --git a/frontend/public/vite.svg b/frontend/public/vite.svg
+new file mode 100644
+index 0000000..91f0685
+--- /dev/null
++++ b/frontend/public/vite.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
++  <rect width="100" height="100" rx="12" fill="#4F46E5"/>
++  <text x="50" y="68" font-size="50" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">M</text>
++</svg>
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index 43c59e6..c10b1a2 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -9,12 +9,14 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
+ import { removeBlocksEnhanced } from './blockHelpers';
+ import { PageReferenceBlockSpec } from './PageReferenceBlock';
+ import { TextSelection } from '@tiptap/pm/state';
++import { setClipboardData, getClipboardData } from './blockClipboardState';
+ import { BookmarkBlockSpec } from './BookmarkBlock';
+ import { SubpageBlockSpec } from './SubpageBlock';
+ import LinkPasteMenu from './LinkPasteMenu';
+ import { getBlockDragData, markDragHandled } from './blockDragState';
+ import { pagesApi } from '../../api/pages';
+ import { createMirror } from '../../services/mirrorStore';
++import { useSpaceStore } from '../../stores/spaceStore';
+ import { flushSync } from '../../services/syncModule';
+ 
+ // Custom schema: default blocks + pageReference + bookmark
+@@ -624,6 +626,88 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         return;
+       }
+ 
++      // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
++      if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
++        const ids = getSelectedBlockIds();
++        if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
++        e.preventDefault();
++        e.stopImmediatePropagation();
++
++        const isCut = e.key === 'x';
++
++        // Collect selected block data (deep clone to avoid references to editor blocks)
++        const selectedBlocks = JSON.parse(JSON.stringify(
++          editor.document.filter((b: any) => ids.includes(b.id))
++        ));
++        const markdown = blocksToMarkdown(selectedBlocks as any);
++        setClipboardData(selectedBlocks, markdown, isCut);
++
++        // Also write to system clipboard for external paste
++        navigator.clipboard.writeText(markdown).catch(() => {});
++
++        if (isCut) {
++          // Cut: delete selected blocks after copying
++          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
++          updateSelection([]);
++          (document.activeElement as HTMLElement)?.blur?.();
++          document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
++          editor.focus();
++        }
++        return;
++      }
++
++      // Cmd+V: paste blocks from internal clipboard
++      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
++        const clipData = getClipboardData();
++        if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
++
++        e.preventDefault();
++        e.stopImmediatePropagation();
++
++        const ids = getSelectedBlockIds();
++        if (ids.length > 0) {
++          // Block selection mode: replace selected blocks with clipboard content
++          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
++          updateSelection([]);
++        }
++
++        // Insert clipboard blocks at cursor position
++        const currentBlock = editor.getTextCursorPosition().block;
++
++        // Handle async: duplicate subpage pages for copy, then insert blocks
++        (async () => {
++          const { spaceSlug, pageId: currentPageId } = identityRef.current;
++          // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
++          if (!clipData.isCut) {
++            const subpageBlocks = clipData.blocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
++            for (const block of subpageBlocks) {
++              try {
++                const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
++                block.props.pageId = newPage.id;
++              } catch (err) {
++                console.error('[PageEditor] Failed to duplicate subpage:', err);
++              }
++            }
++          }
++
++          // Strip block IDs so BlockNote creates fresh ones
++          const blocksToInsert = clipData.blocks.map((b: any) => {
++            const { id, ...rest } = b;
++            return rest;
++          });
++          editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
++          editor.focus();
++
++          // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
++          const markdown = blocksToMarkdown(editor.document);
++          await createMirror(spaceSlug, currentPageId, markdown);
++          hasChangesRef.current = false;
++          await flushSync();
++          await useSpaceStore.getState().refreshAll();
++        })();
++        return;
++      }
++
+       if (e.key !== 'Escape' && e.key !== 'Backspace' && e.key !== 'Delete') return;
+ 
+       // If a floating menu is open (drag menu or slash menu), let it handle Escape first
+diff --git a/frontend/src/components/Editor/blockClipboardState.ts b/frontend/src/components/Editor/blockClipboardState.ts
+new file mode 100644
+index 0000000..db2be77
+--- /dev/null
++++ b/frontend/src/components/Editor/blockClipboardState.ts
+@@ -0,0 +1,25 @@
++/**
++ * Module-level clipboard state for cross-document block copy/paste.
++ * Persists across SPA page navigations (React Router).
++ */
++
++let clipboardBlocks: any[] | null = null;
++let clipboardMarkdown: string | null = null;
++let clipboardIsCut = false;
++
++export function setClipboardData(blocks: any[], markdown: string, isCut: boolean): void {
++  clipboardBlocks = blocks;
++  clipboardMarkdown = markdown;
++  clipboardIsCut = isCut;
++}
++
++export function getClipboardData(): { blocks: any[]; markdown: string; isCut: boolean } | null {
++  if (!clipboardBlocks || clipboardBlocks.length === 0) return null;
++  return { blocks: clipboardBlocks, markdown: clipboardMarkdown!, isCut: clipboardIsCut };
++}
++
++export function clearClipboardData(): void {
++  clipboardBlocks = null;
++  clipboardMarkdown = null;
++  clipboardIsCut = false;
++}

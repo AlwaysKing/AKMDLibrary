@@ -506,9 +506,9 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
 /* Slash Menu Notion Style */
 /* BlockNote uses .bn-suggestion-menu (not .bn-slash-menu) in ComponentsContext mode */
 .bn-suggestion-menu {
-  border: 1px solid #e9e9e7 !important;
-  border-radius: 8px !important;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
+  border: none !important;
+  border-radius: 10px !important;
+  box-shadow: rgba(25, 25, 25, 0.05) 0px 20px 24px 0px, rgba(25, 25, 25, 0.027) 0px 5px 8px 0px, rgba(42, 28, 0, 0.07) 0px 0px 0px 1px !important;
   background: #ffffff !important;
   padding: 4px !important;
   max-height: 340px !important;
@@ -516,23 +516,31 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   min-width: 360px !important;
   scrollbar-width: thin !important;
   scrollbar-color: #e9e9e7 transparent !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
 }
 
 /* Single-line item: icon | title | shortcut */
 .bn-suggestion-menu .bn-suggestion-menu-item {
-  padding: 4px 8px !important;
+  padding: 0px 8px !important;
   border-radius: 4px !important;
-  color: #37352f !important;
+  color: #2c2c2b !important;
   display: flex !important;
   align-items: center !important;
-  gap: 6px !important;
+  gap: 8px !important;
   cursor: pointer !important;
   font-size: 14px !important;
-  line-height: 1.5 !important;
+  line-height: 16.8px !important;
+  height: 32px !important;
 }
 
-.bn-suggestion-menu .bn-suggestion-menu-item:hover,
-.bn-suggestion-menu .bn-suggestion-menu-item[data-selected="true"] {
+/* Hover highlight — only when keyboard NOT active */
+.bn-suggestion-menu:not([data-keyboard-active]) .bn-suggestion-menu-item:hover {
+  background: #ebebea !important;
+}
+
+/* Keyboard highlight — only when keyboard navigation is active */
+.bn-suggestion-menu[data-keyboard-active] .bn-suggestion-menu-item[data-selected="true"] {
   background: #ebebea !important;
 }
 
@@ -544,19 +552,22 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   width: 20px !important;
   height: 20px !important;
   flex-shrink: 0 !important;
-  color: #37352f !important;
+  color: #383836 !important;
 }
 
 .bn-suggestion-menu .bn-suggestion-menu-item-icon svg {
-  width: 18px !important;
-  height: 18px !important;
+  width: 20px !important;
+  height: 20px !important;
+  shape-rendering: geometricPrecision !important;
 }
 
 /* Title — fills remaining space */
 .bn-suggestion-menu .bn-suggestion-menu-item-title {
   flex: 1 !important;
   font-size: 14px !important;
-  color: #37352f !important;
+  font-weight: 400 !important;
+  color: #2c2c2b !important;
+  line-height: 16.8px !important;
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
@@ -565,7 +576,8 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
 /* Shortcut badge — right-aligned, gray, mono */
 .bn-suggestion-menu .bn-suggestion-menu-item-shortcut {
   font-size: 12px !important;
-  color: #c4c3c0 !important;
+  font-weight: 400 !important;
+  color: #a19e99 !important;
   font-family: 'SFMono-Regular', Menlo, Consolas, monospace !important;
   flex-shrink: 0 !important;
   margin-left: auto !important;
@@ -574,7 +586,7 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
 /* English subtitle — light gray after Chinese title */
 .bn-suggestion-menu .bn-suggestion-menu-item-en {
   font-size: 12px !important;
-  color: #c4c3c0 !important;
+  color: #a19e99 !important;
   margin-left: 6px !important;
   font-weight: 400 !important;
 }
@@ -582,10 +594,10 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
 /* Category labels — Notion: uppercase, small, gray */
 .bn-suggestion-menu .bn-suggestion-menu-label {
   padding: 6px 8px 2px !important;
-  font-size: 11px !important;
-  font-weight: 600 !important;
-  color: #9b9a97 !important;
-  letter-spacing: 0.5px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #7d7a75 !important;
+  letter-spacing: normal !important;
 }
 
 /* Empty state */

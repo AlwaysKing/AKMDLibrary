@@ -1,0 +1,49 @@
+diff --git a/frontend/src/components/Sidebar/PageTreeItem.tsx b/frontend/src/components/Sidebar/PageTreeItem.tsx
+index bff0fa9..c640fb5 100644
+--- a/frontend/src/components/Sidebar/PageTreeItem.tsx
++++ b/frontend/src/components/Sidebar/PageTreeItem.tsx
+@@ -35,6 +35,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
+   const location = useLocation();
+   const { spaceSlug } = useParams<{ spaceSlug: string }>();
+   const { createPage, deletePage, updateMetadata, refreshPageTree, duplicatePage, movePage } = usePageStore();
++  const refreshStarredAndRecent = useSpaceStore(s => s.refreshStarredAndRecent);
+   const hasChildren = page.children && page.children.length > 0;
+   const isActive = new RegExp(`/p/${page.id}$`).test(location.pathname);
+   const isExpanded = expandedPageIds.has(page.id);
+@@ -155,7 +156,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
+         navigate(target, { replace: true });
+       }
+       await deletePage(spaceSlug, page.id);
+-      await refreshPageTree();
++      await Promise.all([refreshPageTree(), refreshStarredAndRecent()]);
+ 
+       // Notify editor if the deleted page's parent is currently viewed
+       if (parentIsCurrent) {
+diff --git a/frontend/src/stores/spaceStore.ts b/frontend/src/stores/spaceStore.ts
+index 5f292cc..bdbf92e 100644
+--- a/frontend/src/stores/spaceStore.ts
++++ b/frontend/src/stores/spaceStore.ts
+@@ -16,6 +16,7 @@ interface SpaceState {
+   refreshPageTree: () => Promise<void>;
+   fetchStarred: (spaceSlug: string) => Promise<void>;
+   fetchRecent: (spaceSlug: string) => Promise<void>;
++  refreshStarredAndRecent: () => Promise<void>;
+   refreshAll: () => Promise<void>;
+ }
+ 
+@@ -84,6 +85,15 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
+     }
+   },
+ 
++  refreshStarredAndRecent: async () => {
++    const { currentSpace } = get();
++    if (currentSpace) {
++      await Promise.all([
++        get().fetchStarred(currentSpace.slug),
++        get().fetchRecent(currentSpace.slug),
++      ]);
++    }
++  },
+   refreshAll: async () => {
+     const { currentSpace } = get();
+     if (currentSpace) {

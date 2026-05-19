@@ -838,7 +838,7 @@ const ToolbarSelect: React.FC<{
 // ==================== Suggestion Menu ====================
 
 // Desired group order — must match PageEditor's customZh group names
-const GROUP_ORDER = ['基础区块', '高级区块', '列表', '媒体', '其他'];
+export const GROUP_ORDER = ['基础区块', '高级区块', '列表', '媒体', '其他'];
 
 const SuggestionMenuRoot: React.FC<{
   id?: string;
@@ -846,76 +846,124 @@ const SuggestionMenuRoot: React.FC<{
   children?: ReactNode;
 }> = (props) => {
   const { id, className, children } = props;
+  const menuRef = useRef<HTMLDivElement>(null);
+  const keyboardIdxRef = useRef(-1);
+  const hoveredIdxRef = useRef(-1);
+  const [keyboardActive, setKeyboardActive] = useState(false);
+  const [keyboardIdx, setKeyboardIdx] = useState(-1);
 
-  // Reorder children so groups appear in GROUP_ORDER
-  // BlockNote renders labels + items sequentially; same-group items may be split.
-  // We collect children into groups keyed by their preceding label, then re-emit in order.
-  const orderedChildren = React.useMemo(() => {
-    const childArray = React.Children.toArray(children);
-    if (childArray.length === 0) return children;
+  // Intercept keyboard navigation — bypass BlockNote's internal handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const menu = menuRef.current;
+      if (!menu || !menu.offsetParent) return;
 
-    // Partition children into groups: each label starts a new group
-    const groups: { label: string; elements: React.ReactNode[] }[] = [];
-    let currentGroup = '';
+      const items = menu.querySelectorAll('.bn-suggestion-menu-item');
+      const len = items.length;
+      if (len === 0) return;
 
-    for (const child of childArray) {
-      if (React.isValidElement(child)) {
-        // Detect label elements by their className
-        const props = child.props as any;
-        if (props?.className?.includes?.('bn-suggestion-menu-label')) {
-          currentGroup = (child as React.ReactElement<{ children?: ReactNode }>).props?.children?.toString() || '';
-          groups.push({ label: currentGroup, elements: [child] });
-        } else {
-          // Item — add to current group
-          if (groups.length === 0) {
-            groups.push({ label: currentGroup, elements: [child] });
-          } else {
-            groups[groups.length - 1].elements.push(child);
-          }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // If already in keyboard mode, continue from keyboard position;
+        // otherwise (first press) start from hovered position if mouse is over an item
+        let current = -1;
+        if (keyboardIdxRef.current >= 0) {
+          current = keyboardIdxRef.current;
+        } else if (hoveredIdxRef.current >= 0) {
+          current = hoveredIdxRef.current;
         }
-      } else {
-        // Non-element child (text node etc.)
-        if (groups.length === 0) {
-          groups.push({ label: '', elements: [child] });
+
+        let newIdx: number;
+        if (current < 0) {
+          newIdx = e.key === 'ArrowDown' ? 0 : len - 1;
         } else {
-          groups[groups.length - 1].elements.push(child);
+          newIdx = e.key === 'ArrowDown'
+            ? (current + 1) % len
+            : (current - 1 + len) % len;
+        }
+
+        keyboardIdxRef.current = newIdx;
+        setKeyboardIdx(newIdx);
+        setKeyboardActive(true);
+      }
+
+      if (e.key === 'Enter') {
+        const idx = keyboardIdxRef.current >= 0 ? keyboardIdxRef.current : hoveredIdxRef.current;
+        if (idx >= 0 && idx < len) {
+          e.preventDefault();
+          e.stopPropagation();
+          (items[idx] as HTMLElement).click();
         }
       }
-    }
+    };
 
-    // Merge groups with the same label, then sort by GROUP_ORDER
-    const merged = new Map<string, React.ReactNode[]>();
-    for (const g of groups) {
-      const existing = merged.get(g.label);
-      if (existing) {
-        // Skip duplicate label element, only add items
-        existing.push(...g.elements.slice(1));
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, []);
+
+  // Track mouse hover via event delegation
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const target = (e.target as HTMLElement).closest('.bn-suggestion-menu-item') as HTMLElement | null;
+    if (!target) return;
+    const items = menu.querySelectorAll('.bn-suggestion-menu-item');
+    const idx = Array.from(items).indexOf(target);
+    if (idx >= 0) {
+      hoveredIdxRef.current = idx;
+      // Mouse takes over from keyboard
+      setKeyboardActive(false);
+      setKeyboardIdx(-1);
+      keyboardIdxRef.current = -1;
+    }
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    hoveredIdxRef.current = -1;
+    // Reset everything — next arrow key starts from beginning
+    setKeyboardActive(false);
+    setKeyboardIdx(-1);
+    keyboardIdxRef.current = -1;
+  }, []);
+
+  // Apply data-selected via DOM — overrides BlockNote's React-managed attribute
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const items = menu.querySelectorAll('.bn-suggestion-menu-item');
+    items.forEach((item, i) => {
+      if (keyboardActive && i === keyboardIdx) {
+        item.setAttribute('data-selected', 'true');
       } else {
-        merged.set(g.label, g.elements);
+        item.removeAttribute('data-selected');
       }
-    }
+    });
+  }, [keyboardActive, keyboardIdx]);
 
-    // Re-emit in GROUP_ORDER, then any remaining groups
-    const result: React.ReactNode[] = [];
-    const seen = new Set<string>();
-    for (const label of GROUP_ORDER) {
-      const elements = merged.get(label);
-      if (elements) {
-        result.push(...elements);
-        seen.add(label);
-      }
+  // Reset state when children change (query filtering)
+  const prevChildrenRef = useRef(children);
+  useEffect(() => {
+    if (children !== prevChildrenRef.current) {
+      prevChildrenRef.current = children;
+      hoveredIdxRef.current = -1;
+      keyboardIdxRef.current = -1;
+      setKeyboardActive(false);
+      setKeyboardIdx(-1);
     }
-    for (const [label, elements] of merged) {
-      if (!seen.has(label)) {
-        result.push(...elements);
-      }
-    }
-    return result;
   }, [children]);
 
   return (
-    <div id={id} className={className}>
-      {orderedChildren}
+    <div
+      ref={menuRef}
+      id={id}
+      className={className}
+      onMouseLeave={handleMouseLeave}
+      onMouseMove={handleMouseMove}
+      data-keyboard-active={keyboardActive || undefined}
+    >
+      {children}
     </div>
   );
 };
@@ -931,6 +979,7 @@ const SLASH_MENU_SHORTCUTS: Record<string, string> = {
   toggle_heading: '#>',
   toggle_heading_2: '##>',
   toggle_heading_3: '###>',
+  toggle_heading_4: '####>',
   paragraph: '',
   bullet_list: '-',
   numbered_list: '1.',
@@ -959,6 +1008,7 @@ const SLASH_MENU_ENGLISH: Record<string, string> = {
   toggle_heading: 'Toggle Heading 1',
   toggle_heading_2: 'Toggle Heading 2',
   toggle_heading_3: 'Toggle Heading 3',
+  toggle_heading_4: 'Toggle Heading 4',
   paragraph: 'Text',
   bullet_list: 'Bullet List',
   numbered_list: 'Numbered List',

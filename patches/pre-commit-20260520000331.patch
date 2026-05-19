@@ -1,0 +1,1928 @@
+diff --git a/current-slash-menu b/current-slash-menu
+new file mode 100644
+index 0000000..682297d
+Binary files /dev/null and b/current-slash-menu differ
+diff --git a/frontend/public/vite.svg b/frontend/public/vite.svg
+new file mode 100644
+index 0000000..91f0685
+--- /dev/null
++++ b/frontend/public/vite.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
++  <rect width="100" height="100" rx="12" fill="#4F46E5"/>
++  <text x="50" y="68" font-size="50" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">M</text>
++</svg>
+diff --git a/frontend/src/components/Editor/BlockNoteComponents.tsx b/frontend/src/components/Editor/BlockNoteComponents.tsx
+index fb0082a..8728dea 100644
+--- a/frontend/src/components/Editor/BlockNoteComponents.tsx
++++ b/frontend/src/components/Editor/BlockNoteComponents.tsx
+@@ -838,7 +838,7 @@ const ToolbarSelect: React.FC<{
+ // ==================== Suggestion Menu ====================
+ 
+ // Desired group order — must match PageEditor's customZh group names
+-const GROUP_ORDER = ['基础区块', '高级区块', '列表', '媒体', '其他'];
++export const GROUP_ORDER = ['基础区块', '高级区块', '列表', '媒体', '其他'];
+ 
+ const SuggestionMenuRoot: React.FC<{
+   id?: string;
+@@ -846,76 +846,124 @@ const SuggestionMenuRoot: React.FC<{
+   children?: ReactNode;
+ }> = (props) => {
+   const { id, className, children } = props;
++  const menuRef = useRef<HTMLDivElement>(null);
++  const keyboardIdxRef = useRef(-1);
++  const hoveredIdxRef = useRef(-1);
++  const [keyboardActive, setKeyboardActive] = useState(false);
++  const [keyboardIdx, setKeyboardIdx] = useState(-1);
+ 
+-  // Reorder children so groups appear in GROUP_ORDER
+-  // BlockNote renders labels + items sequentially; same-group items may be split.
+-  // We collect children into groups keyed by their preceding label, then re-emit in order.
+-  const orderedChildren = React.useMemo(() => {
+-    const childArray = React.Children.toArray(children);
+-    if (childArray.length === 0) return children;
+-
+-    // Partition children into groups: each label starts a new group
+-    const groups: { label: string; elements: React.ReactNode[] }[] = [];
+-    let currentGroup = '';
+-
+-    for (const child of childArray) {
+-      if (React.isValidElement(child)) {
+-        // Detect label elements by their className
+-        const props = child.props as any;
+-        if (props?.className?.includes?.('bn-suggestion-menu-label')) {
+-          currentGroup = (child as React.ReactElement<{ children?: ReactNode }>).props?.children?.toString() || '';
+-          groups.push({ label: currentGroup, elements: [child] });
+-        } else {
+-          // Item — add to current group
+-          if (groups.length === 0) {
+-            groups.push({ label: currentGroup, elements: [child] });
+-          } else {
+-            groups[groups.length - 1].elements.push(child);
+-          }
++  // Intercept keyboard navigation — bypass BlockNote's internal handler
++  useEffect(() => {
++    const handleKeyDown = (e: KeyboardEvent) => {
++      const menu = menuRef.current;
++      if (!menu || !menu.offsetParent) return;
++
++      const items = menu.querySelectorAll('.bn-suggestion-menu-item');
++      const len = items.length;
++      if (len === 0) return;
++
++      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
++        e.preventDefault();
++        e.stopPropagation();
++
++        // If already in keyboard mode, continue from keyboard position;
++        // otherwise (first press) start from hovered position if mouse is over an item
++        let current = -1;
++        if (keyboardIdxRef.current >= 0) {
++          current = keyboardIdxRef.current;
++        } else if (hoveredIdxRef.current >= 0) {
++          current = hoveredIdxRef.current;
+         }
+-      } else {
+-        // Non-element child (text node etc.)
+-        if (groups.length === 0) {
+-          groups.push({ label: '', elements: [child] });
++
++        let newIdx: number;
++        if (current < 0) {
++          newIdx = e.key === 'ArrowDown' ? 0 : len - 1;
+         } else {
+-          groups[groups.length - 1].elements.push(child);
++          newIdx = e.key === 'ArrowDown'
++            ? (current + 1) % len
++            : (current - 1 + len) % len;
+         }
+-      }
+-    }
+ 
+-    // Merge groups with the same label, then sort by GROUP_ORDER
+-    const merged = new Map<string, React.ReactNode[]>();
+-    for (const g of groups) {
+-      const existing = merged.get(g.label);
+-      if (existing) {
+-        // Skip duplicate label element, only add items
+-        existing.push(...g.elements.slice(1));
+-      } else {
+-        merged.set(g.label, g.elements);
++        keyboardIdxRef.current = newIdx;
++        setKeyboardIdx(newIdx);
++        setKeyboardActive(true);
+       }
+-    }
+ 
+-    // Re-emit in GROUP_ORDER, then any remaining groups
+-    const result: React.ReactNode[] = [];
+-    const seen = new Set<string>();
+-    for (const label of GROUP_ORDER) {
+-      const elements = merged.get(label);
+-      if (elements) {
+-        result.push(...elements);
+-        seen.add(label);
++      if (e.key === 'Enter') {
++        const idx = keyboardIdxRef.current >= 0 ? keyboardIdxRef.current : hoveredIdxRef.current;
++        if (idx >= 0 && idx < len) {
++          e.preventDefault();
++          e.stopPropagation();
++          (items[idx] as HTMLElement).click();
++        }
+       }
++    };
++
++    document.addEventListener('keydown', handleKeyDown, true);
++    return () => document.removeEventListener('keydown', handleKeyDown, true);
++  }, []);
++
++  // Track mouse hover via event delegation
++  const handleMouseMove = useCallback((e: React.MouseEvent) => {
++    const menu = menuRef.current;
++    if (!menu) return;
++    const target = (e.target as HTMLElement).closest('.bn-suggestion-menu-item') as HTMLElement | null;
++    if (!target) return;
++    const items = menu.querySelectorAll('.bn-suggestion-menu-item');
++    const idx = Array.from(items).indexOf(target);
++    if (idx >= 0) {
++      hoveredIdxRef.current = idx;
++      // Mouse takes over from keyboard
++      setKeyboardActive(false);
++      setKeyboardIdx(-1);
++      keyboardIdxRef.current = -1;
+     }
+-    for (const [label, elements] of merged) {
+-      if (!seen.has(label)) {
+-        result.push(...elements);
++  }, []);
++
++  const handleMouseLeave = useCallback(() => {
++    hoveredIdxRef.current = -1;
++    // Reset everything — next arrow key starts from beginning
++    setKeyboardActive(false);
++    setKeyboardIdx(-1);
++    keyboardIdxRef.current = -1;
++  }, []);
++
++  // Apply data-selected via DOM — overrides BlockNote's React-managed attribute
++  useLayoutEffect(() => {
++    const menu = menuRef.current;
++    if (!menu) return;
++    const items = menu.querySelectorAll('.bn-suggestion-menu-item');
++    items.forEach((item, i) => {
++      if (keyboardActive && i === keyboardIdx) {
++        item.setAttribute('data-selected', 'true');
++      } else {
++        item.removeAttribute('data-selected');
+       }
++    });
++  }, [keyboardActive, keyboardIdx]);
++
++  // Reset state when children change (query filtering)
++  const prevChildrenRef = useRef(children);
++  useEffect(() => {
++    if (children !== prevChildrenRef.current) {
++      prevChildrenRef.current = children;
++      hoveredIdxRef.current = -1;
++      keyboardIdxRef.current = -1;
++      setKeyboardActive(false);
++      setKeyboardIdx(-1);
+     }
+-    return result;
+   }, [children]);
+ 
+   return (
+-    <div id={id} className={className}>
+-      {orderedChildren}
++    <div
++      ref={menuRef}
++      id={id}
++      className={className}
++      onMouseLeave={handleMouseLeave}
++      onMouseMove={handleMouseMove}
++      data-keyboard-active={keyboardActive || undefined}
++    >
++      {children}
+     </div>
+   );
+ };
+@@ -931,6 +979,7 @@ const SLASH_MENU_SHORTCUTS: Record<string, string> = {
+   toggle_heading: '#>',
+   toggle_heading_2: '##>',
+   toggle_heading_3: '###>',
++  toggle_heading_4: '####>',
+   paragraph: '',
+   bullet_list: '-',
+   numbered_list: '1.',
+@@ -959,6 +1008,7 @@ const SLASH_MENU_ENGLISH: Record<string, string> = {
+   toggle_heading: 'Toggle Heading 1',
+   toggle_heading_2: 'Toggle Heading 2',
+   toggle_heading_3: 'Toggle Heading 3',
++  toggle_heading_4: 'Toggle Heading 4',
+   paragraph: 'Text',
+   bullet_list: 'Bullet List',
+   numbered_list: 'Numbered List',
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index b6eedbd..d02ae81 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -5,7 +5,7 @@ import { getDefaultReactSlashMenuItems } from '@blocknote/react';
+ import { zh } from '@blocknote/core/locales';
+ import '@blocknote/react/style.css';
+ import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
+-import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen } from './BlockNoteComponents';
++import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER } from './BlockNoteComponents';
+ import { removeBlocksEnhanced } from './blockHelpers';
+ import { PageReferenceBlockSpec } from './PageReferenceBlock';
+ import { TextSelection } from '@tiptap/pm/state';
+@@ -42,13 +42,13 @@ const customZh = {
+   ...zh,
+   slash_menu: {
+     ...zh.slash_menu,
+-    heading: { ...zh.slash_menu.heading, group: '基础区块' },
+-    heading_2: { ...zh.slash_menu.heading_2, group: '基础区块' },
+-    heading_3: { ...zh.slash_menu.heading_3, group: '基础区块' },
+-    heading_4: { ...zh.slash_menu.heading_4, group: '基础区块' },
+-    toggle_heading: { ...zh.slash_menu.toggle_heading, group: '基础区块', title: '一级折叠标题' },
+-    toggle_heading_2: { ...zh.slash_menu.toggle_heading_2, group: '基础区块', title: '二级折叠标题' },
+-    toggle_heading_3: { ...zh.slash_menu.toggle_heading_3, group: '基础区块', title: '三级折叠标题' },
++    heading: { ...zh.slash_menu.heading, group: '基础区块', title: '标题 1' },
++    heading_2: { ...zh.slash_menu.heading_2, group: '基础区块', title: '标题 2' },
++    heading_3: { ...zh.slash_menu.heading_3, group: '基础区块', title: '标题 3' },
++    heading_4: { ...zh.slash_menu.heading_4, group: '基础区块', title: '标题 4' },
++    toggle_heading: { ...zh.slash_menu.toggle_heading, group: '基础区块', title: '折叠标题 1' },
++    toggle_heading_2: { ...zh.slash_menu.toggle_heading_2, group: '基础区块', title: '折叠标题 2' },
++    toggle_heading_3: { ...zh.slash_menu.toggle_heading_3, group: '基础区块', title: '折叠标题 3' },
+     quote: { ...zh.slash_menu.quote, group: '高级区块' },
+     code_block: { ...zh.slash_menu.code_block, group: '高级区块' },
+     divider: { ...zh.slash_menu.divider, group: '高级区块' },
+@@ -61,6 +61,40 @@ const customZh = {
+   },
+ };
+ 
++// Notion SVG paths for heading icons (viewBox 0 0 20 20, same as Turn Into menu)
++const NOTION_HEADING_PATHS: Record<number, string> = {
++  1: 'M4.1 4.825a.625.625 0 0 0-1.25 0v10.35a.625.625 0 0 0 1.25 0V10.4h6.4v4.775a.625.625 0 0 0 1.25 0V4.825a.625.625 0 1 0-1.25 0V9.15H4.1zM17.074 8.45a.6.6 0 0 1 .073.362q.003.03.003.063v6.3a.625.625 0 1 1-1.25 0V9.802l-1.55.846a.625.625 0 1 1-.6-1.098l2.476-1.35a.625.625 0 0 1 .848.25',
++  2: 'M3.65 4.825a.625.625 0 1 0-1.25 0v10.35a.625.625 0 0 0 1.25 0V10.4h6.4v4.775a.625.625 0 0 0 1.25 0V4.825a.625.625 0 1 0-1.25 0V9.15h-6.4zm10.104 5.164c.19-.457.722-.84 1.394-.84.89 0 1.48.627 1.48 1.238 0 .271-.104.53-.302.746l-3.837 3.585a.625.625 0 0 0 .427 1.082h4.5a.625.625 0 1 0 0-1.25H14.5l2.695-2.518.027-.028c.406-.43.657-.994.657-1.617 0-1.44-1.299-2.488-2.731-2.488-1.128 0-2.145.643-2.548 1.608a.625.625 0 0 0 1.154.482',
++  3: 'M2.877 4.2c.346 0 .625.28.625.625V9.15h6.4V4.825a.625.625 0 0 1 1.25 0v10.35a.625.625 0 0 1-1.25 0V10.4h-6.4v4.775a.625.625 0 0 1-1.25 0V4.825c0-.345.28-.625.625-.625M14.93 9.37c-.692 0-1.183.34-1.341.671a.625.625 0 1 1-1.128-.539c.416-.87 1.422-1.382 2.47-1.382.686 0 1.33.212 1.818.584.487.373.843.932.843 1.598 0 .629-.316 1.162-.76 1.533l.024.018c.515.389.892.972.892 1.669 0 .696-.377 1.28-.892 1.668s-1.198.61-1.926.61c-1.1 0-2.143-.514-2.599-1.389a.625.625 0 0 1 1.109-.578c.187.36.728.717 1.49.717.482 0 .895-.148 1.174-.358s.394-.453.394-.67-.116-.46-.394-.67c-.28-.21-.692-.358-1.174-.358h-.461a.625.625 0 0 1 0-1.25h.357a1 1 0 0 1 .104-.01c.437 0 .81-.135 1.06-.326s.351-.41.351-.605-.101-.415-.351-.606-.623-.327-1.06-.327',
++  4: 'M15.43 8.22c.663-.622 1.779-.162 1.779.776v3.644h.513a.625.625 0 0 1 0 1.25h-.513v1.329a.625.625 0 0 1-1.25 0v-1.33H12.75a.625.625 0 0 1-.625-.624v-.008a.55.55 0 0 1 .092-.347l3.072-4.524.01-.015.027-.039.02-.025.02-.026.012-.011zm-1.7 4.42h2.229V9.357zM10.527 4.2c.345 0 .625.28.625.625v4.94l.001.01v5.4a.626.626 0 0 1-1.25 0V10.4h-6.4v4.775a.626.626 0 0 1-1.251 0V4.825a.626.626 0 0 1 1.25 0V9.15h6.4V4.825c0-.345.28-.625.625-.625',
++};
++
++// Notion SVG paths for toggle heading icons (viewBox 0 0 20 20)
++const NOTION_TOGGLE_HEADING_PATHS: Record<number, string> = {
++  1: 'M7.085 5.4a.577.577 0 1 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm11.506 3.225a.55.55 0 0 1 .064.32l.003.055v5.6a.55.55 0 1 1-1.1 0V9.815l-1.386.756a.55.55 0 1 1-.527-.966l2.2-1.2a.55.55 0 0 1 .746.22M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
++  2: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
++  3: 'M6.508 4.823c.318 0 .577.258.577.577v3.823h5.645V5.4a.577.577 0 0 1 1.154 0v9.2a.577.577 0 1 1-1.154 0v-4.223H7.086V14.6a.577.577 0 1 1-1.154 0V5.4c0-.319.258-.577.577-.577m10.775 4.415c-.644 0-1.105.316-1.256.631a.55.55 0 1 1-.992-.474c.377-.79 1.292-1.257 2.248-1.257.626 0 1.214.193 1.657.532s.765.846.765 1.45c0 .58-.297 1.072-.715 1.41l.05.036c.468.353.81.883.81 1.514 0 .63-.342 1.16-.81 1.514-.47.354-1.093.556-1.757.556-1.005 0-1.953-.47-2.368-1.264a.55.55 0 1 1 .976-.508c.178.341.685.672 1.392.672.448 0 .833-.138 1.094-.334.26-.197.372-.427.372-.636s-.111-.44-.372-.636c-.26-.196-.646-.334-1.094-.334h-.424a.55.55 0 0 1 0-1.1h.33a1 1 0 0 1 .094-.008c.406 0 .754-.127.989-.306.234-.18.333-.388.333-.576s-.099-.397-.333-.576c-.235-.18-.583-.306-.99-.306M.962 11.14c0 .455.495.735.885.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.885.5z',
++  4: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
++};
++
++// Notion heading icon — uses exact Notion SVG paths (viewBox 0 0 20 20)
++function NotionHeadingIcon({ level }: { level: number }) {
++  return (
++    <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">
++      <path d={NOTION_HEADING_PATHS[level]} />
++    </svg>
++  );
++}
++
++// Notion toggle heading icon — uses exact Notion SVG paths (viewBox 0 0 20 20)
++function NotionToggleHeadingIcon({ level }: { level: number }) {
++  return (
++    <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">
++      <path d={NOTION_TOGGLE_HEADING_PATHS[level]} />
++    </svg>
++  );
++}
++
+ // Custom slash menu: default items filtered + subpage + toggle heading 4
+ // Desired order for 基础区块: heading → heading_2 → heading_3 → heading_4 → toggle_heading → toggle_heading_2 → toggle_heading_3 → toggle_heading_4(custom)
+ const BASE_BLOCK_ORDER: Record<string, number> = {
+@@ -80,6 +114,28 @@ function getCustomSlashMenuItems(editor: any) {
+   const filtered = defaults.filter((item: any) =>
+     item.key !== 'heading_5' && item.key !== 'heading_6'
+   );
++  // Override heading icons with Notion SVG paths
++  const headingLevels: Record<string, number> = {
++    heading: 1,
++    heading_2: 2,
++    heading_3: 3,
++    heading_4: 4,
++  };
++  const toggleHeadingLevels: Record<string, number> = {
++    toggle_heading: 1,
++    toggle_heading_2: 2,
++    toggle_heading_3: 3,
++  };
++  for (const item of filtered) {
++    const hLevel = headingLevels[(item as any).key];
++    if (hLevel !== undefined) {
++      (item as any).icon = <NotionHeadingIcon level={hLevel} />;
++    }
++    const tLevel = toggleHeadingLevels[(item as any).key];
++    if (tLevel !== undefined) {
++      (item as any).icon = <NotionToggleHeadingIcon level={tLevel} />;
++    }
++  }
+   // Sort 基础区块 items to: headings first, then toggle headings
+   filtered.sort((a: any, b: any) => {
+     const aOrder = BASE_BLOCK_ORDER[a.key];
+@@ -87,14 +143,15 @@ function getCustomSlashMenuItems(editor: any) {
+     if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
+     return 0;
+   });
+-  return [
++  const allItems = [
+     ...filtered,
+     {
+-      title: '四级折叠标题',
++      title: '折叠标题 4',
+       subtext: '可折叠的四级标题',
++      key: 'toggle_heading_4',
+       aliases: ['toggle_heading_4', 'toggle4'],
+       group: '基础区块',
+-      icon: <svg viewBox="0 0 24 24" style={{ width: '18px', height: '18px', fill: 'currentColor' }}><path d="M12.8 5.6H4v2h7.2l-1.6 1.6L11 10.8l3.8-3.8-3.8-3.8-1.4 1.4 1.2 1zM4 14h8.8l-1.6 1.6L12.6 17l3.8-3.8-3.8-3.8-1.4 1.4 1.2 1H4v2z"/></svg>,
++      icon: <NotionToggleHeadingIcon level={4} />,
+       onItemClick: () => {
+         const currentBlock = editor.getTextCursorPosition().block;
+         if (currentBlock.content === undefined) return;
+@@ -114,6 +171,7 @@ function getCustomSlashMenuItems(editor: any) {
+     {
+       title: '子页面',
+       subtext: '创建并链接到子页面',
++      key: 'subpage',
+       aliases: ['subpage', 'page', '子页面', '页面'],
+       group: '高级区块',
+       icon: <svg viewBox="4.12 2.37 11.75 15.25" style={{ width: '18px', height: '18px', fill: 'currentColor', overflow: 'visible' }}><path d="M13.3 14.25a.55.55 0 0 1-.55.55h-5.5a.55.55 0 1 1 0-1.1h5.5a.55.55 0 0 1 .55.55m-.55-1.95a.55.55 0 1 0 0-1.1h-5.5a.55.55 0 0 0 0 1.1z" /><path d="M6.25 2.375A2.125 2.125 0 0 0 4.125 4.5v11c0 1.174.951 2.125 2.125 2.125h7.5a2.125 2.125 0 0 0 2.125-2.125V8.121c0-.563-.224-1.104-.622-1.502L11.63 2.997a2.13 2.13 0 0 0-1.502-.622zM5.375 4.5c0-.483.392-.875.875-.875h3.7V6.25A2.05 2.05 0 0 0 12 8.3h2.625v7.2a.875.875 0 0 1-.875.875h-7.5a.875.875 0 0 1-.875-.875zm8.691 2.7H12a.95.95 0 0 1-.95-.95V4.184z" /></svg>,
+@@ -135,8 +193,94 @@ function getCustomSlashMenuItems(editor: any) {
+       },
+     },
+   ];
++  // Sort by GROUP_ORDER so visual order matches array index (fixes keyboard navigation)
++  allItems.sort((a: any, b: any) => {
++    const aIdx = GROUP_ORDER.indexOf(a.group);
++    const bIdx = GROUP_ORDER.indexOf(b.group);
++    const aOrder = aIdx === -1 ? GROUP_ORDER.length : aIdx;
++    const bOrder = bIdx === -1 ? GROUP_ORDER.length : bIdx;
++    if (aOrder !== bOrder) return aOrder - bOrder;
++    return 0; // stable sort preserves intra-group order
++  });
++  return allItems;
+ }
+ 
++// Mutable ref so the TipTap extension can access the BlockNote editor
++const bnEditorRef: { current: any } = { current: null };
++
++/**
++ * BlockNote built-in input rules vs our slash menu shortcuts:
++ *   ✅ # → heading, `` ``` `` → code, --- → divider, -/+/* → bullet,
++ *      [] → check, 1. → numbered, > → toggle list
++ *   ❌ #> → toggle heading, "" → quote, || → table
++ *
++ * This TipTap extension fills the gaps by intercepting space/enter
++ * after these patterns and converting the current paragraph.
++ */
++const CustomInputRules = Extension.create({
++  name: 'customInputRules',
++  addProseMirrorPlugins() {
++    return [
++      new Plugin({
++        key: new PluginKey('customInputRules'),
++        props: {
++          handleKeyDown(view, event) {
++            if (!bnEditorRef.current) return false;
++            // Trigger on Space (for most patterns) or Enter (for ||)
++            if (event.key !== ' ' && event.key !== 'Enter') return false;
++
++            const { from, to } = view.state.selection;
++            if (from !== to) return false;
++
++            const $from = view.state.doc.resolve(from);
++            const textBefore = $from.parent.textBetween(0, $from.parentOffset, '\n');
++            const block = bnEditorRef.current.getTextCursorPosition().block;
++            if (block.type !== 'paragraph') return false;
++
++            // --- Toggle heading: #>, ##>, ###>, ####> ---
++            const toggleMatch = textBefore.match(/^(#{1,4})>$/);
++            if (toggleMatch && event.key === ' ') {
++              const level = toggleMatch[1].length;
++              event.preventDefault();
++              const tr = view.state.tr.deleteRange(from - (level + 1), from);
++              view.dispatch(tr);
++              bnEditorRef.current.updateBlock(block, {
++                type: 'heading',
++                props: { level, isToggleable: true },
++              });
++              return true;
++            }
++
++            // --- Quote: "" (straight quotes) or "“”" (smart quotes) ---
++            if ((textBefore === '""' || textBefore === '“”' || textBefore === '„“') && event.key === ' ') {
++              event.preventDefault();
++              const tr = view.state.tr.deleteRange(from - 2, from);
++              view.dispatch(tr);
++              bnEditorRef.current.updateBlock(block, { type: 'quote' });
++              return true;
++            }
++
++            // --- Table: || ---
++            if (textBefore === '||' && event.key === ' ') {
++              event.preventDefault();
++              const tr = view.state.tr.deleteRange(from - 2, from);
++              view.dispatch(tr);
++              bnEditorRef.current.insertBlocks(
++                [{ type: 'table', content: { type: 'tableContent', rows: [{ cells: ['', '', ''] }, { cells: ['', '', ''] }] } }],
++                block,
++                'after',
++              );
++              return true;
++            }
++
++            return false;
++          },
++        },
++      }),
++    ];
++  },
++});
++
+ /**
+  * TipTap extension that fixes BlockNote's numbered list indexing on init.
+  *
+@@ -261,9 +405,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     initialContent: markdownToBlocks(initialContent) as any,
+     dictionary: customZh as any,
+     trailingBlock: false,
+-    _tiptapOptions: { extensions: [NumberedListIndexFix] },
++    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix] },
+   } as any);
+ 
++  // Wire up the editor ref for ToggleHeadingInputRules
++  useEffect(() => {
++    bnEditorRef.current = editor;
++  }, [editor]);
++
+   // Sync subpage blocks with sidebar create/delete/reorder events
+   useEffect(() => {
+     if (readOnly) return;
+diff --git a/frontend/src/styles/globals.css b/frontend/src/styles/globals.css
+index 68292df..383f364 100644
+--- a/frontend/src/styles/globals.css
++++ b/frontend/src/styles/globals.css
+@@ -506,9 +506,9 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+ /* Slash Menu Notion Style */
+ /* BlockNote uses .bn-suggestion-menu (not .bn-slash-menu) in ComponentsContext mode */
+ .bn-suggestion-menu {
+-  border: 1px solid #e9e9e7 !important;
+-  border-radius: 8px !important;
+-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
++  border: none !important;
++  border-radius: 10px !important;
++  box-shadow: rgba(25, 25, 25, 0.05) 0px 20px 24px 0px, rgba(25, 25, 25, 0.027) 0px 5px 8px 0px, rgba(42, 28, 0, 0.07) 0px 0px 0px 1px !important;
+   background: #ffffff !important;
+   padding: 4px !important;
+   max-height: 340px !important;
+@@ -516,23 +516,31 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+   min-width: 360px !important;
+   scrollbar-width: thin !important;
+   scrollbar-color: #e9e9e7 transparent !important;
++  -webkit-font-smoothing: antialiased !important;
++  -moz-osx-font-smoothing: grayscale !important;
+ }
+ 
+ /* Single-line item: icon | title | shortcut */
+ .bn-suggestion-menu .bn-suggestion-menu-item {
+-  padding: 4px 8px !important;
++  padding: 0px 8px !important;
+   border-radius: 4px !important;
+-  color: #37352f !important;
++  color: #2c2c2b !important;
+   display: flex !important;
+   align-items: center !important;
+-  gap: 6px !important;
++  gap: 8px !important;
+   cursor: pointer !important;
+   font-size: 14px !important;
+-  line-height: 1.5 !important;
++  line-height: 16.8px !important;
++  height: 32px !important;
++}
++
++/* Hover highlight — only when keyboard NOT active */
++.bn-suggestion-menu:not([data-keyboard-active]) .bn-suggestion-menu-item:hover {
++  background: #ebebea !important;
+ }
+ 
+-.bn-suggestion-menu .bn-suggestion-menu-item:hover,
+-.bn-suggestion-menu .bn-suggestion-menu-item[data-selected="true"] {
++/* Keyboard highlight — only when keyboard navigation is active */
++.bn-suggestion-menu[data-keyboard-active] .bn-suggestion-menu-item[data-selected="true"] {
+   background: #ebebea !important;
+ }
+ 
+@@ -544,19 +552,22 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+   width: 20px !important;
+   height: 20px !important;
+   flex-shrink: 0 !important;
+-  color: #37352f !important;
++  color: #383836 !important;
+ }
+ 
+ .bn-suggestion-menu .bn-suggestion-menu-item-icon svg {
+-  width: 18px !important;
+-  height: 18px !important;
++  width: 20px !important;
++  height: 20px !important;
++  shape-rendering: geometricPrecision !important;
+ }
+ 
+ /* Title — fills remaining space */
+ .bn-suggestion-menu .bn-suggestion-menu-item-title {
+   flex: 1 !important;
+   font-size: 14px !important;
+-  color: #37352f !important;
++  font-weight: 400 !important;
++  color: #2c2c2b !important;
++  line-height: 16.8px !important;
+   white-space: nowrap !important;
+   overflow: hidden !important;
+   text-overflow: ellipsis !important;
+@@ -565,7 +576,8 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+ /* Shortcut badge — right-aligned, gray, mono */
+ .bn-suggestion-menu .bn-suggestion-menu-item-shortcut {
+   font-size: 12px !important;
+-  color: #c4c3c0 !important;
++  font-weight: 400 !important;
++  color: #a19e99 !important;
+   font-family: 'SFMono-Regular', Menlo, Consolas, monospace !important;
+   flex-shrink: 0 !important;
+   margin-left: auto !important;
+@@ -574,7 +586,7 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+ /* English subtitle — light gray after Chinese title */
+ .bn-suggestion-menu .bn-suggestion-menu-item-en {
+   font-size: 12px !important;
+-  color: #c4c3c0 !important;
++  color: #a19e99 !important;
+   margin-left: 6px !important;
+   font-weight: 400 !important;
+ }
+@@ -582,10 +594,10 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+ /* Category labels — Notion: uppercase, small, gray */
+ .bn-suggestion-menu .bn-suggestion-menu-label {
+   padding: 6px 8px 2px !important;
+-  font-size: 11px !important;
+-  font-weight: 600 !important;
+-  color: #9b9a97 !important;
+-  letter-spacing: 0.5px !important;
++  font-size: 12px !important;
++  font-weight: 500 !important;
++  color: #7d7a75 !important;
++  letter-spacing: normal !important;
+ }
+ 
+ /* Empty state */
+diff --git a/patches/before-cleanup-20260518-235703.patch b/patches/before-cleanup-20260518-235703.patch
+new file mode 100644
+index 0000000..8515af9
+--- /dev/null
++++ b/patches/before-cleanup-20260518-235703.patch
+@@ -0,0 +1,319 @@
++diff --git a/CLAUDE.md b/CLAUDE.md
++new file mode 100644
++index 0000000..533d0c4
++--- /dev/null
+++++ b/CLAUDE.md
++@@ -0,0 +1,15 @@
+++# MDLibrary 项目规范
+++
+++## 项目概述
+++Notion 风格的知识库应用，React + Vite 前端，Go 后端，使用 BlockNote (v0.50) 编辑器。
+++
+++## 规范文档
+++- **工作流程**：`~/.ccgui/docs/工作流程.md` — 所有非平凡任务的执行流程
+++- **前端复刻方法论**：`~/.ccgui/docs/前端复刻问题解决方法论.md` — 复刻参考产品 UI 行为时的完整方法论：讨论→测量参考→对比差异→计划→实施→自检
+++- **前端产品设计方法论**：`~/.ccgui/docs/前端产品设计方法论.md` — 自己设计产品交互时的方法论：理解需求→定义交互规则→计划→实施→体验走查
+++- **浏览器调试指南**：`~/.ccgui/docs/浏览器调试项目操作指南.md` — MCP 浏览器工具的操作手册：页面管理、JS 执行、测量模式、常见问题
+++
+++## 关键约定
+++- 构建：必须 `cd frontend && npx vite build`（不是 Next.js）
+++- 修改文件前先检索规范文档
+++- 遇到问题先找根因，不采用补丁式修复
++diff --git a/backend/internal/service/page_service.go b/backend/internal/service/page_service.go
++index c1db598..6fc5880 100644
++--- a/backend/internal/service/page_service.go
+++++ b/backend/internal/service/page_service.go
++@@ -975,17 +975,60 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID
++ 		}
++ 	}
++ 
++-	// Rebuild cache to discover all new files
++-	if err := s.RebuildCache(spaceSlug); err != nil {
++-		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
+++	// Insert new page into cache directly (like Create does), no full RebuildCache
+++	maxSort, _ := repo.MaxSortOrder()
+++	created, err := repo.Create(&model.Page{
+++		ID:        newPageID,
+++		Title:     newTitle,
+++		FilePath:  newRelPath,
+++		Icon:      fm.Icon,
+++		SortOrder: maxSort + 1,
+++	})
+++	if err != nil {
+++		return nil, fmt.Errorf("failed to create cache entry: %w", err)
+++	}
+++
+++	// Register child pages in cache (if copied directory exists)
+++	newChildDir := filepath.Join(targetDir, newTitle)
+++	if info, err := os.Stat(newChildDir); err == nil && info.IsDir() {
+++		s.registerChildPages(repo, newChildDir, newRelPath)
++ 	}
++ 
++-	// Find the new page by its file path
++-	repo, err = s.getRepo(spaceSlug)
+++	return created, nil
+++}
+++
+++// registerChildPages walks a directory and creates cache entries for all .md files.
+++// relBase is the relative path prefix (from docsDir) for constructing file_path values.
+++func (s *PageService) registerChildPages(repo *repository.PageRepository, absDir string, relBase string) {
+++	maxSort, _ := repo.MaxSortOrder()
+++	sortOrder := maxSort + 1
+++
+++	entries, err := os.ReadDir(absDir)
++ 	if err != nil {
++-		return nil, err
+++		return
+++	}
+++	for _, entry := range entries {
+++		if entry.IsDir() {
+++			// Recurse into subdirectory (its parent is the .md file with the same name)
+++			childAbsDir := filepath.Join(absDir, entry.Name())
+++			childRelBase := filepath.Join(relBase, entry.Name())
+++			s.registerChildPages(repo, childAbsDir, childRelBase)
+++			continue
+++		}
+++		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+++			continue
+++		}
+++		childRelPath := filepath.Join(relBase, entry.Name())
+++		pageID := s.ensurePageUUID(childRelPath)
+++		title := strings.TrimSuffix(entry.Name(), ".md")
+++		repo.Create(&model.Page{
+++			ID:        pageID,
+++			Title:     title,
+++			FilePath:  childRelPath,
+++			SortOrder: float64(sortOrder),
+++		})
+++		sortOrder++
++ 	}
++-	return repo.GetByPath(newRelPath)
++ }
++ 
++ // copyDirRecursive copies a directory tree from src to dst.
++@@ -1255,8 +1298,8 @@ func (s *PageService) getDirectChildIDs(repo *repository.PageRepository, filePat
++ }
++ 
++ // maintainSubpageBlocks ensures the markdown body has exactly one <sub-page data-id="UUID"></sub-page>
++-// for each direct child page. It only removes stale subpage lines and appends missing ones.
++-// It does NOT reorder existing subpage lines — their positions are preserved.
+++// for each direct child page. It removes stale subpage lines, appends missing ones,
+++// and updates database sort_order to match the order of subpage tags in the markdown.
++ // Reads both new tag format and legacy comment format; always writes new tag format.
++ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRepository, filePath string) string {
++ 	// Use GetSiblings for sorted child IDs (sort_order ASC)
++@@ -1292,8 +1335,9 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
++ 		return strings.TrimRight(result, "\n")
++ 	}
++ 
++-	// Scan body: collect existing subpage IDs, build cleaned lines
+++	// Scan body: collect existing subpage IDs in order, build cleaned lines
++ 	existingSubpageSet := make(map[string]bool)
+++	var orderedIDs []string // subpage IDs in markdown order
++ 	var cleanedLines []string
++ 	changed := false
++ 
++@@ -1301,7 +1345,10 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
++ 		id := parseSubpageID(line)
++ 		if id != "" {
++ 			if childIDSet[id] {
++-				existingSubpageSet[id] = true
+++				if !existingSubpageSet[id] {
+++					existingSubpageSet[id] = true
+++					orderedIDs = append(orderedIDs, id)
+++				}
++ 				// Re-write in new tag format (migrates legacy comments)
++ 				newTag := formatSubpageTag(id)
++ 				if strings.TrimSpace(line) != newTag {
++@@ -1327,14 +1374,37 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
++ 		}
++ 	}
++ 
++-	// Nothing to change
++-	if len(missing) == 0 && !changed {
++-		return body
++-	}
++-
++ 	// Append missing subpages at the end
++ 	for _, id := range missing {
++ 		cleanedLines = append(cleanedLines, formatSubpageTag(id))
+++		orderedIDs = append(orderedIDs, id)
+++	}
+++
+++	// Update database sort_order to match markdown tag order
+++	if len(orderedIDs) > 0 {
+++		siblingMap := make(map[string]*model.Page)
+++		for _, p := range siblings {
+++			siblingMap[p.ID] = p
+++		}
+++		var sortUpdates []repository.SortOrderUpdate
+++		for i, id := range orderedIDs {
+++			if p, ok := siblingMap[id]; ok {
+++				newSort := float64(i)
+++				if p.SortOrder != newSort {
+++					sortUpdates = append(sortUpdates, repository.SortOrderUpdate{ID: id, SortOrder: newSort})
+++				}
+++			}
+++		}
+++		if len(sortUpdates) > 0 {
+++			if err := repo.UpdateSortOrders(sortUpdates); err != nil {
+++				log.Printf("[maintainSubpageBlocks] failed to update sort_order: %v", err)
+++			}
+++		}
+++	}
+++
+++	// Nothing to change in content
+++	if len(missing) == 0 && !changed {
+++		return body
++ 	}
++ 
++ 	result := strings.Join(cleanedLines, "\n")
++diff --git a/frontend/public/vite.svg b/frontend/public/vite.svg
++new file mode 100644
++index 0000000..91f0685
++--- /dev/null
+++++ b/frontend/public/vite.svg
++@@ -0,0 +1,4 @@
+++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+++  <rect width="100" height="100" rx="12" fill="#4F46E5"/>
+++  <text x="50" y="68" font-size="50" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">M</text>
+++</svg>
++diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
++index 43c59e6..c10b1a2 100644
++--- a/frontend/src/components/Editor/PageEditor.tsx
+++++ b/frontend/src/components/Editor/PageEditor.tsx
++@@ -9,12 +9,14 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
++ import { removeBlocksEnhanced } from './blockHelpers';
++ import { PageReferenceBlockSpec } from './PageReferenceBlock';
++ import { TextSelection } from '@tiptap/pm/state';
+++import { setClipboardData, getClipboardData } from './blockClipboardState';
++ import { BookmarkBlockSpec } from './BookmarkBlock';
++ import { SubpageBlockSpec } from './SubpageBlock';
++ import LinkPasteMenu from './LinkPasteMenu';
++ import { getBlockDragData, markDragHandled } from './blockDragState';
++ import { pagesApi } from '../../api/pages';
++ import { createMirror } from '../../services/mirrorStore';
+++import { useSpaceStore } from '../../stores/spaceStore';
++ import { flushSync } from '../../services/syncModule';
++ 
++ // Custom schema: default blocks + pageReference + bookmark
++@@ -624,6 +626,88 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
++         return;
++       }
++ 
+++      // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
+++      if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
+++        const ids = getSelectedBlockIds();
+++        if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
+++        e.preventDefault();
+++        e.stopImmediatePropagation();
+++
+++        const isCut = e.key === 'x';
+++
+++        // Collect selected block data (deep clone to avoid references to editor blocks)
+++        const selectedBlocks = JSON.parse(JSON.stringify(
+++          editor.document.filter((b: any) => ids.includes(b.id))
+++        ));
+++        const markdown = blocksToMarkdown(selectedBlocks as any);
+++        setClipboardData(selectedBlocks, markdown, isCut);
+++
+++        // Also write to system clipboard for external paste
+++        navigator.clipboard.writeText(markdown).catch(() => {});
+++
+++        if (isCut) {
+++          // Cut: delete selected blocks after copying
+++          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+++          updateSelection([]);
+++          (document.activeElement as HTMLElement)?.blur?.();
+++          document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+++          editor.focus();
+++        }
+++        return;
+++      }
+++
+++      // Cmd+V: paste blocks from internal clipboard
+++      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+++        const clipData = getClipboardData();
+++        if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
+++
+++        e.preventDefault();
+++        e.stopImmediatePropagation();
+++
+++        const ids = getSelectedBlockIds();
+++        if (ids.length > 0) {
+++          // Block selection mode: replace selected blocks with clipboard content
+++          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+++          updateSelection([]);
+++        }
+++
+++        // Insert clipboard blocks at cursor position
+++        const currentBlock = editor.getTextCursorPosition().block;
+++
+++        // Handle async: duplicate subpage pages for copy, then insert blocks
+++        (async () => {
+++          const { spaceSlug, pageId: currentPageId } = identityRef.current;
+++          // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
+++          if (!clipData.isCut) {
+++            const subpageBlocks = clipData.blocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
+++            for (const block of subpageBlocks) {
+++              try {
+++                const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
+++                block.props.pageId = newPage.id;
+++              } catch (err) {
+++                console.error('[PageEditor] Failed to duplicate subpage:', err);
+++              }
+++            }
+++          }
+++
+++          // Strip block IDs so BlockNote creates fresh ones
+++          const blocksToInsert = clipData.blocks.map((b: any) => {
+++            const { id, ...rest } = b;
+++            return rest;
+++          });
+++          editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+++          editor.focus();
+++
+++          // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
+++          const markdown = blocksToMarkdown(editor.document);
+++          await createMirror(spaceSlug, currentPageId, markdown);
+++          hasChangesRef.current = false;
+++          await flushSync();
+++          await useSpaceStore.getState().refreshAll();
+++        })();
+++        return;
+++      }
+++
++       if (e.key !== 'Escape' && e.key !== 'Backspace' && e.key !== 'Delete') return;
++ 
++       // If a floating menu is open (drag menu or slash menu), let it handle Escape first
++diff --git a/frontend/src/components/Editor/blockClipboardState.ts b/frontend/src/components/Editor/blockClipboardState.ts
++new file mode 100644
++index 0000000..db2be77
++--- /dev/null
+++++ b/frontend/src/components/Editor/blockClipboardState.ts
++@@ -0,0 +1,25 @@
+++/**
+++ * Module-level clipboard state for cross-document block copy/paste.
+++ * Persists across SPA page navigations (React Router).
+++ */
+++
+++let clipboardBlocks: any[] | null = null;
+++let clipboardMarkdown: string | null = null;
+++let clipboardIsCut = false;
+++
+++export function setClipboardData(blocks: any[], markdown: string, isCut: boolean): void {
+++  clipboardBlocks = blocks;
+++  clipboardMarkdown = markdown;
+++  clipboardIsCut = isCut;
+++}
+++
+++export function getClipboardData(): { blocks: any[]; markdown: string; isCut: boolean } | null {
+++  if (!clipboardBlocks || clipboardBlocks.length === 0) return null;
+++  return { blocks: clipboardBlocks, markdown: clipboardMarkdown!, isCut: clipboardIsCut };
+++}
+++
+++export function clearClipboardData(): void {
+++  clipboardBlocks = null;
+++  clipboardMarkdown = null;
+++  clipboardIsCut = false;
+++}
+diff --git a/patches/before-commit-20260519-010111.patch b/patches/before-commit-20260519-010111.patch
+new file mode 100644
+index 0000000..ab8e560
+--- /dev/null
++++ b/patches/before-commit-20260519-010111.patch
+@@ -0,0 +1,507 @@
++diff --git a/CLAUDE.md b/CLAUDE.md
++new file mode 100644
++index 0000000..533d0c4
++--- /dev/null
+++++ b/CLAUDE.md
++@@ -0,0 +1,15 @@
+++# MDLibrary 项目规范
+++
+++## 项目概述
+++Notion 风格的知识库应用，React + Vite 前端，Go 后端，使用 BlockNote (v0.50) 编辑器。
+++
+++## 规范文档
+++- **工作流程**：`~/.ccgui/docs/工作流程.md` — 所有非平凡任务的执行流程
+++- **前端复刻方法论**：`~/.ccgui/docs/前端复刻问题解决方法论.md` — 复刻参考产品 UI 行为时的完整方法论：讨论→测量参考→对比差异→计划→实施→自检
+++- **前端产品设计方法论**：`~/.ccgui/docs/前端产品设计方法论.md` — 自己设计产品交互时的方法论：理解需求→定义交互规则→计划→实施→体验走查
+++- **浏览器调试指南**：`~/.ccgui/docs/浏览器调试项目操作指南.md` — MCP 浏览器工具的操作手册：页面管理、JS 执行、测量模式、常见问题
+++
+++## 关键约定
+++- 构建：必须 `cd frontend && npx vite build`（不是 Next.js）
+++- 修改文件前先检索规范文档
+++- 遇到问题先找根因，不采用补丁式修复
++diff --git a/frontend/public/vite.svg b/frontend/public/vite.svg
++new file mode 100644
++index 0000000..91f0685
++--- /dev/null
+++++ b/frontend/public/vite.svg
++@@ -0,0 +1,4 @@
+++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+++  <rect width="100" height="100" rx="12" fill="#4F46E5"/>
+++  <text x="50" y="68" font-size="50" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">M</text>
+++</svg>
++diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
++index fabacd1..21c9206 100644
++--- a/frontend/src/components/Editor/PageEditor.tsx
+++++ b/frontend/src/components/Editor/PageEditor.tsx
++@@ -9,7 +9,7 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
++ import { removeBlocksEnhanced } from './blockHelpers';
++ import { PageReferenceBlockSpec } from './PageReferenceBlock';
++ import { TextSelection } from '@tiptap/pm/state';
++-import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore } from './blockClipboardState';
+++import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
++ import { BookmarkBlockSpec } from './BookmarkBlock';
++ import { SubpageBlockSpec } from './SubpageBlock';
++ import LinkPasteMenu from './LinkPasteMenu';
++@@ -173,15 +173,51 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
++     if (readOnly) return;
++ 
++     const handleSubpageCreated = (e: Event) => {
++-      const { pageId } = (e as CustomEvent).detail;
+++      const { pageId, afterId, fromParentId } = (e as CustomEvent).detail;
++       // Guard: skip if block already exists (prevent duplicate from event or backend)
++       const exists = editor.document.some((b: any) => b.type === 'subpage' && b.props?.pageId === pageId);
++       if (exists) return;
++-      // Insert subpage block at the end of the document
++-      const blocks = editor.document;
++-      const lastBlock = blocks[blocks.length - 1];
++-      if (lastBlock) {
++-        editor.insertBlocks([{ type: 'subpage', props: { pageId } } as any], lastBlock, 'after');
+++
+++      const newBlock = { type: 'subpage', props: { pageId } };
+++
+++      if (!afterId) {
+++        // No afterId: insert before the first existing subpage block
+++        const firstSubpage = editor.document.find(
+++          (b: any) => b.type === 'subpage' && b.props?.pageId,
+++        );
+++        if (firstSubpage) {
+++          editor.insertBlocks([newBlock] as any, firstSubpage, 'before');
+++        } else {
+++          // No subpage blocks exist, insert at end of document
+++          const doc = editor.document;
+++          const lastBlock = doc[doc.length - 1];
+++          if (lastBlock) {
+++            editor.insertBlocks([newBlock] as any, lastBlock, 'after');
+++          }
+++        }
+++      } else {
+++        // Insert after the specified sibling
+++        const refBlock = editor.document.find(
+++          (b: any) => b.type === 'subpage' && b.props?.pageId === afterId,
+++        );
+++        if (refBlock) {
+++          editor.insertBlocks([newBlock] as any, refBlock, 'after');
+++        } else {
+++          // Fallback: insert at end
+++          const doc = editor.document;
+++          const lastBlock = doc[doc.length - 1];
+++          if (lastBlock) {
+++            editor.insertBlocks([newBlock] as any, lastBlock, 'after');
+++          }
+++        }
+++      }
+++
+++      // Record undo action: if moved from another parent, undo should move back
+++      if (fromParentId) {
+++        const slug = useSpaceStore.getState().currentSpace?.slug;
+++        if (slug) {
+++          setSubpageUndoAction(pageId, { action: 'moveBack', spaceSlug: slug, fromParentId });
+++        }
++       }
++     };
++ 
++@@ -492,10 +528,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
++           const pageId = (change.block.props as any).pageId;
++           try {
++             if (change.type === 'delete') {
++-              // Undo pasted subpage: delete the backend page
++-              await pagesApi.delete(slug, pageId);
+++              // A subpage block was removed by undo — look up the correct action
+++              const undoAction = getSubpageUndoAction(pageId);
+++              clearSubpageUndoAction(pageId);
+++              if (undoAction?.action === 'moveBack') {
+++                // Was moved from another parent: move it back
+++                await pagesApi.move(undoAction.spaceSlug, pageId, undoAction.fromParentId, null);
+++              } else {
+++                // Was created by paste: delete the backend page
+++                await pagesApi.delete(slug, pageId);
+++              }
++             } else if (change.type === 'insert') {
++-              // Undo deleted subpage: restore from trash
+++              // A subpage block was restored by undo (undo of delete)
++               addPendingRestore(pageId);
++               await pagesApi.restoreById(slug, pageId);
++               removePendingRestore(pageId);
++@@ -746,6 +790,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
++           }
++           editor.focus();
++ 
+++          // Record undo actions for pasted subpage blocks (undo should delete them)
+++          for (const block of clipData.blocks) {
+++            if (block.type === 'subpage' && block.props?.pageId) {
+++              setSubpageUndoAction(block.props.pageId, { action: 'delete' });
+++            }
+++          }
+++
++           // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
++           const markdown = blocksToMarkdown(editor.document);
++           await createMirror(spaceSlug, currentPageId, markdown);
++diff --git a/frontend/src/components/Editor/blockClipboardState.ts b/frontend/src/components/Editor/blockClipboardState.ts
++index 95cc79f..d4b4997 100644
++--- a/frontend/src/components/Editor/blockClipboardState.ts
+++++ b/frontend/src/components/Editor/blockClipboardState.ts
++@@ -41,3 +41,26 @@ export function removePendingRestore(pageId: string): void {
++ export function isPendingRestore(pageId: string): boolean {
++   return pendingRestores.has(pageId);
++ }
+++
+++/**
+++ * Subpage undo actions: maps pageId to the correct undo behavior.
+++ * - 'delete': page was created by paste/duplicate, undo should delete it
+++ * - 'moveBack': page was moved from another parent, undo should move it back
+++ */
+++export type SubpageUndoAction =
+++  | { action: 'delete' }
+++  | { action: 'moveBack'; spaceSlug: string; fromParentId: string };
+++
+++const subpageUndoActions = new Map<string, SubpageUndoAction>();
+++
+++export function setSubpageUndoAction(pageId: string, action: SubpageUndoAction): void {
+++  subpageUndoActions.set(pageId, action);
+++}
+++
+++export function getSubpageUndoAction(pageId: string): SubpageUndoAction | undefined {
+++  return subpageUndoActions.get(pageId);
+++}
+++
+++export function clearSubpageUndoAction(pageId: string): void {
+++  subpageUndoActions.delete(pageId);
+++}
++diff --git a/frontend/src/components/Sidebar/PageTree.tsx b/frontend/src/components/Sidebar/PageTree.tsx
++index b6b1fc5..f789a75 100644
++--- a/frontend/src/components/Sidebar/PageTree.tsx
+++++ b/frontend/src/components/Sidebar/PageTree.tsx
++@@ -371,7 +371,7 @@ export default function PageTree() {
++       if (fromParentId === currentPageId) {
++         document.dispatchEvent(new CustomEvent('subpage-deleted', { detail: { pageId: movedId } }));
++       } else if (toParentId === currentPageId) {
++-        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: movedId } }));
+++        document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: movedId, afterId: toAfterId, fromParentId } }));
++       }
++     }
++ 
++diff --git a/patches/before-cleanup-20260518-235703.patch b/patches/before-cleanup-20260518-235703.patch
++new file mode 100644
++index 0000000..8515af9
++--- /dev/null
+++++ b/patches/before-cleanup-20260518-235703.patch
++@@ -0,0 +1,319 @@
+++diff --git a/CLAUDE.md b/CLAUDE.md
+++new file mode 100644
+++index 0000000..533d0c4
+++--- /dev/null
++++++ b/CLAUDE.md
+++@@ -0,0 +1,15 @@
++++# MDLibrary 项目规范
++++
++++## 项目概述
++++Notion 风格的知识库应用，React + Vite 前端，Go 后端，使用 BlockNote (v0.50) 编辑器。
++++
++++## 规范文档
++++- **工作流程**：`~/.ccgui/docs/工作流程.md` — 所有非平凡任务的执行流程
++++- **前端复刻方法论**：`~/.ccgui/docs/前端复刻问题解决方法论.md` — 复刻参考产品 UI 行为时的完整方法论：讨论→测量参考→对比差异→计划→实施→自检
++++- **前端产品设计方法论**：`~/.ccgui/docs/前端产品设计方法论.md` — 自己设计产品交互时的方法论：理解需求→定义交互规则→计划→实施→体验走查
++++- **浏览器调试指南**：`~/.ccgui/docs/浏览器调试项目操作指南.md` — MCP 浏览器工具的操作手册：页面管理、JS 执行、测量模式、常见问题
++++
++++## 关键约定
++++- 构建：必须 `cd frontend && npx vite build`（不是 Next.js）
++++- 修改文件前先检索规范文档
++++- 遇到问题先找根因，不采用补丁式修复
+++diff --git a/backend/internal/service/page_service.go b/backend/internal/service/page_service.go
+++index c1db598..6fc5880 100644
+++--- a/backend/internal/service/page_service.go
++++++ b/backend/internal/service/page_service.go
+++@@ -975,17 +975,60 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID
+++ 		}
+++ 	}
+++ 
+++-	// Rebuild cache to discover all new files
+++-	if err := s.RebuildCache(spaceSlug); err != nil {
+++-		return nil, fmt.Errorf("failed to rebuild cache: %w", err)
++++	// Insert new page into cache directly (like Create does), no full RebuildCache
++++	maxSort, _ := repo.MaxSortOrder()
++++	created, err := repo.Create(&model.Page{
++++		ID:        newPageID,
++++		Title:     newTitle,
++++		FilePath:  newRelPath,
++++		Icon:      fm.Icon,
++++		SortOrder: maxSort + 1,
++++	})
++++	if err != nil {
++++		return nil, fmt.Errorf("failed to create cache entry: %w", err)
++++	}
++++
++++	// Register child pages in cache (if copied directory exists)
++++	newChildDir := filepath.Join(targetDir, newTitle)
++++	if info, err := os.Stat(newChildDir); err == nil && info.IsDir() {
++++		s.registerChildPages(repo, newChildDir, newRelPath)
+++ 	}
+++ 
+++-	// Find the new page by its file path
+++-	repo, err = s.getRepo(spaceSlug)
++++	return created, nil
++++}
++++
++++// registerChildPages walks a directory and creates cache entries for all .md files.
++++// relBase is the relative path prefix (from docsDir) for constructing file_path values.
++++func (s *PageService) registerChildPages(repo *repository.PageRepository, absDir string, relBase string) {
++++	maxSort, _ := repo.MaxSortOrder()
++++	sortOrder := maxSort + 1
++++
++++	entries, err := os.ReadDir(absDir)
+++ 	if err != nil {
+++-		return nil, err
++++		return
++++	}
++++	for _, entry := range entries {
++++		if entry.IsDir() {
++++			// Recurse into subdirectory (its parent is the .md file with the same name)
++++			childAbsDir := filepath.Join(absDir, entry.Name())
++++			childRelBase := filepath.Join(relBase, entry.Name())
++++			s.registerChildPages(repo, childAbsDir, childRelBase)
++++			continue
++++		}
++++		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
++++			continue
++++		}
++++		childRelPath := filepath.Join(relBase, entry.Name())
++++		pageID := s.ensurePageUUID(childRelPath)
++++		title := strings.TrimSuffix(entry.Name(), ".md")
++++		repo.Create(&model.Page{
++++			ID:        pageID,
++++			Title:     title,
++++			FilePath:  childRelPath,
++++			SortOrder: float64(sortOrder),
++++		})
++++		sortOrder++
+++ 	}
+++-	return repo.GetByPath(newRelPath)
+++ }
+++ 
+++ // copyDirRecursive copies a directory tree from src to dst.
+++@@ -1255,8 +1298,8 @@ func (s *PageService) getDirectChildIDs(repo *repository.PageRepository, filePat
+++ }
+++ 
+++ // maintainSubpageBlocks ensures the markdown body has exactly one <sub-page data-id="UUID"></sub-page>
+++-// for each direct child page. It only removes stale subpage lines and appends missing ones.
+++-// It does NOT reorder existing subpage lines — their positions are preserved.
++++// for each direct child page. It removes stale subpage lines, appends missing ones,
++++// and updates database sort_order to match the order of subpage tags in the markdown.
+++ // Reads both new tag format and legacy comment format; always writes new tag format.
+++ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRepository, filePath string) string {
+++ 	// Use GetSiblings for sorted child IDs (sort_order ASC)
+++@@ -1292,8 +1335,9 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+++ 		return strings.TrimRight(result, "\n")
+++ 	}
+++ 
+++-	// Scan body: collect existing subpage IDs, build cleaned lines
++++	// Scan body: collect existing subpage IDs in order, build cleaned lines
+++ 	existingSubpageSet := make(map[string]bool)
++++	var orderedIDs []string // subpage IDs in markdown order
+++ 	var cleanedLines []string
+++ 	changed := false
+++ 
+++@@ -1301,7 +1345,10 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+++ 		id := parseSubpageID(line)
+++ 		if id != "" {
+++ 			if childIDSet[id] {
+++-				existingSubpageSet[id] = true
++++				if !existingSubpageSet[id] {
++++					existingSubpageSet[id] = true
++++					orderedIDs = append(orderedIDs, id)
++++				}
+++ 				// Re-write in new tag format (migrates legacy comments)
+++ 				newTag := formatSubpageTag(id)
+++ 				if strings.TrimSpace(line) != newTag {
+++@@ -1327,14 +1374,37 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+++ 		}
+++ 	}
+++ 
+++-	// Nothing to change
+++-	if len(missing) == 0 && !changed {
+++-		return body
+++-	}
+++-
+++ 	// Append missing subpages at the end
+++ 	for _, id := range missing {
+++ 		cleanedLines = append(cleanedLines, formatSubpageTag(id))
++++		orderedIDs = append(orderedIDs, id)
++++	}
++++
++++	// Update database sort_order to match markdown tag order
++++	if len(orderedIDs) > 0 {
++++		siblingMap := make(map[string]*model.Page)
++++		for _, p := range siblings {
++++			siblingMap[p.ID] = p
++++		}
++++		var sortUpdates []repository.SortOrderUpdate
++++		for i, id := range orderedIDs {
++++			if p, ok := siblingMap[id]; ok {
++++				newSort := float64(i)
++++				if p.SortOrder != newSort {
++++					sortUpdates = append(sortUpdates, repository.SortOrderUpdate{ID: id, SortOrder: newSort})
++++				}
++++			}
++++		}
++++		if len(sortUpdates) > 0 {
++++			if err := repo.UpdateSortOrders(sortUpdates); err != nil {
++++				log.Printf("[maintainSubpageBlocks] failed to update sort_order: %v", err)
++++			}
++++		}
++++	}
++++
++++	// Nothing to change in content
++++	if len(missing) == 0 && !changed {
++++		return body
+++ 	}
+++ 
+++ 	result := strings.Join(cleanedLines, "\n")
+++diff --git a/frontend/public/vite.svg b/frontend/public/vite.svg
+++new file mode 100644
+++index 0000000..91f0685
+++--- /dev/null
++++++ b/frontend/public/vite.svg
+++@@ -0,0 +1,4 @@
++++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
++++  <rect width="100" height="100" rx="12" fill="#4F46E5"/>
++++  <text x="50" y="68" font-size="50" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">M</text>
++++</svg>
+++diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+++index 43c59e6..c10b1a2 100644
+++--- a/frontend/src/components/Editor/PageEditor.tsx
++++++ b/frontend/src/components/Editor/PageEditor.tsx
+++@@ -9,12 +9,14 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
+++ import { removeBlocksEnhanced } from './blockHelpers';
+++ import { PageReferenceBlockSpec } from './PageReferenceBlock';
+++ import { TextSelection } from '@tiptap/pm/state';
++++import { setClipboardData, getClipboardData } from './blockClipboardState';
+++ import { BookmarkBlockSpec } from './BookmarkBlock';
+++ import { SubpageBlockSpec } from './SubpageBlock';
+++ import LinkPasteMenu from './LinkPasteMenu';
+++ import { getBlockDragData, markDragHandled } from './blockDragState';
+++ import { pagesApi } from '../../api/pages';
+++ import { createMirror } from '../../services/mirrorStore';
++++import { useSpaceStore } from '../../stores/spaceStore';
+++ import { flushSync } from '../../services/syncModule';
+++ 
+++ // Custom schema: default blocks + pageReference + bookmark
+++@@ -624,6 +626,88 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+++         return;
+++       }
+++ 
++++      // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
++++      if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
++++        const ids = getSelectedBlockIds();
++++        if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
++++        e.preventDefault();
++++        e.stopImmediatePropagation();
++++
++++        const isCut = e.key === 'x';
++++
++++        // Collect selected block data (deep clone to avoid references to editor blocks)
++++        const selectedBlocks = JSON.parse(JSON.stringify(
++++          editor.document.filter((b: any) => ids.includes(b.id))
++++        ));
++++        const markdown = blocksToMarkdown(selectedBlocks as any);
++++        setClipboardData(selectedBlocks, markdown, isCut);
++++
++++        // Also write to system clipboard for external paste
++++        navigator.clipboard.writeText(markdown).catch(() => {});
++++
++++        if (isCut) {
++++          // Cut: delete selected blocks after copying
++++          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
++++          updateSelection([]);
++++          (document.activeElement as HTMLElement)?.blur?.();
++++          document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
++++          editor.focus();
++++        }
++++        return;
++++      }
++++
++++      // Cmd+V: paste blocks from internal clipboard
++++      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
++++        const clipData = getClipboardData();
++++        if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
++++
++++        e.preventDefault();
++++        e.stopImmediatePropagation();
++++
++++        const ids = getSelectedBlockIds();
++++        if (ids.length > 0) {
++++          // Block selection mode: replace selected blocks with clipboard content
++++          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
++++          updateSelection([]);
++++        }
++++
++++        // Insert clipboard blocks at cursor position
++++        const currentBlock = editor.getTextCursorPosition().block;
++++
++++        // Handle async: duplicate subpage pages for copy, then insert blocks
++++        (async () => {
++++          const { spaceSlug, pageId: currentPageId } = identityRef.current;
++++          // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
++++          if (!clipData.isCut) {
++++            const subpageBlocks = clipData.blocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
++++            for (const block of subpageBlocks) {
++++              try {
++++                const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
++++                block.props.pageId = newPage.id;
++++              } catch (err) {
++++                console.error('[PageEditor] Failed to duplicate subpage:', err);
++++              }
++++            }
++++          }
++++
++++          // Strip block IDs so BlockNote creates fresh ones
++++          const blocksToInsert = clipData.blocks.map((b: any) => {
++++            const { id, ...rest } = b;
++++            return rest;
++++          });
++++          editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
++++          editor.focus();
++++
++++          // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
++++          const markdown = blocksToMarkdown(editor.document);
++++          await createMirror(spaceSlug, currentPageId, markdown);
++++          hasChangesRef.current = false;
++++          await flushSync();
++++          await useSpaceStore.getState().refreshAll();
++++        })();
++++        return;
++++      }
++++
+++       if (e.key !== 'Escape' && e.key !== 'Backspace' && e.key !== 'Delete') return;
+++ 
+++       // If a floating menu is open (drag menu or slash menu), let it handle Escape first
+++diff --git a/frontend/src/components/Editor/blockClipboardState.ts b/frontend/src/components/Editor/blockClipboardState.ts
+++new file mode 100644
+++index 0000000..db2be77
+++--- /dev/null
++++++ b/frontend/src/components/Editor/blockClipboardState.ts
+++@@ -0,0 +1,25 @@
++++/**
++++ * Module-level clipboard state for cross-document block copy/paste.
++++ * Persists across SPA page navigations (React Router).
++++ */
++++
++++let clipboardBlocks: any[] | null = null;
++++let clipboardMarkdown: string | null = null;
++++let clipboardIsCut = false;
++++
++++export function setClipboardData(blocks: any[], markdown: string, isCut: boolean): void {
++++  clipboardBlocks = blocks;
++++  clipboardMarkdown = markdown;
++++  clipboardIsCut = isCut;
++++}
++++
++++export function getClipboardData(): { blocks: any[]; markdown: string; isCut: boolean } | null {
++++  if (!clipboardBlocks || clipboardBlocks.length === 0) return null;
++++  return { blocks: clipboardBlocks, markdown: clipboardMarkdown!, isCut: clipboardIsCut };
++++}
++++
++++export function clearClipboardData(): void {
++++  clipboardBlocks = null;
++++  clipboardMarkdown = null;
++++  clipboardIsCut = false;
++++}
+diff --git a/patches/pre-commit-20260519140814.patch b/patches/pre-commit-20260519140814.patch
+new file mode 100644
+index 0000000..bcda1be
+--- /dev/null
++++ b/patches/pre-commit-20260519140814.patch
+@@ -0,0 +1,447 @@
++diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
++index 21ffe3c..b6eedbd 100644
++--- a/frontend/src/components/Editor/PageEditor.tsx
+++++ b/frontend/src/components/Editor/PageEditor.tsx
++@@ -9,6 +9,9 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
++ import { removeBlocksEnhanced } from './blockHelpers';
++ import { PageReferenceBlockSpec } from './PageReferenceBlock';
++ import { TextSelection } from '@tiptap/pm/state';
+++import { Plugin, PluginKey } from '@tiptap/pm/state';
+++import { Decoration, DecorationSet } from '@tiptap/pm/view';
+++import { Extension } from '@tiptap/core';
++ import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
++ import { BookmarkBlockSpec } from './BookmarkBlock';
++ import { SubpageBlockSpec } from './SubpageBlock';
++@@ -134,6 +137,98 @@ function getCustomSlashMenuItems(editor: any) {
++   ];
++ }
++ 
+++/**
+++ * TipTap extension that fixes BlockNote's numbered list indexing on init.
+++ *
+++ * BlockNote's built-in numbered-list-indexing-decorations plugin has a bug:
+++ * its init() calls rr(tr, {decorations: empty}) where tr.changedRange() is null
+++ * (no steps on initial transaction), causing it to skip all decoration creation.
+++ * This results in numberedListItem elements rendering without data-index,
+++ * which makes CSS ::before show just "." instead of "1.", "2.", etc.
+++ *
+++ * This extension adds a ProseMirror plugin that provides the correct data-index
+++ * decorations on init, and steps aside once BlockNote's own plugin starts working
+++ * (after the first document change triggers its apply()).
+++ */
+++const NumberedListIndexFix = Extension.create({
+++  name: 'numberedListIndexFix',
+++
+++  addProseMirrorPlugins() {
+++    const pluginKey = new PluginKey('numbered-list-index-fix');
+++
+++    return [
+++      new Plugin({
+++        key: pluginKey,
+++        state: {
+++          init(_, state) {
+++            return buildNumberedIndexDecorations(state.doc);
+++          },
+++          apply(tr, oldValue, oldState, newState) {
+++            // If the document didn't change, keep existing decorations
+++            if (!tr.docChanged) return oldValue;
+++            // Rebuild for the new document state
+++            return buildNumberedIndexDecorations(newState.doc);
+++          },
+++        },
+++        props: {
+++          decorations(state) {
+++            return pluginKey.getState(state) ?? DecorationSet.empty;
+++          },
+++        },
+++      }),
+++    ];
+++  },
+++});
+++
+++/**
+++ * Build a DecorationSet that adds data-index to every numberedListItem in the document.
+++ * Uses the same logic as BlockNote's nr() function:
+++ * - Walk document top-down, tracking sequential numberedListItem sequences
+++ * - Reset index to 1 when the previous sibling is not a numberedListItem
+++ * - Handle both top-level blocks and nested block groups
+++ */
+++function buildNumberedIndexDecorations(doc: any): DecorationSet {
+++  const decorations: Decoration[] = [];
+++  // Track sequence index and state per parent blockGroup.
+++  // This ensures nested blockGroups (e.g., toggle heading children) have
+++  // independent numbering sequences from the parent level.
+++  const indexByParent = new Map<any, number>();
+++  const prevWasNumberedByParent = new Map<any, boolean>();
+++
+++  doc.descendants((node: any, pos: number, parent: any) => {
+++    if (node.type.name !== 'blockContainer') return;
+++    const firstChild = node.firstChild;
+++    const isNumbered = firstChild && firstChild.type.name === 'numberedListItem';
+++
+++    if (!isNumbered) {
+++      prevWasNumberedByParent.set(parent, false);
+++      return;
+++    }
+++
+++    const prevWasNumbered = prevWasNumberedByParent.get(parent) ?? false;
+++    let index = indexByParent.get(parent) ?? 0;
+++
+++    if (!prevWasNumbered) {
+++      const startAttr = firstChild.attrs?.start;
+++      index = startAttr ? startAttr - 1 : 0;
+++    }
+++    index++;
+++
+++    indexByParent.set(parent, index);
+++    prevWasNumberedByParent.set(parent, true);
+++
+++    // Decoration targets the numberedListItem node inside the blockContainer.
+++    // pos is the start of blockContainer, +1 for its opening.
+++    const from = pos + 1;
+++    const to = from + firstChild.nodeSize;
+++    decorations.push(
+++      Decoration.node(from, to, { 'data-index': index.toString() }),
+++    );
+++  });
+++
+++  return DecorationSet.create(doc, decorations);
+++}
+++
++ interface PageEditorProps {
++   initialContent: string;
++   pageIdentity: { spaceSlug: string; pageId: string };
++@@ -166,6 +261,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
++     initialContent: markdownToBlocks(initialContent) as any,
++     dictionary: customZh as any,
++     trailingBlock: false,
+++    _tiptapOptions: { extensions: [NumberedListIndexFix] },
++   } as any);
++ 
++   // Sync subpage blocks with sidebar create/delete/reorder events
++diff --git a/frontend/src/utils/markdown.ts b/frontend/src/utils/markdown.ts
++index c7e5b68..50759c1 100644
++--- a/frontend/src/utils/markdown.ts
+++++ b/frontend/src/utils/markdown.ts
++@@ -22,7 +22,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
++     }
++ 
++     // Zero-width space marker = preserved empty paragraph
++-    if (trimmed === '\u200B') {
+++    if (trimmed === '​') {
++       blocks.push({
++         type: 'paragraph',
++         content: [{ type: 'text', text: '', styles: {} }],
++@@ -31,6 +31,57 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
++       continue;
++     }
++ 
+++    // Toggle blocks: <toggle-h level="N"> ... </toggle-h> or <toggle-list> ... </toggle-list>
+++    const toggleOpenMatch = trimmed.match(/^<(toggle-h|toggle-list)([^>]*)>$/);
+++    if (toggleOpenMatch) {
+++      const tagName = toggleOpenMatch[1];
+++      const attrs = toggleOpenMatch[2];
+++      const openTagRegex = new RegExp(`^<${tagName}[^>]*>$`);
+++      const closeTag = `</${tagName}>`;
+++
+++      // Collect all inner lines, handling nesting
+++      const innerLines: string[] = [];
+++      let depth = 1;
+++      i++;
+++      while (i < lines.length && depth > 0) {
+++        const innerTrimmed = lines[i].trim();
+++        if (openTagRegex.test(innerTrimmed)) depth++;
+++        if (innerTrimmed === closeTag) depth--;
+++        if (depth > 0) innerLines.push(lines[i]);
+++        i++;
+++      }
+++
+++      // Extract <title> and <content> sections
+++      const titleText = extractTagContent(innerLines, 'title');
+++      const contentText = extractTagContent(innerLines, 'content');
+++
+++      // Build block
+++      if (tagName === 'toggle-h') {
+++        const levelMatch = attrs.match(/level="(\d+)"/);
+++        const level = levelMatch ? parseInt(levelMatch[1]) : 1;
+++        const block: any = {
+++          type: 'heading',
+++          props: { level, isToggleable: true },
+++          content: parseInlineFormatting(titleText),
+++        };
+++        if (contentText.trim()) {
+++          block.children = markdownToBlocks(contentText);
+++        }
+++        blocks.push(block);
+++      } else {
+++        // toggle-list
+++        const block: any = {
+++          type: 'toggleListItem',
+++          content: parseInlineFormatting(titleText),
+++        };
+++        if (contentText.trim()) {
+++          block.children = markdownToBlocks(contentText);
+++        }
+++        blocks.push(block);
+++      }
+++      continue;
+++    }
+++
++     // Code block
++     if (trimmed.startsWith('```')) {
++       const language = trimmed.slice(3).trim();
++@@ -189,6 +240,48 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
++   return blocks;
++ }
++ 
+++/**
+++ * Extract content between <tagName>...</tagName> from a lines array.
+++ * Handles multi-line content and nesting (e.g. <content> inside <content>).
+++ */
+++function extractTagContent(lines: string[], tagName: string): string {
+++  const openTag = `<${tagName}>`;
+++  const closeTag = `</${tagName}>`;
+++
+++  let startIdx = -1;
+++  let endIdx = -1;
+++  let depth = 0;
+++
+++  for (let j = 0; j < lines.length; j++) {
+++    const line = lines[j].trim();
+++
+++    if (startIdx === -1) {
+++      // Haven't found opening tag yet
+++      if (line === openTag) {
+++        startIdx = j;
+++        depth = 1;
+++      } else if (line.startsWith(openTag) && line.endsWith(closeTag)) {
+++        // Single line: <title>text</title>
+++        return line.slice(openTag.length, line.length - closeTag.length);
+++      }
+++    } else {
+++      // Collecting content
+++      // Check for nested same-name tags (e.g. <content> inside <content>)
+++      if (line === openTag) depth++;
+++      if (line === closeTag) {
+++        depth--;
+++        if (depth === 0) {
+++          endIdx = j;
+++          break;
+++        }
+++      }
+++    }
+++  }
+++
+++  if (startIdx === -1 || endIdx === -1) return '';
+++  return lines.slice(startIdx + 1, endIdx).join('\n');
+++}
+++
++ /**
++  * Parse inline formatting (bold, italic, code, links)
++  */
++@@ -277,93 +370,124 @@ function parseInlineFormatting(text: string): any[] {
++  * Convert BlockNote blocks to markdown
++  */
++ export function blocksToMarkdown(blocks: any[]): string {
++-  const lines: string[] = [];
++-
++-  for (const block of blocks) {
++-    switch (block.type) {
++-      case 'heading':
++-        const level = block.props?.level || 1;
++-        const headingText = getTextContent(block.content);
++-        lines.push(`${'#'.repeat(level)} ${headingText}`);
++-        break;
++-
++-      case 'paragraph':
++-        const paragraphText = getFormattedText(block.content);
++-        if (paragraphText) {
++-          lines.push(paragraphText);
++-        } else {
++-          // Empty paragraph: use zero-width space marker to survive markdown round-trip
++-          lines.push('\u200B');
++-        }
++-        break;
++-
++-      case 'bulletListItem':
++-        const bulletText = getFormattedText(block.content);
++-        lines.push(`- ${bulletText}`);
++-        break;
++-
++-      case 'numberedListItem':
++-        const numberText = getFormattedText(block.content);
++-        lines.push(`1. ${numberText}`);
++-        break;
++-
++-      case 'checkListItem':
++-        const checkboxText = getFormattedText(block.content);
++-        const checked = block.props?.checked ? 'x' : ' ';
++-        lines.push(`- [${checked}] ${checkboxText}`);
++-        break;
++-
++-      case 'codeBlock':
++-        const language = block.props?.language || '';
++-        const code = getTextContent(block.content);
++-        lines.push(`\`\`\`${language}`);
++-        lines.push(code);
++-        lines.push('```');
++-        break;
++-
++-      case 'quote':
++-        const quoteText = getFormattedText(block.content);
++-        lines.push(`> ${quoteText}`);
++-        break;
++-
++-      case 'divider':
++-        lines.push('---');
++-        break;
++-
++-      case 'image':
++-        const url = block.props?.url || '';
++-        const caption = block.props?.caption || '';
++-        lines.push(`![${caption}](${url})`);
++-        break;
++-
++-      case 'pageReference':
++-        if (block.props?.pageId) {
++-          lines.push(`<page-ref data-id="${block.props.pageId}"></page-ref>`);
++-        }
++-        break;
+++  return blocks.map(block => serializeBlock(block)).join('\n');
+++}
++ 
++-      case 'bookmark':
++-        if (block.props?.url) {
++-          lines.push(`<book-mark data-url="${block.props.url}"></book-mark>`);
++-        }
++-        break;
+++/**
+++ * Serialize a single block to markdown, handling toggle blocks and children recursively.
+++ */
+++function serializeBlock(block: any): string {
+++  // Toggle heading
+++  if (block.type === 'heading' && block.props?.isToggleable) {
+++    const level = block.props.level || 1;
+++    const title = getFormattedText(block.content);
+++    const childrenMd = block.children?.length
+++      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+++      : '';
+++    return `<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`;
+++  }
++ 
++-      case 'subpage':
++-        if (block.props?.pageId) {
++-          lines.push(`<sub-page data-id="${block.props.pageId}"></sub-page>`);
++-        }
++-        break;
+++  // Toggle list item
+++  if (block.type === 'toggleListItem') {
+++    const title = getFormattedText(block.content);
+++    const childrenMd = block.children?.length
+++      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+++      : '';
+++    return `<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`;
+++  }
++ 
++-      case 'table':
++-        lines.push('<!-- Table not fully supported in markdown round-trip -->');
++-        break;
+++  // Regular blocks
+++  const line = serializeRegularBlock(block);
++ 
++-      default:
++-        lines.push(`<!-- Unknown block type: ${block.type} -->`);
++-    }
+++  // If a regular block has children, append them
+++  if (block.children?.length) {
+++    const childrenMd = block.children.map((c: any) => serializeBlock(c)).join('\n');
+++    return line + '\n' + childrenMd;
++   }
++ 
++-  return lines.join('\n');
+++  return line;
+++}
+++
+++/**
+++ * Serialize a regular (non-toggle) block to a single markdown line.
+++ */
+++function serializeRegularBlock(block: any): string {
+++  switch (block.type) {
+++    case 'heading': {
+++      const level = block.props?.level || 1;
+++      const headingText = getTextContent(block.content);
+++      return `${'#'.repeat(level)} ${headingText}`;
+++    }
+++
+++    case 'paragraph': {
+++      const paragraphText = getFormattedText(block.content);
+++      if (paragraphText) {
+++        return paragraphText;
+++      }
+++      // Empty paragraph: use zero-width space marker to survive markdown round-trip
+++      return '​';
+++    }
+++
+++    case 'bulletListItem': {
+++      const bulletText = getFormattedText(block.content);
+++      return `- ${bulletText}`;
+++    }
+++
+++    case 'numberedListItem': {
+++      const numberText = getFormattedText(block.content);
+++      return `1. ${numberText}`;
+++    }
+++
+++    case 'checkListItem': {
+++      const checkboxText = getFormattedText(block.content);
+++      const checked = block.props?.checked ? 'x' : ' ';
+++      return `- [${checked}] ${checkboxText}`;
+++    }
+++
+++    case 'codeBlock': {
+++      const language = block.props?.language || '';
+++      const code = getTextContent(block.content);
+++      return `\`\`\`${language}\n${code}\n\`\`\``;
+++    }
+++
+++    case 'quote': {
+++      const quoteText = getFormattedText(block.content);
+++      return `> ${quoteText}`;
+++    }
+++
+++    case 'divider':
+++      return '---';
+++
+++    case 'image': {
+++      const url = block.props?.url || '';
+++      const caption = block.props?.caption || '';
+++      return `![${caption}](${url})`;
+++    }
+++
+++    case 'pageReference':
+++      if (block.props?.pageId) {
+++        return `<page-ref data-id="${block.props.pageId}"></page-ref>`;
+++      }
+++      return '';
+++
+++    case 'bookmark':
+++      if (block.props?.url) {
+++        return `<book-mark data-url="${block.props.url}"></book-mark>`;
+++      }
+++      return '';
+++
+++    case 'subpage':
+++      if (block.props?.pageId) {
+++        return `<sub-page data-id="${block.props.pageId}"></sub-page>`;
+++      }
+++      return '';
+++
+++    case 'table':
+++      return '<!-- Table not fully supported in markdown round-trip -->';
+++
+++    default:
+++      return `<!-- Unknown block type: ${block.type} -->`;
+++  }
++ }
++ 
++ /**
+diff --git a/patches/pre-commit-20260519143524.patch b/patches/pre-commit-20260519143524.patch
+new file mode 100644
+index 0000000..bc2b25a
+--- /dev/null
++++ b/patches/pre-commit-20260519143524.patch
+@@ -0,0 +1,49 @@
++diff --git a/frontend/src/components/Sidebar/PageTreeItem.tsx b/frontend/src/components/Sidebar/PageTreeItem.tsx
++index bff0fa9..c640fb5 100644
++--- a/frontend/src/components/Sidebar/PageTreeItem.tsx
+++++ b/frontend/src/components/Sidebar/PageTreeItem.tsx
++@@ -35,6 +35,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
++   const location = useLocation();
++   const { spaceSlug } = useParams<{ spaceSlug: string }>();
++   const { createPage, deletePage, updateMetadata, refreshPageTree, duplicatePage, movePage } = usePageStore();
+++  const refreshStarredAndRecent = useSpaceStore(s => s.refreshStarredAndRecent);
++   const hasChildren = page.children && page.children.length > 0;
++   const isActive = new RegExp(`/p/${page.id}$`).test(location.pathname);
++   const isExpanded = expandedPageIds.has(page.id);
++@@ -155,7 +156,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
++         navigate(target, { replace: true });
++       }
++       await deletePage(spaceSlug, page.id);
++-      await refreshPageTree();
+++      await Promise.all([refreshPageTree(), refreshStarredAndRecent()]);
++ 
++       // Notify editor if the deleted page's parent is currently viewed
++       if (parentIsCurrent) {
++diff --git a/frontend/src/stores/spaceStore.ts b/frontend/src/stores/spaceStore.ts
++index 5f292cc..bdbf92e 100644
++--- a/frontend/src/stores/spaceStore.ts
+++++ b/frontend/src/stores/spaceStore.ts
++@@ -16,6 +16,7 @@ interface SpaceState {
++   refreshPageTree: () => Promise<void>;
++   fetchStarred: (spaceSlug: string) => Promise<void>;
++   fetchRecent: (spaceSlug: string) => Promise<void>;
+++  refreshStarredAndRecent: () => Promise<void>;
++   refreshAll: () => Promise<void>;
++ }
++ 
++@@ -84,6 +85,15 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
++     }
++   },
++ 
+++  refreshStarredAndRecent: async () => {
+++    const { currentSpace } = get();
+++    if (currentSpace) {
+++      await Promise.all([
+++        get().fetchStarred(currentSpace.slug),
+++        get().fetchRecent(currentSpace.slug),
+++      ]);
+++    }
+++  },
++   refreshAll: async () => {
++     const { currentSpace } = get();
++     if (currentSpace) {

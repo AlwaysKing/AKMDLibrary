@@ -5,7 +5,7 @@ import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
-import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen } from './BlockNoteComponents';
+import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER } from './BlockNoteComponents';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection } from '@tiptap/pm/state';
@@ -42,13 +42,13 @@ const customZh = {
   ...zh,
   slash_menu: {
     ...zh.slash_menu,
-    heading: { ...zh.slash_menu.heading, group: '基础区块' },
-    heading_2: { ...zh.slash_menu.heading_2, group: '基础区块' },
-    heading_3: { ...zh.slash_menu.heading_3, group: '基础区块' },
-    heading_4: { ...zh.slash_menu.heading_4, group: '基础区块' },
-    toggle_heading: { ...zh.slash_menu.toggle_heading, group: '基础区块', title: '一级折叠标题' },
-    toggle_heading_2: { ...zh.slash_menu.toggle_heading_2, group: '基础区块', title: '二级折叠标题' },
-    toggle_heading_3: { ...zh.slash_menu.toggle_heading_3, group: '基础区块', title: '三级折叠标题' },
+    heading: { ...zh.slash_menu.heading, group: '基础区块', title: '标题 1' },
+    heading_2: { ...zh.slash_menu.heading_2, group: '基础区块', title: '标题 2' },
+    heading_3: { ...zh.slash_menu.heading_3, group: '基础区块', title: '标题 3' },
+    heading_4: { ...zh.slash_menu.heading_4, group: '基础区块', title: '标题 4' },
+    toggle_heading: { ...zh.slash_menu.toggle_heading, group: '基础区块', title: '折叠标题 1' },
+    toggle_heading_2: { ...zh.slash_menu.toggle_heading_2, group: '基础区块', title: '折叠标题 2' },
+    toggle_heading_3: { ...zh.slash_menu.toggle_heading_3, group: '基础区块', title: '折叠标题 3' },
     quote: { ...zh.slash_menu.quote, group: '高级区块' },
     code_block: { ...zh.slash_menu.code_block, group: '高级区块' },
     divider: { ...zh.slash_menu.divider, group: '高级区块' },
@@ -60,6 +60,40 @@ const customZh = {
     paragraph: { ...zh.slash_menu.paragraph, group: '列表' },
   },
 };
+
+// Notion SVG paths for heading icons (viewBox 0 0 20 20, same as Turn Into menu)
+const NOTION_HEADING_PATHS: Record<number, string> = {
+  1: 'M4.1 4.825a.625.625 0 0 0-1.25 0v10.35a.625.625 0 0 0 1.25 0V10.4h6.4v4.775a.625.625 0 0 0 1.25 0V4.825a.625.625 0 1 0-1.25 0V9.15H4.1zM17.074 8.45a.6.6 0 0 1 .073.362q.003.03.003.063v6.3a.625.625 0 1 1-1.25 0V9.802l-1.55.846a.625.625 0 1 1-.6-1.098l2.476-1.35a.625.625 0 0 1 .848.25',
+  2: 'M3.65 4.825a.625.625 0 1 0-1.25 0v10.35a.625.625 0 0 0 1.25 0V10.4h6.4v4.775a.625.625 0 0 0 1.25 0V4.825a.625.625 0 1 0-1.25 0V9.15h-6.4zm10.104 5.164c.19-.457.722-.84 1.394-.84.89 0 1.48.627 1.48 1.238 0 .271-.104.53-.302.746l-3.837 3.585a.625.625 0 0 0 .427 1.082h4.5a.625.625 0 1 0 0-1.25H14.5l2.695-2.518.027-.028c.406-.43.657-.994.657-1.617 0-1.44-1.299-2.488-2.731-2.488-1.128 0-2.145.643-2.548 1.608a.625.625 0 0 0 1.154.482',
+  3: 'M2.877 4.2c.346 0 .625.28.625.625V9.15h6.4V4.825a.625.625 0 0 1 1.25 0v10.35a.625.625 0 0 1-1.25 0V10.4h-6.4v4.775a.625.625 0 0 1-1.25 0V4.825c0-.345.28-.625.625-.625M14.93 9.37c-.692 0-1.183.34-1.341.671a.625.625 0 1 1-1.128-.539c.416-.87 1.422-1.382 2.47-1.382.686 0 1.33.212 1.818.584.487.373.843.932.843 1.598 0 .629-.316 1.162-.76 1.533l.024.018c.515.389.892.972.892 1.669 0 .696-.377 1.28-.892 1.668s-1.198.61-1.926.61c-1.1 0-2.143-.514-2.599-1.389a.625.625 0 0 1 1.109-.578c.187.36.728.717 1.49.717.482 0 .895-.148 1.174-.358s.394-.453.394-.67-.116-.46-.394-.67c-.28-.21-.692-.358-1.174-.358h-.461a.625.625 0 0 1 0-1.25h.357a1 1 0 0 1 .104-.01c.437 0 .81-.135 1.06-.326s.351-.41.351-.605-.101-.415-.351-.606-.623-.327-1.06-.327',
+  4: 'M15.43 8.22c.663-.622 1.779-.162 1.779.776v3.644h.513a.625.625 0 0 1 0 1.25h-.513v1.329a.625.625 0 0 1-1.25 0v-1.33H12.75a.625.625 0 0 1-.625-.624v-.008a.55.55 0 0 1 .092-.347l3.072-4.524.01-.015.027-.039.02-.025.02-.026.012-.011zm-1.7 4.42h2.229V9.357zM10.527 4.2c.345 0 .625.28.625.625v4.94l.001.01v5.4a.626.626 0 0 1-1.25 0V10.4h-6.4v4.775a.626.626 0 0 1-1.251 0V4.825a.626.626 0 0 1 1.25 0V9.15h6.4V4.825c0-.345.28-.625.625-.625',
+};
+
+// Notion SVG paths for toggle heading icons (viewBox 0 0 20 20)
+const NOTION_TOGGLE_HEADING_PATHS: Record<number, string> = {
+  1: 'M7.085 5.4a.577.577 0 1 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm11.506 3.225a.55.55 0 0 1 .064.32l.003.055v5.6a.55.55 0 1 1-1.1 0V9.815l-1.386.756a.55.55 0 1 1-.527-.966l2.2-1.2a.55.55 0 0 1 .746.22M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
+  2: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
+  3: 'M6.508 4.823c.318 0 .577.258.577.577v3.823h5.645V5.4a.577.577 0 0 1 1.154 0v9.2a.577.577 0 1 1-1.154 0v-4.223H7.086V14.6a.577.577 0 1 1-1.154 0V5.4c0-.319.258-.577.577-.577m10.775 4.415c-.644 0-1.105.316-1.256.631a.55.55 0 1 1-.992-.474c.377-.79 1.292-1.257 2.248-1.257.626 0 1.214.193 1.657.532s.765.846.765 1.45c0 .58-.297 1.072-.715 1.41l.05.036c.468.353.81.883.81 1.514 0 .63-.342 1.16-.81 1.514-.47.354-1.093.556-1.757.556-1.005 0-1.953-.47-2.368-1.264a.55.55 0 1 1 .976-.508c.178.341.685.672 1.392.672.448 0 .833-.138 1.094-.334.26-.197.372-.427.372-.636s-.111-.44-.372-.636c-.26-.196-.646-.334-1.094-.334h-.424a.55.55 0 0 1 0-1.1h.33a1 1 0 0 1 .094-.008c.406 0 .754-.127.989-.306.234-.18.333-.388.333-.576s-.099-.397-.333-.576c-.235-.18-.583-.306-.99-.306M.962 11.14c0 .455.495.735.885.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.885.5z',
+  4: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
+};
+
+// Notion heading icon — uses exact Notion SVG paths (viewBox 0 0 20 20)
+function NotionHeadingIcon({ level }: { level: number }) {
+  return (
+    <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">
+      <path d={NOTION_HEADING_PATHS[level]} />
+    </svg>
+  );
+}
+
+// Notion toggle heading icon — uses exact Notion SVG paths (viewBox 0 0 20 20)
+function NotionToggleHeadingIcon({ level }: { level: number }) {
+  return (
+    <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">
+      <path d={NOTION_TOGGLE_HEADING_PATHS[level]} />
+    </svg>
+  );
+}
 
 // Custom slash menu: default items filtered + subpage + toggle heading 4
 // Desired order for 基础区块: heading → heading_2 → heading_3 → heading_4 → toggle_heading → toggle_heading_2 → toggle_heading_3 → toggle_heading_4(custom)
@@ -80,6 +114,28 @@ function getCustomSlashMenuItems(editor: any) {
   const filtered = defaults.filter((item: any) =>
     item.key !== 'heading_5' && item.key !== 'heading_6'
   );
+  // Override heading icons with Notion SVG paths
+  const headingLevels: Record<string, number> = {
+    heading: 1,
+    heading_2: 2,
+    heading_3: 3,
+    heading_4: 4,
+  };
+  const toggleHeadingLevels: Record<string, number> = {
+    toggle_heading: 1,
+    toggle_heading_2: 2,
+    toggle_heading_3: 3,
+  };
+  for (const item of filtered) {
+    const hLevel = headingLevels[(item as any).key];
+    if (hLevel !== undefined) {
+      (item as any).icon = <NotionHeadingIcon level={hLevel} />;
+    }
+    const tLevel = toggleHeadingLevels[(item as any).key];
+    if (tLevel !== undefined) {
+      (item as any).icon = <NotionToggleHeadingIcon level={tLevel} />;
+    }
+  }
   // Sort 基础区块 items to: headings first, then toggle headings
   filtered.sort((a: any, b: any) => {
     const aOrder = BASE_BLOCK_ORDER[a.key];
@@ -87,14 +143,15 @@ function getCustomSlashMenuItems(editor: any) {
     if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
     return 0;
   });
-  return [
+  const allItems = [
     ...filtered,
     {
-      title: '四级折叠标题',
+      title: '折叠标题 4',
       subtext: '可折叠的四级标题',
+      key: 'toggle_heading_4',
       aliases: ['toggle_heading_4', 'toggle4'],
       group: '基础区块',
-      icon: <svg viewBox="0 0 24 24" style={{ width: '18px', height: '18px', fill: 'currentColor' }}><path d="M12.8 5.6H4v2h7.2l-1.6 1.6L11 10.8l3.8-3.8-3.8-3.8-1.4 1.4 1.2 1zM4 14h8.8l-1.6 1.6L12.6 17l3.8-3.8-3.8-3.8-1.4 1.4 1.2 1H4v2z"/></svg>,
+      icon: <NotionToggleHeadingIcon level={4} />,
       onItemClick: () => {
         const currentBlock = editor.getTextCursorPosition().block;
         if (currentBlock.content === undefined) return;
@@ -114,6 +171,7 @@ function getCustomSlashMenuItems(editor: any) {
     {
       title: '子页面',
       subtext: '创建并链接到子页面',
+      key: 'subpage',
       aliases: ['subpage', 'page', '子页面', '页面'],
       group: '高级区块',
       icon: <svg viewBox="4.12 2.37 11.75 15.25" style={{ width: '18px', height: '18px', fill: 'currentColor', overflow: 'visible' }}><path d="M13.3 14.25a.55.55 0 0 1-.55.55h-5.5a.55.55 0 1 1 0-1.1h5.5a.55.55 0 0 1 .55.55m-.55-1.95a.55.55 0 1 0 0-1.1h-5.5a.55.55 0 0 0 0 1.1z" /><path d="M6.25 2.375A2.125 2.125 0 0 0 4.125 4.5v11c0 1.174.951 2.125 2.125 2.125h7.5a2.125 2.125 0 0 0 2.125-2.125V8.121c0-.563-.224-1.104-.622-1.502L11.63 2.997a2.13 2.13 0 0 0-1.502-.622zM5.375 4.5c0-.483.392-.875.875-.875h3.7V6.25A2.05 2.05 0 0 0 12 8.3h2.625v7.2a.875.875 0 0 1-.875.875h-7.5a.875.875 0 0 1-.875-.875zm8.691 2.7H12a.95.95 0 0 1-.95-.95V4.184z" /></svg>,
@@ -135,7 +193,93 @@ function getCustomSlashMenuItems(editor: any) {
       },
     },
   ];
+  // Sort by GROUP_ORDER so visual order matches array index (fixes keyboard navigation)
+  allItems.sort((a: any, b: any) => {
+    const aIdx = GROUP_ORDER.indexOf(a.group);
+    const bIdx = GROUP_ORDER.indexOf(b.group);
+    const aOrder = aIdx === -1 ? GROUP_ORDER.length : aIdx;
+    const bOrder = bIdx === -1 ? GROUP_ORDER.length : bIdx;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return 0; // stable sort preserves intra-group order
+  });
+  return allItems;
 }
+
+// Mutable ref so the TipTap extension can access the BlockNote editor
+const bnEditorRef: { current: any } = { current: null };
+
+/**
+ * BlockNote built-in input rules vs our slash menu shortcuts:
+ *   ✅ # → heading, `` ``` `` → code, --- → divider, -/+/* → bullet,
+ *      [] → check, 1. → numbered, > → toggle list
+ *   ❌ #> → toggle heading, "" → quote, || → table
+ *
+ * This TipTap extension fills the gaps by intercepting space/enter
+ * after these patterns and converting the current paragraph.
+ */
+const CustomInputRules = Extension.create({
+  name: 'customInputRules',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('customInputRules'),
+        props: {
+          handleKeyDown(view, event) {
+            if (!bnEditorRef.current) return false;
+            // Trigger on Space (for most patterns) or Enter (for ||)
+            if (event.key !== ' ' && event.key !== 'Enter') return false;
+
+            const { from, to } = view.state.selection;
+            if (from !== to) return false;
+
+            const $from = view.state.doc.resolve(from);
+            const textBefore = $from.parent.textBetween(0, $from.parentOffset, '\n');
+            const block = bnEditorRef.current.getTextCursorPosition().block;
+            if (block.type !== 'paragraph') return false;
+
+            // --- Toggle heading: #>, ##>, ###>, ####> ---
+            const toggleMatch = textBefore.match(/^(#{1,4})>$/);
+            if (toggleMatch && event.key === ' ') {
+              const level = toggleMatch[1].length;
+              event.preventDefault();
+              const tr = view.state.tr.deleteRange(from - (level + 1), from);
+              view.dispatch(tr);
+              bnEditorRef.current.updateBlock(block, {
+                type: 'heading',
+                props: { level, isToggleable: true },
+              });
+              return true;
+            }
+
+            // --- Quote: "" (straight quotes) or "“”" (smart quotes) ---
+            if ((textBefore === '""' || textBefore === '“”' || textBefore === '„“') && event.key === ' ') {
+              event.preventDefault();
+              const tr = view.state.tr.deleteRange(from - 2, from);
+              view.dispatch(tr);
+              bnEditorRef.current.updateBlock(block, { type: 'quote' });
+              return true;
+            }
+
+            // --- Table: || ---
+            if (textBefore === '||' && event.key === ' ') {
+              event.preventDefault();
+              const tr = view.state.tr.deleteRange(from - 2, from);
+              view.dispatch(tr);
+              bnEditorRef.current.insertBlocks(
+                [{ type: 'table', content: { type: 'tableContent', rows: [{ cells: ['', '', ''] }, { cells: ['', '', ''] }] } }],
+                block,
+                'after',
+              );
+              return true;
+            }
+
+            return false;
+          },
+        },
+      }),
+    ];
+  },
+});
 
 /**
  * TipTap extension that fixes BlockNote's numbered list indexing on init.
@@ -261,8 +405,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
-    _tiptapOptions: { extensions: [NumberedListIndexFix] },
+    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix] },
   } as any);
+
+  // Wire up the editor ref for ToggleHeadingInputRules
+  useEffect(() => {
+    bnEditorRef.current = editor;
+  }, [editor]);
 
   // Sync subpage blocks with sidebar create/delete/reorder events
   useEffect(() => {
