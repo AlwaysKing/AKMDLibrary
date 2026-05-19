@@ -540,13 +540,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
               }
             } else if (change.type === 'insert') {
               // A subpage block was restored by undo (undo of delete)
+              // Only try restore if page is actually in trash (not on disk)
               addPendingRestore(pageId);
-              await pagesApi.restoreById(slug, pageId);
+              try {
+                await pagesApi.restoreById(slug, pageId);
+              } catch {
+                // 404 = page still on disk, not in trash — nothing to restore
+              }
               removePendingRestore(pageId);
             }
           } catch (err) {
             removePendingRestore(pageId);
-            console.error('[UndoCompensate] failed:', err);
+            // Don't log noise — restoreById 404 is expected when page is on disk
           }
         }
         // Refresh sidebar after all backend operations complete
