@@ -9,6 +9,9 @@ import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenu
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection } from '@tiptap/pm/state';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Extension } from '@tiptap/core';
 import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
@@ -134,6 +137,98 @@ function getCustomSlashMenuItems(editor: any) {
   ];
 }
 
+/**
+ * TipTap extension that fixes BlockNote's numbered list indexing on init.
+ *
+ * BlockNote's built-in numbered-list-indexing-decorations plugin has a bug:
+ * its init() calls rr(tr, {decorations: empty}) where tr.changedRange() is null
+ * (no steps on initial transaction), causing it to skip all decoration creation.
+ * This results in numberedListItem elements rendering without data-index,
+ * which makes CSS ::before show just "." instead of "1.", "2.", etc.
+ *
+ * This extension adds a ProseMirror plugin that provides the correct data-index
+ * decorations on init, and steps aside once BlockNote's own plugin starts working
+ * (after the first document change triggers its apply()).
+ */
+const NumberedListIndexFix = Extension.create({
+  name: 'numberedListIndexFix',
+
+  addProseMirrorPlugins() {
+    const pluginKey = new PluginKey('numbered-list-index-fix');
+
+    return [
+      new Plugin({
+        key: pluginKey,
+        state: {
+          init(_, state) {
+            return buildNumberedIndexDecorations(state.doc);
+          },
+          apply(tr, oldValue, oldState, newState) {
+            // If the document didn't change, keep existing decorations
+            if (!tr.docChanged) return oldValue;
+            // Rebuild for the new document state
+            return buildNumberedIndexDecorations(newState.doc);
+          },
+        },
+        props: {
+          decorations(state) {
+            return pluginKey.getState(state) ?? DecorationSet.empty;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+/**
+ * Build a DecorationSet that adds data-index to every numberedListItem in the document.
+ * Uses the same logic as BlockNote's nr() function:
+ * - Walk document top-down, tracking sequential numberedListItem sequences
+ * - Reset index to 1 when the previous sibling is not a numberedListItem
+ * - Handle both top-level blocks and nested block groups
+ */
+function buildNumberedIndexDecorations(doc: any): DecorationSet {
+  const decorations: Decoration[] = [];
+  // Track sequence index and state per parent blockGroup.
+  // This ensures nested blockGroups (e.g., toggle heading children) have
+  // independent numbering sequences from the parent level.
+  const indexByParent = new Map<any, number>();
+  const prevWasNumberedByParent = new Map<any, boolean>();
+
+  doc.descendants((node: any, pos: number, parent: any) => {
+    if (node.type.name !== 'blockContainer') return;
+    const firstChild = node.firstChild;
+    const isNumbered = firstChild && firstChild.type.name === 'numberedListItem';
+
+    if (!isNumbered) {
+      prevWasNumberedByParent.set(parent, false);
+      return;
+    }
+
+    const prevWasNumbered = prevWasNumberedByParent.get(parent) ?? false;
+    let index = indexByParent.get(parent) ?? 0;
+
+    if (!prevWasNumbered) {
+      const startAttr = firstChild.attrs?.start;
+      index = startAttr ? startAttr - 1 : 0;
+    }
+    index++;
+
+    indexByParent.set(parent, index);
+    prevWasNumberedByParent.set(parent, true);
+
+    // Decoration targets the numberedListItem node inside the blockContainer.
+    // pos is the start of blockContainer, +1 for its opening.
+    const from = pos + 1;
+    const to = from + firstChild.nodeSize;
+    decorations.push(
+      Decoration.node(from, to, { 'data-index': index.toString() }),
+    );
+  });
+
+  return DecorationSet.create(doc, decorations);
+}
+
 interface PageEditorProps {
   initialContent: string;
   pageIdentity: { spaceSlug: string; pageId: string };
@@ -166,6 +261,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
+    _tiptapOptions: { extensions: [NumberedListIndexFix] },
   } as any);
 
   // Sync subpage blocks with sidebar create/delete/reorder events

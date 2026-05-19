@@ -22,12 +22,63 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     }
 
     // Zero-width space marker = preserved empty paragraph
-    if (trimmed === '\u200B') {
+    if (trimmed === '​') {
       blocks.push({
         type: 'paragraph',
         content: [{ type: 'text', text: '', styles: {} }],
       });
       i++;
+      continue;
+    }
+
+    // Toggle blocks: <toggle-h level="N"> ... </toggle-h> or <toggle-list> ... </toggle-list>
+    const toggleOpenMatch = trimmed.match(/^<(toggle-h|toggle-list)([^>]*)>$/);
+    if (toggleOpenMatch) {
+      const tagName = toggleOpenMatch[1];
+      const attrs = toggleOpenMatch[2];
+      const openTagRegex = new RegExp(`^<${tagName}[^>]*>$`);
+      const closeTag = `</${tagName}>`;
+
+      // Collect all inner lines, handling nesting
+      const innerLines: string[] = [];
+      let depth = 1;
+      i++;
+      while (i < lines.length && depth > 0) {
+        const innerTrimmed = lines[i].trim();
+        if (openTagRegex.test(innerTrimmed)) depth++;
+        if (innerTrimmed === closeTag) depth--;
+        if (depth > 0) innerLines.push(lines[i]);
+        i++;
+      }
+
+      // Extract <title> and <content> sections
+      const titleText = extractTagContent(innerLines, 'title');
+      const contentText = extractTagContent(innerLines, 'content');
+
+      // Build block
+      if (tagName === 'toggle-h') {
+        const levelMatch = attrs.match(/level="(\d+)"/);
+        const level = levelMatch ? parseInt(levelMatch[1]) : 1;
+        const block: any = {
+          type: 'heading',
+          props: { level, isToggleable: true },
+          content: parseInlineFormatting(titleText),
+        };
+        if (contentText.trim()) {
+          block.children = markdownToBlocks(contentText);
+        }
+        blocks.push(block);
+      } else {
+        // toggle-list
+        const block: any = {
+          type: 'toggleListItem',
+          content: parseInlineFormatting(titleText),
+        };
+        if (contentText.trim()) {
+          block.children = markdownToBlocks(contentText);
+        }
+        blocks.push(block);
+      }
       continue;
     }
 
@@ -190,6 +241,48 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
 }
 
 /**
+ * Extract content between <tagName>...</tagName> from a lines array.
+ * Handles multi-line content and nesting (e.g. <content> inside <content>).
+ */
+function extractTagContent(lines: string[], tagName: string): string {
+  const openTag = `<${tagName}>`;
+  const closeTag = `</${tagName}>`;
+
+  let startIdx = -1;
+  let endIdx = -1;
+  let depth = 0;
+
+  for (let j = 0; j < lines.length; j++) {
+    const line = lines[j].trim();
+
+    if (startIdx === -1) {
+      // Haven't found opening tag yet
+      if (line === openTag) {
+        startIdx = j;
+        depth = 1;
+      } else if (line.startsWith(openTag) && line.endsWith(closeTag)) {
+        // Single line: <title>text</title>
+        return line.slice(openTag.length, line.length - closeTag.length);
+      }
+    } else {
+      // Collecting content
+      // Check for nested same-name tags (e.g. <content> inside <content>)
+      if (line === openTag) depth++;
+      if (line === closeTag) {
+        depth--;
+        if (depth === 0) {
+          endIdx = j;
+          break;
+        }
+      }
+    }
+  }
+
+  if (startIdx === -1 || endIdx === -1) return '';
+  return lines.slice(startIdx + 1, endIdx).join('\n');
+}
+
+/**
  * Parse inline formatting (bold, italic, code, links)
  */
 function parseInlineFormatting(text: string): any[] {
@@ -277,93 +370,124 @@ function parseInlineFormatting(text: string): any[] {
  * Convert BlockNote blocks to markdown
  */
 export function blocksToMarkdown(blocks: any[]): string {
-  const lines: string[] = [];
+  return blocks.map(block => serializeBlock(block)).join('\n');
+}
 
-  for (const block of blocks) {
-    switch (block.type) {
-      case 'heading':
-        const level = block.props?.level || 1;
-        const headingText = getTextContent(block.content);
-        lines.push(`${'#'.repeat(level)} ${headingText}`);
-        break;
-
-      case 'paragraph':
-        const paragraphText = getFormattedText(block.content);
-        if (paragraphText) {
-          lines.push(paragraphText);
-        } else {
-          // Empty paragraph: use zero-width space marker to survive markdown round-trip
-          lines.push('\u200B');
-        }
-        break;
-
-      case 'bulletListItem':
-        const bulletText = getFormattedText(block.content);
-        lines.push(`- ${bulletText}`);
-        break;
-
-      case 'numberedListItem':
-        const numberText = getFormattedText(block.content);
-        lines.push(`1. ${numberText}`);
-        break;
-
-      case 'checkListItem':
-        const checkboxText = getFormattedText(block.content);
-        const checked = block.props?.checked ? 'x' : ' ';
-        lines.push(`- [${checked}] ${checkboxText}`);
-        break;
-
-      case 'codeBlock':
-        const language = block.props?.language || '';
-        const code = getTextContent(block.content);
-        lines.push(`\`\`\`${language}`);
-        lines.push(code);
-        lines.push('```');
-        break;
-
-      case 'quote':
-        const quoteText = getFormattedText(block.content);
-        lines.push(`> ${quoteText}`);
-        break;
-
-      case 'divider':
-        lines.push('---');
-        break;
-
-      case 'image':
-        const url = block.props?.url || '';
-        const caption = block.props?.caption || '';
-        lines.push(`![${caption}](${url})`);
-        break;
-
-      case 'pageReference':
-        if (block.props?.pageId) {
-          lines.push(`<page-ref data-id="${block.props.pageId}"></page-ref>`);
-        }
-        break;
-
-      case 'bookmark':
-        if (block.props?.url) {
-          lines.push(`<book-mark data-url="${block.props.url}"></book-mark>`);
-        }
-        break;
-
-      case 'subpage':
-        if (block.props?.pageId) {
-          lines.push(`<sub-page data-id="${block.props.pageId}"></sub-page>`);
-        }
-        break;
-
-      case 'table':
-        lines.push('<!-- Table not fully supported in markdown round-trip -->');
-        break;
-
-      default:
-        lines.push(`<!-- Unknown block type: ${block.type} -->`);
-    }
+/**
+ * Serialize a single block to markdown, handling toggle blocks and children recursively.
+ */
+function serializeBlock(block: any): string {
+  // Toggle heading
+  if (block.type === 'heading' && block.props?.isToggleable) {
+    const level = block.props.level || 1;
+    const title = getFormattedText(block.content);
+    const childrenMd = block.children?.length
+      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+      : '';
+    return `<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`;
   }
 
-  return lines.join('\n');
+  // Toggle list item
+  if (block.type === 'toggleListItem') {
+    const title = getFormattedText(block.content);
+    const childrenMd = block.children?.length
+      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+      : '';
+    return `<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`;
+  }
+
+  // Regular blocks
+  const line = serializeRegularBlock(block);
+
+  // If a regular block has children, append them
+  if (block.children?.length) {
+    const childrenMd = block.children.map((c: any) => serializeBlock(c)).join('\n');
+    return line + '\n' + childrenMd;
+  }
+
+  return line;
+}
+
+/**
+ * Serialize a regular (non-toggle) block to a single markdown line.
+ */
+function serializeRegularBlock(block: any): string {
+  switch (block.type) {
+    case 'heading': {
+      const level = block.props?.level || 1;
+      const headingText = getTextContent(block.content);
+      return `${'#'.repeat(level)} ${headingText}`;
+    }
+
+    case 'paragraph': {
+      const paragraphText = getFormattedText(block.content);
+      if (paragraphText) {
+        return paragraphText;
+      }
+      // Empty paragraph: use zero-width space marker to survive markdown round-trip
+      return '​';
+    }
+
+    case 'bulletListItem': {
+      const bulletText = getFormattedText(block.content);
+      return `- ${bulletText}`;
+    }
+
+    case 'numberedListItem': {
+      const numberText = getFormattedText(block.content);
+      return `1. ${numberText}`;
+    }
+
+    case 'checkListItem': {
+      const checkboxText = getFormattedText(block.content);
+      const checked = block.props?.checked ? 'x' : ' ';
+      return `- [${checked}] ${checkboxText}`;
+    }
+
+    case 'codeBlock': {
+      const language = block.props?.language || '';
+      const code = getTextContent(block.content);
+      return `\`\`\`${language}\n${code}\n\`\`\``;
+    }
+
+    case 'quote': {
+      const quoteText = getFormattedText(block.content);
+      return `> ${quoteText}`;
+    }
+
+    case 'divider':
+      return '---';
+
+    case 'image': {
+      const url = block.props?.url || '';
+      const caption = block.props?.caption || '';
+      return `![${caption}](${url})`;
+    }
+
+    case 'pageReference':
+      if (block.props?.pageId) {
+        return `<page-ref data-id="${block.props.pageId}"></page-ref>`;
+      }
+      return '';
+
+    case 'bookmark':
+      if (block.props?.url) {
+        return `<book-mark data-url="${block.props.url}"></book-mark>`;
+      }
+      return '';
+
+    case 'subpage':
+      if (block.props?.pageId) {
+        return `<sub-page data-id="${block.props.pageId}"></sub-page>`;
+      }
+      return '';
+
+    case 'table':
+      return '<!-- Table not fully supported in markdown round-trip -->';
+
+    default:
+      return `<!-- Unknown block type: ${block.type} -->`;
+  }
 }
 
 /**
