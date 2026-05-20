@@ -338,9 +338,9 @@ h4[contenteditable],
   content: none !important;
 }
 
-/* Selection */
+/* Selection — semi-transparent blue like Notion (rgba 35,131,226 0.28) */
 .bn-editor ::selection {
-  background: #d4ebfb;
+  background: rgba(35, 131, 226, 0.28);
 }
 
 /* Side Menu Notion Style — floating-ui popover positioned on block hover */
