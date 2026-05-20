@@ -605,8 +605,8 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   display: none !important;
 }
 /* Selected item: bolder inset border on the swatch — uses the swatch's own color */
-/* Text colors: use currentColor (color is already set to the text color) */
-.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon:not([data-background-color="default"]) {
+/* Text colors: match items where text-color is set (not "default") */
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-text-color]:not([data-text-color="default"]) {
   box-shadow: inset 0 0 0 2.5px currentColor !important;
 }
 /* Text color default: dark border */

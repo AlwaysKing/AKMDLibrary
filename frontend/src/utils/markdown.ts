@@ -336,6 +336,41 @@ function parseInlineFormatting(text: string): any[] {
       }
     }
 
+    // Colored/styled span: <span text-color="red" bg-color="blue" strike="true" underline="true">text</span>
+    if (text.substr(i, 5) === '<span') {
+      const closeTagEnd = text.indexOf('>', i + 5);
+      if (closeTagEnd !== -1) {
+        const tagContent = text.slice(i + 5, closeTagEnd);
+        const closeSpan = text.indexOf('</span>', closeTagEnd + 1);
+        if (closeSpan !== -1) {
+          const innerText = text.slice(closeTagEnd + 1, closeSpan);
+          if (current) {
+            content.push({ type: 'text', text: current, styles: {} });
+            current = '';
+          }
+          // Parse attributes
+          const styles: any = {};
+          const textColorMatch = tagContent.match(/text-color="([^"]+)"/);
+          if (textColorMatch) styles.textColor = textColorMatch[1];
+          const bgColorMatch = tagContent.match(/bg-color="([^"]+)"/);
+          if (bgColorMatch) styles.backgroundColor = bgColorMatch[1];
+          if (tagContent.includes('strike="true"')) styles.strike = true;
+          if (tagContent.includes('underline="true"')) styles.underline = true;
+          // Recursively parse inner text for bold/italic/code/link
+          const innerContent = parseInlineFormatting(innerText);
+          for (const ic of innerContent) {
+            if (typeof ic === 'string') {
+              content.push({ type: 'text', text: ic, styles: { ...styles } });
+            } else {
+              content.push({ ...ic, styles: { ...styles, ...(ic.styles || {}) } });
+            }
+          }
+          i = closeSpan + 7;
+          continue;
+        }
+      }
+    }
+
     // Link
     if (text[i] === '[') {
       const linkEnd = text.indexOf(']', i);
@@ -517,10 +552,28 @@ function getFormattedText(content: any): string {
 
         let text = c.text || '';
 
+        if (c.styles?.code) text = `\`${text}\``;
         if (c.styles?.bold) text = `**${text}**`;
         if (c.styles?.italic) text = `*${text}*`;
-        if (c.styles?.code) text = `\`${text}\``;
         if (c.link) text = `[${text}](${c.link})`;
+
+        // Wrap color/background/strike/underline in HTML span for persistence
+        const colorAttrs: string[] = [];
+        if (c.styles?.textColor && c.styles.textColor !== 'default') {
+          colorAttrs.push(`text-color="${c.styles.textColor}"`);
+        }
+        if (c.styles?.backgroundColor && c.styles.backgroundColor !== 'default') {
+          colorAttrs.push(`bg-color="${c.styles.backgroundColor}"`);
+        }
+        if (c.styles?.strike) {
+          colorAttrs.push('strike="true"');
+        }
+        if (c.styles?.underline) {
+          colorAttrs.push('underline="true"');
+        }
+        if (colorAttrs.length > 0) {
+          text = `<span ${colorAttrs.join(' ')}>${text}</span>`;
+        }
 
         return text;
       })
