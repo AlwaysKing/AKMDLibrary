@@ -280,24 +280,178 @@ h4[contenteditable],
 }
 
 /* Code blocks — Notion: bg rgba(66,35,3,0.03), border-radius 10px */
-.bn-editor [data-content-type="codeBlock"] {
+.bn-editor .bn-block-content[data-content-type="codeBlock"] {
   background: rgba(66, 35, 3, 0.03) !important;
-  color: #2c2c2b !important;
+  color: #2c2c2b;
   border-radius: 10px !important;
   padding: 0 !important;
   font-size: 16px !important;
   line-height: 24px !important;
+  position: relative !important;
 }
 .bn-editor [data-content-type="codeBlock"] pre {
   padding: 16px !important;
+  margin: 0 !important;
 }
 .bn-editor [data-content-type="codeBlock"] .bn-inline-content,
 .bn-editor [data-content-type="codeBlock"] code {
   font-family: 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono', Courier, monospace !important;
   font-size: 13px !important;
   line-height: 1.5 !important;
-  color: inherit !important;
 }
+
+/* Hide native <select> container — replaced by custom toolbar */
+.bn-editor [data-content-type="codeBlock"] > div[contenteditable="false"]:has(select) {
+  display: none !important;
+}
+
+/* ===== Code Block Toolbar — custom language selector + copy ===== */
+
+/* Toolbar row — positioned absolutely via JS-calculated coordinates */
+.cb-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+/* Show toolbar when code block is hovered or dropdown is open */
+.cb-toolbar.cb-toolbar-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Language button */
+.cb-lang-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.5);
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  transition: color 0.15s, background-color 0.15s;
+  line-height: 1.4;
+}
+.cb-lang-btn:hover {
+  color: rgba(55, 53, 47, 0.8);
+  background: rgba(55, 53, 47, 0.06);
+}
+
+/* Copy button */
+.cb-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.4);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+.cb-copy-btn:hover {
+  color: rgba(55, 53, 47, 0.8);
+  background: rgba(55, 53, 47, 0.06);
+}
+
+/* Dropdown panel */
+.cb-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 200px;
+  background: #ffffff;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.02);
+  z-index: 100;
+  padding: 4px;
+  animation: cb-dropdown-in 0.12s ease-out;
+}
+@keyframes cb-dropdown-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Search input */
+.cb-search {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  margin-bottom: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  color: #37352f;
+  background: #ffffff;
+}
+.cb-search:focus {
+  border-color: rgba(35, 131, 226, 0.5);
+  box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.15);
+}
+.cb-search::placeholder {
+  color: rgba(55, 53, 47, 0.4);
+}
+
+/* Language list */
+.cb-lang-list {
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #e9e9e7 transparent;
+}
+.cb-lang-list::-webkit-scrollbar {
+  width: 6px;
+}
+.cb-lang-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cb-lang-list::-webkit-scrollbar-thumb {
+  background-color: #e9e9e7;
+  border-radius: 3px;
+}
+
+/* Language item */
+.cb-lang-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.85);
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.4;
+}
+.cb-lang-item:hover {
+  background: rgba(55, 53, 47, 0.06);
+}
+.cb-lang-item.selected {
+  color: rgba(55, 53, 47, 0.65);
+  background: rgba(55, 53, 47, 0.04);
+}
+.cb-lang-item.selected span {
+  font-weight: 500;
+}
+
+/* Shiki syntax highlighting — colored spans use inline styles from highlighter */
 
 /* Divider — Notion: height 13px wrapper, separator bg rgba(28,19,1,.11), height 1px */
 .bn-editor .bn-block-outer:has([data-content-type="divider"]) {

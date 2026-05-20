@@ -84,7 +84,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
 
     // Code block
     if (trimmed.startsWith('```')) {
-      const language = trimmed.slice(3).trim();
+      const rawLang = trimmed.slice(3).trim();
       i++;
       let code = '';
       while (i < lines.length && !lines[i].trim().startsWith('```')) {
@@ -92,6 +92,17 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         i++;
       }
       i++; // Skip closing ```
+
+      // Map common aliases to Shiki language IDs
+      const langMap: Record<string, string> = {
+        'js': 'javascript', 'ts': 'typescript', 'py': 'python',
+        'rb': 'ruby', 'rs': 'rust', 'kt': 'kotlin', 'golang': 'go',
+        'sh': 'bash', 'shell': 'bash', 'zsh': 'bash',
+        'dockerfile': 'docker', 'objc': 'objective-c', 'objectivec': 'objective-c',
+        'cs': 'csharp', 'c#': 'csharp', 'c++': 'cpp',
+        'md': 'markdown', 'tex': 'latex', 'yml': 'yaml', 'ps1': 'powershell',
+      };
+      const language = rawLang ? (langMap[rawLang.toLowerCase()] || rawLang.toLowerCase()) : undefined;
 
       blocks.push({
         type: 'codeBlock',

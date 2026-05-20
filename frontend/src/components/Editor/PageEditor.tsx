@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import LinkPreviewCard from './LinkPreviewCard';
-import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems } from '@blocknote/core';
+import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems, createCodeBlockSpec } from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
@@ -18,6 +18,7 @@ import { setClipboardData, getClipboardData, addPendingRestore, removePendingRes
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import LinkPasteMenu from './LinkPasteMenu';
+import CodeBlockToolbar from './CodeBlockToolbar';
 import { getBlockDragData, markDragHandled } from './blockDragState';
 import { pageMetaCache } from './PageMetaCache';
 import { mentionMetaCache } from './MentionMetaCache';
@@ -26,10 +27,68 @@ import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { flushSync } from '../../services/syncModule';
 
+// Supported languages for code block syntax highlighting
+// Keys must match Shiki bundled language IDs (https://shiki.style/languages)
+const SUPPORTED_LANGUAGES: Record<string, { name: string; aliases?: string[] }> = {
+  text: { name: '纯文本' },
+  bash: { name: 'Bash', aliases: ['sh', 'shell', 'zsh'] },
+  c: { name: 'C' },
+  cpp: { name: 'C++', aliases: ['c++'] },
+  csharp: { name: 'C#', aliases: ['c#', 'cs'] },
+  css: { name: 'CSS' },
+  dart: { name: 'Dart' },
+  diff: { name: 'Diff' },
+  docker: { name: 'Dockerfile', aliases: ['dockerfile'] },
+  go: { name: 'Go', aliases: ['golang'] },
+  graphql: { name: 'GraphQL' },
+  html: { name: 'HTML' },
+  java: { name: 'Java' },
+  javascript: { name: 'JavaScript', aliases: ['js'] },
+  json: { name: 'JSON' },
+  kotlin: { name: 'Kotlin', aliases: ['kt'] },
+  latex: { name: 'LaTeX', aliases: ['tex'] },
+  lua: { name: 'Lua' },
+  make: { name: 'Makefile' },
+  markdown: { name: 'Markdown', aliases: ['md'] },
+  matlab: { name: 'MATLAB' },
+  'objective-c': { name: 'Objective-C', aliases: ['objc', 'objectivec'] },
+  perl: { name: 'Perl' },
+  php: { name: 'PHP' },
+  powershell: { name: 'PowerShell', aliases: ['ps1'] },
+  python: { name: 'Python', aliases: ['py'] },
+  r: { name: 'R' },
+  ruby: { name: 'Ruby', aliases: ['rb'] },
+  rust: { name: 'Rust', aliases: ['rs'] },
+  scala: { name: 'Scala' },
+  sql: { name: 'SQL' },
+  swift: { name: 'Swift' },
+  toml: { name: 'TOML' },
+  typescript: { name: 'TypeScript', aliases: ['ts'] },
+  xml: { name: 'XML' },
+  yaml: { name: 'YAML', aliases: ['yml'] },
+};
+
+// Shiki language IDs used for loading (exclude 'text' which has no highlighter)
+const SHIKI_LANG_IDS = Object.keys(SUPPORTED_LANGUAGES).filter((l) => l !== 'text');
+
+// Create code block spec with language selection and Shiki syntax highlighting
+const CodeBlockSpecWithHighlight = createCodeBlockSpec({
+  defaultLanguage: 'text',
+  supportedLanguages: SUPPORTED_LANGUAGES,
+  createHighlighter: async () => {
+    const { createHighlighter: createShikiHighlighter } = await import('shiki');
+    return createShikiHighlighter({
+      themes: ['github-light'],
+      langs: SHIKI_LANG_IDS,
+    });
+  },
+});
+
 // Custom schema: default blocks + pageReference + bookmark
 const schema = BlockNoteSchema.create({
   blockSpecs: {
     ...defaultBlockSpecs,
+    codeBlock: CodeBlockSpecWithHighlight as any,
     pageReference: PageReferenceBlockSpec(),
     bookmark: BookmarkBlockSpec(),
     subpage: SubpageBlockSpec(),
@@ -576,7 +635,13 @@ interface PageEditorProps {
 
 export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const editorRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const [editorEl, setEditorEl] = useState<HTMLDivElement | null>(null);
+  // Stable callback ref — avoids React calling null→element on every re-render
+  const editorRefCallback = useCallback((el: HTMLDivElement | null) => {
+    editorRef.current = el;
+    setEditorEl(el);
+  }, []);
 
   // Refs for values read inside callbacks — avoid stale closures
   const hasChangesRef = useRef(false);
@@ -1834,7 +1899,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   ), [CodeButton]);
 
   return (
-    <div className="relative" ref={editorRef}>
+    <div className="relative" ref={editorRefCallback}>
       <ComponentsContext.Provider value={blockNoteComponents as any}>
         <div>
           <BlockNoteViewRaw
@@ -1871,6 +1936,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           </BlockNoteViewRaw>
         </div>
       </ComponentsContext.Provider>
+      {/* Custom code block toolbar — language selector + copy button */}
+      <CodeBlockToolbar editorContainer={editorEl} />
       {/* Clickable area below editor — click to append new paragraph */}
       {!readOnly && (
         <div
