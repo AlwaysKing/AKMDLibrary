@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController } from '@blocknote/react';
+import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect } from '@blocknote/react';
 import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems } from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
@@ -1482,6 +1482,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [editor]);
 
+  // Stable reference for formatting toolbar content — prevents React from
+  // unmounting/remounting on every editor state change (which would reset
+  // the color picker's open/close state).
+  const formattingToolbarComponent = useCallback(() => (
+    <FormattingToolbar>
+      <BlockTypeSelect key="blockType" />
+      <ColorStyleButton key="color" />
+      <BasicTextStyleButton basicTextStyle="bold" key="bold" />
+      <BasicTextStyleButton basicTextStyle="italic" key="italic" />
+      <BasicTextStyleButton basicTextStyle="underline" key="underline" />
+      <BasicTextStyleButton basicTextStyle="strike" key="strike" />
+      <CreateLinkButton key="link" />
+    </FormattingToolbar>
+  ), []);
+
   return (
     <div className="relative" ref={editorRef}>
       <ComponentsContext.Provider value={blockNoteComponents as any}>
@@ -1493,9 +1508,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             theme="light"
             slashMenu={false}
             sideMenu={true}
-            formattingToolbar={true}
+            formattingToolbar={false}
             linkToolbar={true}
           >
+            {/* Custom formatting toolbar — only select, basic styles, color, link */}
+            {!readOnly && (
+              <FormattingToolbarController
+                formattingToolbar={formattingToolbarComponent}
+              />
+            )}
             {/* Custom slash menu with subpage support */}
             {!readOnly && (
               <SuggestionMenuController

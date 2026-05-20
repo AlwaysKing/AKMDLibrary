@@ -489,7 +489,7 @@ const GenericMenuRoot: React.FC<{
 
   return (
     <MenuContext.Provider value={{ isOpen, setOpen, position }}>
-      <div style={{ position: 'relative', display: 'contents' }}>
+      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
         {children}
       </div>
     </MenuContext.Provider>
@@ -651,14 +651,23 @@ const GenericMenuItem: React.FC<{
 }> = forwardRef((props, ref) => {
   const { className, children, icon, checked, onClick } = props;
   const { setOpen } = useContext(MenuContext);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Check if this item is inside the color picker dropdown — don't close it on selection
+  const isInsideColorPicker = () => !!containerRef.current?.closest('.bn-color-picker-dropdown');
 
   return (
     <div
-      ref={ref as React.Ref<HTMLDivElement>}
+      ref={(node) => {
+        (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+        (ref as React.RefCallback<HTMLDivElement>)?.(node);
+      }}
       className={className}
       onClick={() => {
         onClick?.();
-        setOpen(false);
+        if (!isInsideColorPicker()) {
+          setOpen(false);
+        }
       }}
       role="menuitem"
     >
@@ -810,19 +819,35 @@ const ToolbarSelect: React.FC<{
   const { className, items, isDisabled } = props;
   const [isOpen, setIsOpen] = useState(false);
   const selectedItem = items.find((item) => item.isSelected);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
 
   return (
-    <div className={className} style={{ position: 'relative' }}>
+    <div ref={dropdownRef} className={className} style={{ position: 'relative' }}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={isDisabled}
         type="button"
       >
         {selectedItem?.icon}
-        {selectedItem?.text}
       </button>
       {isOpen && (
-        <div style={{ position: 'absolute', top: '100%', zIndex: 1000 }}>
+        <div className="bn-select-dropdown">
           {items.map((item, i) => (
             <div key={i} onClick={() => { item.onClick(); setIsOpen(false); }}>
               {item.icon}
@@ -1220,7 +1245,7 @@ const TableHandleExtendButton: React.FC<{
 // ==================== Drag Handle Menu ====================
 
 // Preset color definitions — Notion exact measured colors
-const COLORS: Record<string, {
+export const COLORS: Record<string, {
   text: string;
   background: string;
   textBorder: string;

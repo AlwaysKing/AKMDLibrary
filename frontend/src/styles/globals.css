@@ -478,6 +478,9 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   display: none !important;
 }
 .bn-formatting-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
   border: 1px solid #e9e9e7 !important;
   border-radius: 8px !important;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
@@ -486,12 +489,56 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   gap: 1px !important;
 }
 
+/* Block type select — constrain width, inline layout */
+.bn-formatting-toolbar .bn-select {
+  flex-shrink: 0;
+}
+.bn-formatting-toolbar .bn-select > button {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 13px !important;
+  white-space: nowrap !important;
+}
+
+/* Block type select dropdown */
+.bn-formatting-toolbar .bn-select-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #fff;
+  border: 1px solid #e9e9e7;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 4px;
+  min-width: 180px;
+  z-index: 10000;
+}
+.bn-formatting-toolbar .bn-select-dropdown > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #37352f;
+  white-space: nowrap;
+}
+.bn-formatting-toolbar .bn-select-dropdown > div:hover {
+  background: #ebebea;
+}
+
 .bn-formatting-toolbar button {
   border-radius: 4px !important;
   padding: 4px 6px !important;
   height: 30px !important;
   min-width: 28px !important;
   color: #37352f !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
 
 .bn-formatting-toolbar button:hover {
@@ -502,6 +549,130 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   color: #2383e2 !important;
   background: rgba(35, 131, 226, 0.08) !important;
 }
+
+/* Color picker dropdown — matches drag-handle color submenu style, grid layout without text */
+.bn-color-picker-dropdown {
+  left: 0 !important;
+  top: 100% !important;
+  margin-left: 0 !important;
+  margin-top: 4px !important;
+  background: #fff !important;
+  border: 1px solid #e9e9e7 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  padding: 6px 6px 4px !important;
+  width: 224px !important;  /* 5 × 38px + 2 × 6px padding + 26px gap */
+  max-height: none !important;
+  overflow-y: visible !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  align-content: flex-start !important;
+  gap: 2px !important;
+}
+/* Section labels: "文本" / "背景色" */
+.bn-color-picker-dropdown > div:not([role]) {
+  width: 100% !important;
+  padding: 4px 4px 2px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: #91918e !important;
+  flex-shrink: 0 !important;
+}
+/* Color item cells — same layout as drag menu's color-list-item, but without text */
+.bn-color-picker-dropdown > div[role="menuitem"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 2px !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  width: 38px !important;
+  height: 34px !important;
+  flex-shrink: 0 !important;
+  font-size: 0 !important;
+  color: transparent !important;
+}
+.bn-color-picker-dropdown > div[role="menuitem"]:hover {
+  background: rgba(55, 53, 47, 0.08) !important;
+}
+/* Hide checkmark text and text label */
+.bn-color-picker-dropdown [role="menuitem"] > span:not(.bn-menu-item-icon) {
+  display: none !important;
+}
+/* Selected item: bolder inset border on the swatch — uses the swatch's own color */
+/* Text colors: use currentColor (color is already set to the text color) */
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon:not([data-background-color="default"]) {
+  box-shadow: inset 0 0 0 2.5px currentColor !important;
+}
+/* Text color default: dark border */
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-text-color="default"][data-background-color="default"] {
+  box-shadow: inset 0 0 0 2.5px #2c2c2b !important;
+}
+/* Background colors: individual border colors */
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="gray"]   { box-shadow: inset 0 0 0 2.5px #7d7a75 !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="brown"]  { box-shadow: inset 0 0 0 2.5px #9f765a !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="red"]    { box-shadow: inset 0 0 0 2.5px #cf5148 !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="orange"] { box-shadow: inset 0 0 0 2.5px #d27b2d !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="yellow"] { box-shadow: inset 0 0 0 2.5px #cb9434 !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="green"]  { box-shadow: inset 0 0 0 2.5px #50946e !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="blue"]   { box-shadow: inset 0 0 0 2.5px #387dc9 !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="purple"] { box-shadow: inset 0 0 0 2.5px #9a6bb4 !important; }
+.bn-color-picker-dropdown [role="menuitem"]:has(.bn-menu-item-check:not(:empty)) .bn-color-icon[data-background-color="pink"]   { box-shadow: inset 0 0 0 2.5px #c14c8a !important; }
+/* Keep checkmark hidden but don't use display:none so :has(:not(:empty)) works */
+.bn-color-picker-dropdown .bn-menu-item-check {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+/* Icon wrapper */
+.bn-color-picker-dropdown .bn-menu-item-icon {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+/* Swatch base — matches .color-list-swatch: 26×26, radius 6px */
+.bn-color-picker-dropdown .bn-color-icon {
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: 6px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  font-size: 16px !important;
+  font-weight: 500 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+/* Default swatch (both sections) — "A" in default text color with inset border */
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="default"][data-background-color="default"] {
+  color: #2c2c2b !important;
+  box-shadow: inset 0 0 0 1px rgba(28,19,1,0.11) !important;
+}
+/* Text color swatches: colored "A" with inset border — exact colors from COLORS */
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="gray"]   { color: #7d7a75 !important; box-shadow: inset 0 0 0 1px rgba(28,19,1,0.11)  !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="brown"]  { color: #9f765a !important; box-shadow: inset 0 0 0 1px rgba(127,51,0,0.157) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="red"]    { color: #cf5148 !important; box-shadow: inset 0 0 0 1px rgba(206,24,0,0.165) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="orange"] { color: #d27b2d !important; box-shadow: inset 0 0 0 1px rgba(196,88,0,0.204) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="yellow"] { color: #cb9434 !important; box-shadow: inset 0 0 0 1px rgba(209,156,0,0.282) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="green"]  { color: #50946e !important; box-shadow: inset 0 0 0 1px rgba(0,96,38,0.157)  !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="blue"]   { color: #387dc9 !important; box-shadow: inset 0 0 0 1px rgba(0,118,217,0.204) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="purple"] { color: #9a6bb4 !important; box-shadow: inset 0 0 0 1px rgba(92,0,163,0.14)  !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-text-color="pink"]   { color: #c14c8a !important; box-shadow: inset 0 0 0 1px rgba(183,0,78,0.153) !important; }
+/* Background color swatches: filled square, no "A" — exact colors from COLORS */
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="gray"]   { color: transparent !important; background: #f0efed !important; box-shadow: inset 0 0 0 1px rgba(28,19,1,0.11)  !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="brown"]  { color: transparent !important; background: #f5ede9 !important; box-shadow: inset 0 0 0 1px rgba(127,51,0,0.157) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="red"]    { color: transparent !important; background: #fce9e7 !important; box-shadow: inset 0 0 0 1px rgba(206,24,0,0.165) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="orange"] { color: transparent !important; background: #fbebde !important; box-shadow: inset 0 0 0 1px rgba(196,88,0,0.204) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="yellow"] { color: transparent !important; background: #f9f3dc !important; box-shadow: inset 0 0 0 1px rgba(209,156,0,0.282) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="green"]  { color: transparent !important; background: #e8f1ec !important; box-shadow: inset 0 0 0 1px rgba(0,96,38,0.157)  !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="blue"]   { color: transparent !important; background: #e5f2fc !important; box-shadow: inset 0 0 0 1px rgba(0,118,217,0.204) !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="purple"] { color: transparent !important; background: #f3ebf9 !important; box-shadow: inset 0 0 0 1px rgba(92,0,163,0.14)  !important; }
+.bn-color-picker-dropdown .bn-color-icon[data-background-color="pink"]   { color: transparent !important; background: #fae9f1 !important; box-shadow: inset 0 0 0 1px rgba(183,0,78,0.153) !important; }
 
 /* Slash Menu Notion Style */
 /* BlockNote uses .bn-suggestion-menu (not .bn-slash-menu) in ComponentsContext mode */
