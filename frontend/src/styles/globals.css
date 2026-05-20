@@ -323,7 +323,8 @@ h4[contenteditable],
   font-style: italic !important;
 }
 
-.bn-editor code {
+/* Inline code — exclude code blocks */
+.bn-editor code:not([data-content-type="codeBlock"] code):not(pre code) {
   color: #EB5757 !important;
   background: rgba(135, 131, 120, 0.15) !important;
   border-radius: 4px !important;
