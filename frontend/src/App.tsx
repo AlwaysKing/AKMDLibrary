@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Location } from 'react-router-dom';
 import { useEffect } from 'react';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
 import AppLayout from './components/Layout/AppLayout';
@@ -16,9 +16,21 @@ import { siteSettingsApi } from './api/siteSettings';
 function HomeRedirect() {
   const { isAuthenticated } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation();
+  const fromLocation = (location.state as { from?: Location } | null)?.from;
 
   useEffect(() => {
     if (isAuthenticated) {
+      // 优先恢复用户被中断前的页面（ProtectedRoute 保存在 location.state.from）
+      if (fromLocation && fromLocation.pathname && fromLocation.pathname !== '/login' && fromLocation.pathname !== '/') {
+        // 先确保 spaces 已加载（用于 SpaceSelector setCurrentSpace）
+        useSpaceStore.getState().fetchSpaces().then(() => {
+          navigate(fromLocation.pathname + fromLocation.search, { replace: true });
+        });
+        return;
+      }
+
+      // 没有保存的来源页面，走正常的偏好恢复逻辑
       Promise.all([
         useSpaceStore.getState().fetchSpaces(),
         usePreferenceStore.getState().fetchPreferences(),
@@ -38,7 +50,7 @@ function HomeRedirect() {
         }
       });
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, fromLocation]);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;

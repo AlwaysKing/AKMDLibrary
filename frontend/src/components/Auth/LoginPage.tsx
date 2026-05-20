@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { BookOpen } from 'lucide-react';
 import { siteSettingsApi, SiteSettings } from '../../api/siteSettings';
@@ -11,7 +10,6 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>({});
   const login = useAuthStore((state) => state.login);
-  const navigate = useNavigate();
 
   useEffect(() => {
     siteSettingsApi.get().then(setSiteSettings).catch(() => {});
@@ -24,14 +22,9 @@ export default function LoginPage() {
 
     try {
       await login({ username, password });
-      const { useSpaceStore } = await import('../../stores/spaceStore');
-      await useSpaceStore.getState().fetchSpaces();
-      const spaces = useSpaceStore.getState().spaces;
-      if (spaces.length > 0) {
-        navigate(`/s/${spaces[0].slug}`);
-      } else {
-        navigate('/');
-      }
+      // login() 设置 isAuthenticated = true 后，/login 路由自动切换为 HomeRedirect
+      // HomeRedirect 会统一处理：优先恢复 location.state.from（ProtectedRoute 保存），其次使用 last_active_space 偏好
+      // 不需要手动 navigate，避免与 HomeRedirect 产生竞态条件
     } catch (err: any) {
       setError(err.response?.data?.message || '用户名或密码错误');
       setIsLoading(false);
