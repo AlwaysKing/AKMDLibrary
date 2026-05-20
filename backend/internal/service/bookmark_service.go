@@ -43,9 +43,9 @@ func (s *BookmarkService) GetMeta(url string) (*model.BookmarkMeta, error) {
 		return nil, fmt.Errorf("failed to fetch bookmark meta: %w", err)
 	}
 
-	// 3. Save to cache (7 day expiration)
+	// 3. Save to cache (3 day expiration)
 	meta.FetchedAt = time.Now()
-	meta.ExpiresAt = time.Now().Add(7 * 24 * time.Hour)
+	meta.ExpiresAt = time.Now().Add(3 * 24 * time.Hour)
 	if err := s.repo.Save(meta); err != nil {
 		return nil, fmt.Errorf("failed to cache bookmark meta: %w", err)
 	}
@@ -58,7 +58,9 @@ func (s *BookmarkService) fetchAndParse(url string) (*model.BookmarkMeta, error)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; MDLibrary/1.0; +bookmark)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -89,13 +91,17 @@ func (s *BookmarkService) fetchAndParse(url string) (*model.BookmarkMeta, error)
 	}
 
 	// Favicon
-	meta.FaviconURL = resolveURL(url, extractLinkHref(html, "icon"))
-	if meta.FaviconURL == "" {
-		meta.FaviconURL = resolveURL(url, extractLinkHref(html, "shortcut icon"))
+	favicon := resolveURL(url, extractLinkHref(html, "icon"))
+	if favicon == "" {
+		favicon = resolveURL(url, extractLinkHref(html, "shortcut icon"))
 	}
-	if meta.FaviconURL == "" {
-		meta.FaviconURL = fmt.Sprintf("%s/favicon.ico", mustParseOrigin(url))
+	// If favicon is from a different domain (CDN), browsers may block it via CORS.
+	// Prefer same-origin /favicon.ico which is always loadable.
+	origin := mustParseOrigin(url)
+	if favicon == "" || !strings.HasPrefix(favicon, origin) {
+		favicon = fmt.Sprintf("%s/favicon.ico", origin)
 	}
+	meta.FaviconURL = favicon
 
 	// OG image
 	meta.ImageURL = resolveURL(url, extractMetaAttr(html, "property", "og:image"))

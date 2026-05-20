@@ -68,31 +68,32 @@ function BookmarkComponent({ block, editor }: any) {
   try { domain = new URL(url).hostname; } catch { domain = url; }
 
   return (
-    <div className="py-1 group/bookmark relative">
+    <div className="py-1">
       <div
         onClick={handleClick}
-        className="border border-notion-border rounded-lg overflow-hidden max-w-[600px] hover:border-notion-textSecondary transition-colors cursor-pointer flex"
+        className="rounded-lg overflow-hidden max-w-[600px] hover:bg-[rgba(55,53,47,0.04)] transition-colors cursor-pointer flex"
+        style={{ border: '1px solid rgba(55, 53, 47, 0.16)' }}
       >
         {/* Text content */}
-        <div className="flex-1 p-3 min-w-0">
+        <div className="flex-1 p-3.5 min-w-0">
           {meta.title && (
-            <div className="text-sm font-medium text-notion-text mb-0.5 line-clamp-2">{meta.title}</div>
+            <div className="text-sm text-notion-text mb-0.5 line-clamp-2" style={{ minHeight: '24px' }}>{meta.title}</div>
           )}
           {meta.description && (
-            <div className="text-xs text-notion-textSecondary line-clamp-2 mb-1.5">{meta.description}</div>
+            <div className="text-xs text-notion-textSecondary line-clamp-2 mb-1.5" style={{ minHeight: '32px' }}>{meta.description}</div>
           )}
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" style={{ marginTop: '6px' }}>
             {meta.favicon_url ? (
-              <img src={meta.favicon_url} alt="" className="w-3.5 h-3.5 object-contain flex-shrink-0" />
+              <img src={meta.favicon_url} alt="" className="w-4 h-4 object-contain flex-shrink-0" style={{ marginRight: '6px' }} />
             ) : (
-              <Globe className="w-3.5 h-3.5 text-notion-textSecondary flex-shrink-0" />
+              <Globe className="w-4 h-4 text-notion-textSecondary flex-shrink-0" style={{ marginRight: '6px' }} />
             )}
-            <span className="text-xs text-notion-textSecondary truncate">{domain}</span>
+            <span className="text-xs text-notion-text truncate">{domain}</span>
           </div>
         </div>
         {/* Image thumbnail */}
         {meta.image_url && (
-          <div className="w-[120px] flex-shrink-0 border-l border-notion-border">
+          <div className="w-[120px] flex-shrink-0" style={{ borderLeft: '1px solid rgba(55, 53, 47, 0.16)' }}>
             <img
               src={meta.image_url}
               alt=""
@@ -103,12 +104,6 @@ function BookmarkComponent({ block, editor }: any) {
           </div>
         )}
       </div>
-      <button
-        onClick={handleDelete}
-        className="absolute top-2 right-2 p-1 rounded hover:bg-notion-hover opacity-0 group-hover/bookmark:opacity-100 transition-opacity"
-      >
-        <Trash2 className="w-3 h-3 text-notion-textSecondary" />
-      </button>
     </div>
   );
 }

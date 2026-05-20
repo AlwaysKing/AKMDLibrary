@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
+import CustomLinkToolbar from './CustomLinkToolbar';
+import LinkPreviewCard from './LinkPreviewCard';
 import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems } from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
@@ -17,6 +19,8 @@ import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import LinkPasteMenu from './LinkPasteMenu';
 import { getBlockDragData, markDragHandled } from './blockDragState';
+import { pageMetaCache } from './PageMetaCache';
+import { mentionMetaCache } from './MentionMetaCache';
 import { pagesApi } from '../../api/pages';
 import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
@@ -373,6 +377,196 @@ function buildNumberedIndexDecorations(doc: any): DecorationSet {
   return DecorationSet.create(doc, decorations);
 }
 
+// ==================== Internal Link Badge ====================
+// ProseMirror plugin that renders internal page links as inline badges
+// (icon + title + ↗ arrow) instead of regular hyperlinks.
+
+let _badgeEditorView: any = null;
+
+const internalLinkBadgeKey = new PluginKey('internalLinkBadge');
+
+const InternalLinkBadge = Extension.create({
+  name: 'internalLinkBadge',
+
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    const spaceSlug = () => {
+      try {
+        const m = window.location.pathname.match(/^\/s\/([^/]+)/);
+        return m ? m[1] : '';
+      } catch { return ''; }
+    };
+
+    return [
+      new Plugin({
+        key: internalLinkBadgeKey,
+        state: {
+          init(_, state) {
+            return buildInternalLinkDecorations(state.doc, spaceSlug(), _badgeEditorView);
+          },
+          apply(tr, oldValue, oldState, newState) {
+            // Only rebuild when doc changed or async mention meta arrived
+            if (!tr.docChanged && !tr.getMeta('mentionMetaReady')) return oldValue;
+            return buildInternalLinkDecorations(newState.doc, spaceSlug(), _badgeEditorView);
+          },
+        },
+        props: {
+          decorations(state) {
+            return internalLinkBadgeKey.getState(state) ?? DecorationSet.empty;
+          },
+        },
+        view(view) {
+          _badgeEditorView = view;
+          return {};
+        },
+      }),
+    ];
+  },
+});
+
+function buildInternalLinkDecorations(doc: any, spaceSlug: string, editorView?: any): DecorationSet {
+  const decorations: Decoration[] = [];
+  const schema = doc.type.schema;
+  const linkMarkType = schema.marks.link;
+  if (!linkMarkType) return DecorationSet.empty;
+
+  doc.descendants((node: any, pos: number) => {
+    if (!node.isInline) return;
+    const linkMark = node.marks.find((m: any) => m.type === linkMarkType);
+    if (!linkMark) return;
+
+    const href: string = linkMark.attrs?.href || '';
+    const nodeText: string = node.text || '';
+
+    // Mention link: detected by zero-width space prefix in text
+    const MENTION_PREFIX = '​​';
+    const isMention = nodeText.startsWith(MENTION_PREFIX);
+
+    if (isMention) {
+      const mentionUrl = href;
+      const meta = mentionMetaCache.get(mentionUrl);
+
+      // Always hide original text and show badge
+      decorations.push(
+        Decoration.inline(pos, pos + node.nodeSize, { class: 'is-mention-link' })
+      );
+
+      const badge = document.createElement('span');
+      badge.className = 'mention-badge';
+      badge.setAttribute('contenteditable', 'false');
+      badge.setAttribute('data-href', mentionUrl);
+
+      if (meta) {
+        if (meta.favicon_url) {
+          const img = document.createElement('img');
+          img.className = 'mention-badge-icon';
+          img.src = meta.favicon_url;
+          img.alt = '';
+          img.onerror = () => {
+            // Replace failed favicon with fallback icon
+            const fallback = document.createElement('span');
+            fallback.className = 'mention-badge-fallback-icon';
+            fallback.textContent = '🔗';
+            img.replaceWith(fallback);
+          };
+          badge.appendChild(img);
+        } else {
+          const icon = document.createElement('span');
+          icon.className = 'mention-badge-fallback-icon';
+          icon.textContent = '🔗';
+          badge.appendChild(icon);
+        }
+        const titleEl = document.createElement('span');
+        titleEl.className = 'mention-badge-title';
+        titleEl.textContent = meta.title;
+        badge.appendChild(titleEl);
+      } else {
+        // No meta yet: show URL, fetch in background
+        const icon = document.createElement('span');
+        icon.className = 'mention-badge-fallback-icon';
+        icon.textContent = '🔗';
+        badge.appendChild(icon);
+        const titleEl = document.createElement('span');
+        titleEl.className = 'mention-badge-title mention-badge-loading';
+        titleEl.textContent = mentionUrl;
+        badge.appendChild(titleEl);
+
+        mentionMetaCache.getOrFetch(mentionUrl).then(() => {
+          const view = _badgeEditorView;
+          if (view && !view.isDestroyed) {
+            try {
+              const tr = view.state.tr.setMeta('mentionMetaReady', true);
+              view.dispatch(tr);
+            } catch {}
+          }
+        });
+      }
+
+      badge.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(mentionUrl, '_blank', 'noopener,noreferrer');
+      });
+
+      decorations.push(Decoration.widget(pos, badge, { side: -1 }));
+      return;
+    }
+
+    // Internal page link
+    const match = href.match(INTERNAL_URL_RE);
+    if (!match) return;
+
+    const pageId = match[2];
+    const meta = pageMetaCache.get(pageId);
+
+    // Add class to hide original <a> text
+    decorations.push(
+      Decoration.inline(pos, pos + node.nodeSize, { class: 'is-internal-link' })
+    );
+
+    // Inject badge widget at link start
+    const badge = document.createElement('span');
+    badge.className = 'internal-page-badge';
+    badge.setAttribute('data-page-id', pageId);
+    badge.setAttribute('contenteditable', 'false');
+
+    const icon = document.createElement('span');
+    icon.className = 'internal-page-badge-icon';
+    icon.textContent = meta?.icon || '📄';
+
+    const title = document.createElement('span');
+    title.className = 'internal-page-badge-title';
+    title.textContent = meta?.title || '加载中...';
+
+    const arrow = document.createElement('span');
+    arrow.className = 'internal-page-badge-arrow';
+    arrow.textContent = '↗';
+
+    badge.appendChild(icon);
+    badge.appendChild(title);
+    badge.appendChild(arrow);
+
+    // Click handler for navigation
+    badge.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.location.href = href;
+    });
+
+    decorations.push(Decoration.widget(pos, badge, { side: -1 }));
+
+    // If meta not cached, fetch and trigger re-render
+    if (!meta && spaceSlug) {
+      pageMetaCache.getOrFetch(pageId, spaceSlug).then(() => {
+        // Force a re-render by dispatching an empty transaction
+        // The decoration will be rebuilt with the cached data
+      });
+    }
+  });
+
+  return DecorationSet.create(doc, decorations);
+}
+
 interface PageEditorProps {
   initialContent: string;
   pageIdentity: { spaceSlug: string; pageId: string };
@@ -405,13 +599,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
-    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix] },
+    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules
   useEffect(() => {
     bnEditorRef.current = editor;
   }, [editor]);
+
+  // Populate page metadata cache from pageTree
+  useEffect(() => {
+    const { pageTree } = useSpaceStore.getState();
+    pageMetaCache.populateFromTree(pageTree);
+    const unsub = useSpaceStore.subscribe((state) => {
+      pageMetaCache.populateFromTree(state.pageTree);
+    });
+    return unsub;
+  }, []);
 
   // Sync subpage blocks with sidebar create/delete/reorder events
   useEffect(() => {
@@ -834,15 +1038,29 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         return;
       }
 
-      // External URL: show menu
-      const selection = window.getSelection();
+      // External URL: show menu at cursor position
       let x = 100, y = 100;
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        x = rect.left;
-        y = rect.bottom + 4;
-      }
+      // Use ProseMirror coordsAtPos for reliable cursor coordinates
+      try {
+        const pmEl = container.querySelector('.ProseMirror') as any;
+        const pmView = pmEl?.editor?.editorView;
+        if (pmView) {
+          const pos = pmView.state.selection.head;
+          const coords = pmView.coordsAtPos(pos);
+          x = coords.left;
+          y = coords.bottom + 4;
+        } else {
+          // Fallback: try global querySelector
+          const globalPm = document.querySelector('.ProseMirror') as any;
+          const globalView = globalPm?.editor?.editorView;
+          if (globalView) {
+            const pos = globalView.state.selection.head;
+            const coords = globalView.coordsAtPos(pos);
+            x = coords.left;
+            y = coords.bottom + 4;
+          }
+        }
+      } catch {}
       setPasteMenu({ url: text, position: { x, y } });
     };
 
@@ -856,15 +1074,16 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const currentBlock = editor.getTextCursorPosition().block;
     const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
 
+    const linkContent = [{ type: 'link', href: url, content: [{ type: 'text', text: title, styles: {} }] } as any];
     if (isEmpty) {
       // Replace empty block with a paragraph containing the link
       editor.updateBlock(currentBlock, {
         type: 'paragraph',
-        content: [{ type: 'text', text: title, styles: {}, link: url } as any],
+        content: linkContent,
       } as any);
     } else {
-      // Insert inline link text at cursor
-      editor.insertInlineContent([{ type: 'text', text: title, styles: {}, link: url } as any] as any);
+      // Insert inline link at cursor
+      editor.insertInlineContent(linkContent as any);
     }
   }, [editor]);
 
@@ -879,6 +1098,90 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       editor.updateBlock(currentBlock, newBlock);
     } else {
       editor.insertBlocks([newBlock], currentBlock, 'after');
+    }
+  }, [editor]);
+
+  // Listen for mention → bookmark conversion
+  useEffect(() => {
+    const handleConvert = (e: Event) => {
+      const { url } = (e as CustomEvent).detail;
+      if (!url) return;
+
+      const pmView = _badgeEditorView;
+      if (!pmView || pmView.isDestroyed) return;
+
+      const linkMark = pmView.state.schema.marks.link;
+      const MENTION_PREFIX_LOCAL = '​​';
+      let found = false;
+
+      pmView.state.doc.descendants((node, pos) => {
+        if (found) return false;
+        if (!node.isText || !node.marks) return;
+        const link = node.marks.find((m: any) => m.type === linkMark && m.attrs.href === url);
+        if (link && node.text?.startsWith(MENTION_PREFIX_LOCAL)) {
+          found = true;
+          // Find the block containing this mention
+          const $pos = pmView.state.doc.resolve(pos);
+          const blockNode = $pos.parent;
+          const blockStart = $pos.start() - 1; // pos before block content
+          const blockFrom = $pos.before(1);
+
+          // Check if block only contains this mention
+          const blockText = blockNode.textContent.replace(/​/g, '').trim();
+          const isOnlyMention = blockText === url;
+
+          if (isOnlyMention) {
+            // Replace entire block with bookmark
+            const tr = pmView.state.tr;
+            const bookmarkNode = pmView.state.schema.nodes.bookmark?.create({ url });
+            if (bookmarkNode) {
+              tr.replaceWith(blockFrom, blockFrom + blockNode.nodeSize + 2, bookmarkNode);
+              pmView.dispatch(tr);
+            }
+          } else {
+            // Remove just the mention link, insert bookmark block after
+            let tr = pmView.state.tr.removeMark(pos, pos + node.nodeSize, linkMark);
+            // Replace text with nothing (remove the mention text)
+            tr = tr.delete(pos, pos + node.nodeSize);
+            // Insert bookmark block after current block
+            const bookmarkNode = pmView.state.schema.nodes.bookmark?.create({ url });
+            if (bookmarkNode) {
+              const insertPos = tr.mapping.map(blockFrom + blockNode.nodeSize + 1);
+              tr = tr.insert(insertPos, bookmarkNode);
+              // Also insert a paragraph after bookmark for continued editing
+              const para = pmView.state.schema.nodes.paragraph?.create();
+              if (para) {
+                tr = tr.insert(insertPos + bookmarkNode.nodeSize, para);
+              }
+            }
+            pmView.dispatch(tr);
+          }
+          return false;
+        }
+      });
+    };
+
+    document.addEventListener('mention:convert-to-bookmark', handleConvert);
+    return () => document.removeEventListener('mention:convert-to-bookmark', handleConvert);
+  }, [editor]);
+
+  // Unicode marker to identify mention links in the editor runtime
+  const MENTION_PREFIX = '​​'; // zero-width space x2
+
+  const handleInsertMention = useCallback((url: string) => {
+    setPasteMenu(null);
+    const currentBlock = editor.getTextCursorPosition().block;
+    const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+
+    // Use the URL as href (valid URL so BlockNote won't strip it), but prefix text with invisible marker
+    const mentionContent = [{ type: 'link', href: url, content: [{ type: 'text', text: MENTION_PREFIX + url, styles: {} }] } as any];
+    if (isEmpty) {
+      editor.updateBlock(currentBlock, {
+        type: 'paragraph',
+        content: mentionContent,
+      } as any);
+    } else {
+      editor.insertInlineContent(mentionContent as any);
     }
   }, [editor]);
 
@@ -1542,13 +1845,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             slashMenu={false}
             sideMenu={true}
             formattingToolbar={false}
-            linkToolbar={true}
+            linkToolbar={false}
           >
             {/* Custom formatting toolbar — only select, basic styles, color, link */}
             {!readOnly && (
               <FormattingToolbarController
                 formattingToolbar={formattingToolbarComponent}
               />
+            )}
+            {/* Custom link toolbar — hover tooltip + edit popup */}
+            {!readOnly && (
+              <CustomLinkToolbar />
+            )}
+            {/* Link preview card — hover card for mentions */}
+            {!readOnly && (
+              <LinkPreviewCard />
             )}
             {/* Custom slash menu with subpage support */}
             {!readOnly && (
@@ -1574,6 +1885,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           position={pasteMenu.position}
           onInsertLink={handleInsertLink}
           onInsertBookmark={handleInsertBookmark}
+          onInsertMention={handleInsertMention}
           onClose={() => setPasteMenu(null)}
         />
       )}

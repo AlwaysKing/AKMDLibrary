@@ -383,7 +383,13 @@ function parseInlineFormatting(text: string): any[] {
             content.push({ type: 'text', text: current, styles: {} });
             current = '';
           }
-          content.push({ type: 'text', text: linkText, styles: {}, link: url });
+          // Mention link: [mention:url](url) → mark text with zero-width prefix
+          const MENTION_PREFIX = '​​';
+          if (linkText.startsWith('mention:') && linkText.slice(8) === url) {
+            content.push({ type: 'link', href: url, content: [{ type: 'text', text: MENTION_PREFIX + url, styles: {} }] });
+          } else {
+            content.push({ type: 'link', href: url, content: [{ type: 'text', text: linkText, styles: {} }] });
+          }
           i = urlEnd + 1;
           continue;
         }
@@ -549,6 +555,17 @@ function getFormattedText(content: any): string {
     return content
       .map((c) => {
         if (typeof c === 'string') return c;
+
+        // BlockNote native link format: { type: 'link', href, content: [...] }
+        if (c.type === 'link' && c.href) {
+          const innerText = getFormattedText(c.content);
+          // Mention link: zero-width prefix → serialize as mention:href
+          const MENTION_PREFIX = '​​';
+          if (innerText.startsWith(MENTION_PREFIX)) {
+            return `[mention:${c.href}](${c.href})`;
+          }
+          return `[${innerText}](${c.href})`;
+        }
 
         let text = c.text || '';
 
