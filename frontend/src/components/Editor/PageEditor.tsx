@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
 import CustomLinkToolbar from './CustomLinkToolbar';
+import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
 import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems, createCodeBlockSpec } from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
@@ -483,6 +484,68 @@ const InternalLinkBadge = Extension.create({
   },
 });
 
+// ---- Table cell active highlight ----
+// Uses ProseMirror Decoration to add .cell-active class to the td containing the cursor,
+// and .table-active class to the ancestor table node.
+// Decorations survive DOM recreation (ProseMirror rebuilds td elements on click).
+const TableCellHighlight = Extension.create({
+  name: 'tableCellHighlight',
+
+  addProseMirrorPlugins() {
+    const pluginKey = new PluginKey('tableCellHighlight');
+
+    return [
+      new Plugin({
+        key: pluginKey,
+        state: {
+          init() { return null as number | null; },
+          apply(tr, _value, _oldState, newState) {
+            const $head = newState.selection.$head;
+            for (let d = $head.depth; d > 0; d--) {
+              const node = $head.node(d);
+              if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
+                return $head.before(d);
+              }
+            }
+            return null;
+          },
+        },
+        props: {
+          decorations(state) {
+            const cellPos = pluginKey.getState(state) as number | null;
+            if (cellPos == null) return DecorationSet.empty;
+            const cellNode = state.doc.nodeAt(cellPos);
+            if (!cellNode) return DecorationSet.empty;
+
+            const decorations: ReturnType<typeof Decoration.node>[] = [
+              Decoration.node(cellPos, cellPos + cellNode.nodeSize, {
+                class: 'cell-active',
+              }),
+            ];
+
+            // Find the ancestor table node and add .table-active class to it
+            const $cell = state.doc.resolve(cellPos);
+            for (let d = $cell.depth; d > 0; d--) {
+              const node = $cell.node(d);
+              if (node.type.name === 'table') {
+                const tablePos = $cell.before(d);
+                decorations.push(
+                  Decoration.node(tablePos, tablePos + node.nodeSize, {
+                    class: 'table-active',
+                  }),
+                );
+                break;
+              }
+            }
+
+            return DecorationSet.create(state.doc, decorations);
+          },
+        },
+      }),
+    ];
+  },
+});
+
 function buildInternalLinkDecorations(doc: any, spaceSlug: string, editorView?: any): DecorationSet {
   const decorations: Decoration[] = [];
   const schema = doc.type.schema;
@@ -664,7 +727,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
-    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge] },
+    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules
@@ -1850,6 +1913,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [editor]);
 
+  // Table: highlight the cell containing the cursor
+  // Note: ProseMirror re-creates td DOM elements on click, so we cannot use
+  // JS-set attributes. Instead, we use pure CSS with :has() and
+  // ProseMirror's data-is-empty-and-focused attribute on paragraphs.
+  // For non-empty cells, we rely on the ProseMirror selection decoration.
+
   // Custom code button with </> icon
   const CodeButton = useCallback(() => {
     const editor = useBlockNoteEditor();
@@ -1938,6 +2007,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       </ComponentsContext.Provider>
       {/* Custom code block toolbar — language selector + copy button */}
       <CodeBlockToolbar editorContainer={editorEl} />
+      {/* Table cell menu — notch hover detection + cell context menu */}
+      <TableCellMenu editorContainer={editorEl} />
       {/* Clickable area below editor — click to append new paragraph */}
       {!readOnly && (
         <div

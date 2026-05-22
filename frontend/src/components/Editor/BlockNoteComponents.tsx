@@ -1210,17 +1210,19 @@ const TableHandleRoot: React.FC<{
   draggable: boolean;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onClick?: (e: React.MouseEvent) => void;
   style?: React.CSSProperties;
   label?: string;
   children?: ReactNode;
 }> = (props) => {
-  const { className, draggable, onDragStart, onDragEnd, style, children } = props;
+  const { className, draggable, onDragStart, onDragEnd, onClick, style, children } = props;
   return (
     <div
       className={className}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      onClick={onClick}
       style={style}
     >
       {children}
@@ -1263,7 +1265,7 @@ export const COLORS: Record<string, {
 };
 
 // Chinese color names for display
-const COLOR_NAMES: Record<string, string> = {
+export const COLOR_NAMES: Record<string, string> = {
   gray: '灰色', brown: '棕色', red: '红色', orange: '橙色',
   yellow: '黄色', green: '绿色', blue: '蓝色', purple: '紫色', pink: '粉色',
 };
@@ -1475,6 +1477,71 @@ function TurnIntoSubmenu({ onClose }: { onClose: () => void }) {
 }
 
 // Color Submenu — Notion-style vertical list
+/**
+ * ColorListContent — shared color list UI for text & background colors.
+ * Used by both the drag handle menu's ColorSubmenu and the table cell menu.
+ */
+export function ColorListContent({
+  currentTextColor = 'default',
+  currentBgColor = 'default',
+  onTextColor,
+  onBgColor,
+}: {
+  currentTextColor?: string;
+  currentBgColor?: string;
+  onTextColor: (color: string) => void;
+  onBgColor: (color: string) => void;
+}) {
+  const defaultBorder = 'rgba(28,19,1,0.11)';
+
+  return (
+    <>
+      {/* Text colors */}
+      <div
+        className={`color-list-item ${currentTextColor === 'default' ? 'selected' : ''}`}
+        onClick={() => onTextColor('default')}
+      >
+        <span className="color-list-swatch" style={{ color: '#2c2c2b', boxShadow: `inset 0 0 0 1px ${defaultBorder}` }}>A</span>
+        <span className="color-list-label">默认文本</span>
+        {currentTextColor === 'default' && <span className="drag-handle-check">✓</span>}
+      </div>
+      {Object.entries(COLORS).map(([name, color]) => (
+        <div
+          key={`text-${name}`}
+          className={`color-list-item ${currentTextColor === name ? 'selected' : ''}`}
+          onClick={() => onTextColor(name)}
+        >
+          <span className="color-list-swatch" style={{ color: color.text, boxShadow: `inset 0 0 0 1px ${color.textBorder}` }}>A</span>
+          <span className="color-list-label">{COLOR_NAMES[name]}文本</span>
+          {currentTextColor === name && <span className="drag-handle-check">✓</span>}
+        </div>
+      ))}
+      {/* Divider */}
+      <div className="color-list-divider" />
+      {/* Background colors — no "A" letter, just colored square */}
+      <div
+        className={`color-list-item ${currentBgColor === 'default' ? 'selected' : ''}`}
+        onClick={() => onBgColor('default')}
+      >
+        <span className="color-list-swatch color-list-swatch-default" style={{ boxShadow: `inset 0 0 0 1px ${defaultBorder}` }} />
+        <span className="color-list-label">默认背景</span>
+        {currentBgColor === 'default' && <span className="drag-handle-check">✓</span>}
+      </div>
+      {Object.entries(COLORS).map(([name, color]) => (
+        <div
+          key={`bg-${name}`}
+          className={`color-list-item ${currentBgColor === name ? 'selected' : ''}`}
+          onClick={() => onBgColor(name)}
+        >
+          <span className="color-list-swatch" style={{ background: color.background, boxShadow: `inset 0 0 0 1px ${color.bgBorder}` }} />
+          <span className="color-list-label">{COLOR_NAMES[name]}背景</span>
+          {currentBgColor === name && <span className="drag-handle-check">✓</span>}
+        </div>
+      ))}
+    </>
+  );
+}
+
 function ColorSubmenu({ onClose }: { onClose: () => void }) {
   const editor = useBlockNoteEditor();
   const blockId = getDragHandleBlockId();
@@ -1501,52 +1568,14 @@ function ColorSubmenu({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
-  const defaultBorder = 'rgba(28,19,1,0.11)';
-
   return (
     <SubmenuContainer className="drag-handle-submenu color-submenu">
-      {/* Text colors */}
-      <div
-        className={`color-list-item ${currentTextColor === 'default' ? 'selected' : ''}`}
-        onClick={() => handleTextColor('default')}
-      >
-        <span className="color-list-swatch" style={{ color: '#2c2c2b', boxShadow: `inset 0 0 0 1px ${defaultBorder}` }}>A</span>
-        <span className="color-list-label">默认文本</span>
-        {currentTextColor === 'default' && <span className="drag-handle-check">✓</span>}
-      </div>
-      {Object.entries(COLORS).map(([name, color]) => (
-        <div
-          key={`text-${name}`}
-          className={`color-list-item ${currentTextColor === name ? 'selected' : ''}`}
-          onClick={() => handleTextColor(name)}
-        >
-          <span className="color-list-swatch" style={{ color: color.text, boxShadow: `inset 0 0 0 1px ${color.textBorder}` }}>A</span>
-          <span className="color-list-label">{COLOR_NAMES[name]}文本</span>
-          {currentTextColor === name && <span className="drag-handle-check">✓</span>}
-        </div>
-      ))}
-      {/* Divider */}
-      <div className="color-list-divider" />
-      {/* Background colors — no "A" letter, just colored square */}
-      <div
-        className={`color-list-item ${currentBgColor === 'default' ? 'selected' : ''}`}
-        onClick={() => handleBgColor('default')}
-      >
-        <span className="color-list-swatch color-list-swatch-default" style={{ boxShadow: `inset 0 0 0 1px ${defaultBorder}` }} />
-        <span className="color-list-label">默认背景</span>
-        {currentBgColor === 'default' && <span className="drag-handle-check">✓</span>}
-      </div>
-      {Object.entries(COLORS).map(([name, color]) => (
-        <div
-          key={`bg-${name}`}
-          className={`color-list-item ${currentBgColor === name ? 'selected' : ''}`}
-          onClick={() => handleBgColor(name)}
-        >
-          <span className="color-list-swatch" style={{ background: color.background, boxShadow: `inset 0 0 0 1px ${color.bgBorder}` }} />
-          <span className="color-list-label">{COLOR_NAMES[name]}背景</span>
-          {currentBgColor === name && <span className="drag-handle-check">✓</span>}
-        </div>
-      ))}
+      <ColorListContent
+        currentTextColor={currentTextColor}
+        currentBgColor={currentBgColor}
+        onTextColor={handleTextColor}
+        onBgColor={handleBgColor}
+      />
     </SubmenuContainer>
   );
 }

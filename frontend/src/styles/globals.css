@@ -1202,6 +1202,90 @@ body.multi-drag-active .bn-drag-preview {
   line-height: 24px !important;
   color: #2c2c2b;
   min-height: 32px;
+  transition: border-color 0.15s ease;
+}
+
+/* Active cell — Notion-style: ::before = blue border overlay, ::after = notch button.
+   ::before mimics Notion's overlay div with pointer-events:none.
+   inset: 0 stretches to padding-box edge; we offset -1px to cover the cell border too. */
+.bn-editor [data-content-type="table"] td.cell-active,
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]) {
+  position: relative;
+  z-index: 10 !important;
+}
+
+/* Blue border overlay (::before) — covers the cell's gray border like Notion's overlay div */
+.bn-editor [data-content-type="table"] td.cell-active::before,
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused])::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border: 2px solid rgb(35, 131, 226);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Hide BlockNote's column-resize-handle inside the active cell — Notion replaces it with the notch.
+   Also hide ALL resize handles while the notch is being hovered (JS adds .notch-hovering to editor
+   container) to prevent the column-resize bar from appearing under the notch cursor. */
+.bn-editor [data-content-type="table"] td.cell-active > .column-resize-handle,
+.notch-hovering .column-resize-handle {
+  display: none !important;
+}
+
+/* Notch button (::after) — sits on the right edge of the blue border overlay.
+   Default state: small 6×12 blue pill with white border (Notion's notch).
+   Hover state: expands to 12×16 with three-dot SVG icon (Notion's "open cell menu" button). */
+.bn-editor [data-content-type="table"] td.cell-active::after,
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused])::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -3px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  background: rgb(35, 131, 226);
+  border: 2px solid rgb(255, 255, 255);
+  z-index: 2;
+  transition: width 0.1s ease-in-out, height 0.1s ease-in-out, right 0.1s ease-in-out,
+    border-radius 0.1s ease-in-out, border 0.1s ease-in-out,
+    background-image 0.1s ease-in-out;
+}
+
+/* Notch hover: when the mouse is over the notch area, JS adds .notch-hovering to the editor
+   container. This hides the CSS ::after notch so the React overlay button (.tcm-notch-btn)
+   can take its place. This avoids fighting with ProseMirror's Decoration system which
+   continuously resets TD attributes. */
+.notch-hovering [data-content-type="table"] td.cell-active::after {
+  opacity: 0;
+}
+
+/* ---- Notch Overlay Button (tcm-notch-btn) ---- */
+/* React-rendered button that replaces the CSS ::after notch on hover.
+   Positioned at the notch location (right edge of active cell, vertically centered).
+   Shows three white dots matching Notion's "打开单元格菜单" button. */
+.tcm-notch-btn {
+  background: rgb(35, 131, 226);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Three white dots via inline SVG background */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 16'%3E%3Ccircle cx='5' cy='3' r='1.5' fill='white'/%3E%3Ccircle cx='5' cy='8' r='1.5' fill='white'/%3E%3Ccircle cx='5' cy='13' r='1.5' fill='white'/%3E%3C/svg%3E");
+  background-size: 8px 12px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.tcm-notch-btn:hover {
+  filter: brightness(0.9);
 }
 
 /* Cell text — Notion uses padding 7px 9px on inner div */
@@ -1212,16 +1296,171 @@ body.multi-drag-active .bn-drag-preview {
   font-size: 16px !important;
 }
 
-/* Row hover */
-.bn-editor [data-content-type="table"] tbody tr:hover td {
-  background: rgba(55, 53, 47, 0.024);
+/* ---- Table Cell Menu (tcm-*) ---- */
+/* Dropdown menu triggered by clicking the notch button on a cell's right edge.
+   Matches Notion's cell context menu with "颜色" and "清除内容" options. */
+.tcm-menu {
+  background: white;
+  border: 1px solid #e6e5e3;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  padding: 4px 0;
+  min-width: 180px;
+  font-size: 14px;
+  color: #2c2c2b;
 }
 
-/* Selected cell — blue highlight */
+.tcm-menu-item {
+  position: relative;
+}
+
+.tcm-menu-item-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 8px);
+  margin: 1px 4px;
+  padding: 5px 8px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: inherit;
+  text-align: left;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+
+.tcm-menu-item-btn:hover {
+  background: rgba(55, 53, 47, 0.08);
+}
+
+.tcm-menu-item-btn.tcm-danger:hover {
+  background: rgba(235, 87, 87, 0.08);
+  color: #eb5757;
+}
+
+/* Selected cell — subtle blue background */
 .bn-editor [data-content-type="table"] td.selected {
   background: rgba(35, 131, 226, 0.04) !important;
-  box-shadow: inset 0 0 0 2px rgb(35, 131, 226);
 }
+
+/* ---- Table Handles (row/column grab bars) ---- */
+/* Notion: small rounded rect, gray bg, white border, opacity transition */
+.bn-table-handle {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 14px !important;
+  height: 14px !important;
+  background: rgb(173, 169, 163) !important;
+  border: 2px solid rgb(255, 255, 255) !important;
+  border-radius: 4px !important;
+  cursor: grab !important;
+  color: rgb(255, 255, 255) !important;
+  transition: background 0.15s ease !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04) !important;
+}
+
+.bn-table-handle:hover {
+  background: rgb(55, 53, 47) !important;
+}
+
+.bn-table-handle:active {
+  cursor: grabbing !important;
+}
+
+.bn-table-handle svg {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+/* ---- Table Extend Buttons (add row/column) ---- */
+/* Notion: thin strip with subtle border, rounded, "+" icon, hover highlight */
+.bn-extend-button {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: transparent !important;
+  border: 1px solid #e6e5e3 !important;
+  border-radius: 4px !important;
+  color: rgba(55, 53, 47, 0.45) !important;
+  cursor: pointer !important;
+  transition: background 0.1s ease, color 0.1s ease !important;
+  padding: 0 !important;
+  outline: none !important;
+}
+
+.bn-extend-button:hover {
+  background: rgba(55, 53, 47, 0.04) !important;
+  color: rgba(55, 53, 47, 0.65) !important;
+}
+
+.bn-extend-button svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+/* Column extend: narrow tall strip beside table, 8px gap from table edge (Notion) */
+.bn-extend-button-add-remove-columns {
+  width: 16px !important;
+  margin-left: 8px !important;
+}
+
+/* Row extend: wide short strip below table, 8px gap from table edge (Notion) */
+.bn-extend-button-add-remove-rows {
+  height: 16px !important;
+  width: 100% !important;
+  margin-top: 8px !important;
+}
+
+/* ---- Column Resize Handle ---- */
+/* Notion uses a subtle hover indicator */
+.column-resize-handle {
+  background-color: rgb(35, 131, 226) !important;
+  width: 2px !important;
+  right: -1px !important;
+}
+
+/* ---- Table Handle Menu (column/row action menu) ---- */
+.bn-table-handle-menu {
+  background: #ffffff !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
+  border: 1px solid #e9e9e7 !important;
+  padding: 4px !important;
+  min-width: 200px !important;
+  z-index: 100 !important;
+}
+.bn-table-handle-menu [role="menuitem"] {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 20px;
+  color: #37352f;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background 0.1s ease;
+}
+.bn-table-handle-menu [role="menuitem"]:hover {
+  background: rgba(55, 53, 47, 0.08);
+}
+
+/* ---- Table Cell Background Color ---- */
+/* BlockNote stores backgroundColor as data-background-color attribute on td.
+   These rules render the actual background color. */
+.bn-editor [data-content-type="table"] td[data-background-color="gray"]   { background-color: #f0efed !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="brown"]  { background-color: #f5ede9 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="red"]    { background-color: #fce9e7 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="orange"] { background-color: #fbebde !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="yellow"] { background-color: #f9f3dc !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="green"]  { background-color: #e8f1ec !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="blue"]   { background-color: #e5f2fc !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="purple"] { background-color: #f3ebf9 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="pink"]   { background-color: #fae9f1 !important; }
 
 /* ============================================
    Image Block Styles - Notion-like
