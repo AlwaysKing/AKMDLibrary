@@ -495,9 +495,8 @@ const InternalLinkBadge = Extension.create({
 
 // ---- Fix: rowspan cells height when rows are empty ----
 // When mergeCells makes a row completely empty (all cells have rowspan>1),
-// the browser gives that row 0 height, so rowspan cells only show 1 row's worth of height.
-// Fix: CSS `table:has(tr:empty)` sets min-height on the <table> element.
-// The browser distributes the extra height among rows, making rowspan cells taller.
+// border-collapse tables give that <tr> 0 height. Fix is in globals.css:
+// tr:empty::before creates an anonymous table-cell with min height.
 
 // ---- Table cell active highlight ----
 // Uses ProseMirror Decoration to add .cell-active class to the td containing the cursor,

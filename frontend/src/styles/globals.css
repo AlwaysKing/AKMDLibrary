@@ -1295,38 +1295,20 @@ body.multi-drag-active .bn-drag-preview {
 }
 
 /* ---- Rowspan cell height fix ---- */
-/* When mergeCells makes a row empty, border-collapse tables collapse the row to 0 height.
-   Setting min-height on the <table> forces it taller; browser distributes space to rows.
-   This is purely CSS — no DOM changes, no ProseMirror conflicts. */
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(1):empty) {
-  min-height: 78px !important;
+/* When mergeCells creates empty <tr> or rows where all cells have rowspan>1,
+   border-collapse tables give those rows 0 height, making merged cells appear too short.
+   Fix: set minimum row height on ALL tr, and use ::before on truly empty rows. */
+.bn-editor [data-content-type="table"] tr {
+  height: 39px;
 }
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(2):empty) {
-  min-height: 78px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(3):empty) {
-  min-height: 117px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(4):empty) {
-  min-height: 156px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(5):empty) {
-  min-height: 195px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(6):empty) {
-  min-height: 234px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(7):empty) {
-  min-height: 273px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(8):empty) {
-  min-height: 312px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(9):empty) {
-  min-height: 351px !important;
-}
-.bn-editor [data-content-type="table"] table:has(tr:nth-child(10):empty) {
-  min-height: 390px !important;
+.bn-editor [data-content-type="table"] tr:empty::before {
+  content: '\00a0';
+  display: table-cell;
+  height: 39px;
+  visibility: hidden;
+  padding: 0;
+  line-height: 0;
+  font-size: 1px;
 }
 
 /* ---- Table Cell Menu (tcm-*) ---- */
