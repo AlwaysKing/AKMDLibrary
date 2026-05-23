@@ -484,6 +484,21 @@ const InternalLinkBadge = Extension.create({
   },
 });
 
+// ---- Table colgroup fix ----
+// Removed: BlockNote's renderHTML was patched in chunk-JZ4PHHCU.js to handle colspan correctly,
+// and prosemirror-tables' updateColumnsOnResize (chunk-FM6HLF7F.js) already handles colspan properly.
+// The MutationObserver approach was causing conflicts by overriding colgroup on every DOM change.
+
+// ---- Fix: allow empty table rows for merged cells ----
+// Patched in chunk-SG4YPLUU.js: changed tableRow content from "+" to "*"
+// to allow empty rows when mergeCells removes all cells from a row covered by rowspan.
+
+// ---- Fix: rowspan cells height when rows are empty ----
+// When mergeCells makes a row completely empty (all cells have rowspan>1),
+// the browser gives that row 0 height, so rowspan cells only show 1 row's worth of height.
+// Fix: CSS `table:has(tr:empty)` sets min-height on the <table> element.
+// The browser distributes the extra height among rows, making rowspan cells taller.
+
 // ---- Table cell active highlight ----
 // Uses ProseMirror Decoration to add .cell-active class to the td containing the cursor,
 // and .table-active class to the ancestor table node.
@@ -2003,6 +2018,29 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     </FormattingToolbar>
   ), [CodeButton]);
 
+  // Hide formatting toolbar during multi-cell selection (CellSelection)
+  const isCellSelection = useEditorState({
+    editor,
+    selector: ({ editor: e }) => {
+      const sel = e._tiptapEditor.state.selection as any;
+      return !!(sel.$anchorCell && sel.$headCell);
+    },
+  });
+
+
+  // Suppress BlockNote's internal error with merged table cells
+  // (accessing .id on undefined block reference in table-widgets mousemove handler)
+  useEffect(() => {
+    const handler = (e: ErrorEvent) => {
+      if (e.message?.includes("Cannot read properties of undefined (reading 'id')")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('error', handler);
+    return () => window.removeEventListener('error', handler);
+  }, []);
+
   return (
     <div className="relative" ref={editorRefCallback}>
       <ComponentsContext.Provider value={blockNoteComponents as any}>
@@ -2017,8 +2055,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             formattingToolbar={false}
             linkToolbar={false}
           >
-            {/* Custom formatting toolbar — only select, basic styles, color, link */}
-            {!readOnly && (
+            {/* Custom formatting toolbar — hidden during multi-cell selection */}
+            {!readOnly && !isCellSelection && (
               <FormattingToolbarController
                 formattingToolbar={formattingToolbarComponent}
               />

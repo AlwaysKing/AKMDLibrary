@@ -82,6 +82,103 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Table block: <table-block> ... </table-block>
+    if (trimmed === '<table-block>') {
+      const innerLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== '</table-block>') {
+        innerLines.push(lines[i]);
+        i++;
+      }
+      i++; // Skip closing </table-block>
+
+      const innerContent = innerLines.join('\n').trim();
+
+      // Try JSON format first (for tables with merged cells)
+      let tableRows: any[] | null = null;
+      let trueColCount = 0;
+      if (innerContent.startsWith('[')) {
+        try {
+          const jsonData = JSON.parse(innerContent);
+          if (Array.isArray(jsonData)) {
+            tableRows = jsonData.map((row: any) => ({
+              cells: (row.cells || []).map((cell: any) => ({
+                type: 'tableCell',
+                content: cell.text
+                  ? parseInlineFormatting(cell.text)
+                  : [{ type: 'text', text: '', styles: {} }],
+                props: {
+                  colspan: cell.cs || 1,
+                  rowspan: cell.rs || 1,
+                  backgroundColor: cell.bg || 'default',
+                  textColor: 'default',
+                  textAlignment: 'left',
+                },
+              })),
+            }));
+            trueColCount = tableRows!.reduce((max: number, row: any) => {
+              const span = row.cells.reduce(
+                (sum: number, cell: any) => sum + (cell.props?.colspan || 1),
+                0,
+              );
+              return Math.max(max, span);
+            }, 0);
+          }
+        } catch { /* not JSON, fall through to pipe format */ }
+      }
+
+      // Fall back to pipe format
+      if (!tableRows) {
+        tableRows = [];
+        for (const innerLine of innerLines) {
+          const rowTrimmed = innerLine.trim();
+          // Skip separator row
+          if (/^\|[\s\-:]+(\|[\s\-:]+)*\|?$/.test(rowTrimmed) && rowTrimmed.includes('-')) continue;
+          if (!rowTrimmed.startsWith('|')) continue;
+
+          const segments = rowTrimmed.split('|').slice(1, -1);
+          if (segments.length === 0) continue;
+
+          const cells = segments.map((cellText: string) => {
+            let trimmedCell = cellText.trim().replace(/\\\|/g, '|');
+            let backgroundColor = 'default';
+            const bgMatch = trimmedCell.match(/^\{bg:([a-z]+)\}/);
+            if (bgMatch) {
+              backgroundColor = bgMatch[1];
+              trimmedCell = trimmedCell.slice(bgMatch[0].length);
+            }
+            return {
+              type: 'tableCell',
+              content: trimmedCell
+                ? parseInlineFormatting(trimmedCell)
+                : [{ type: 'text', text: '', styles: {} }],
+              props: {
+                colspan: 1,
+                rowspan: 1,
+                backgroundColor,
+                textColor: 'default',
+                textAlignment: 'left',
+              },
+            };
+          });
+          tableRows.push({ cells });
+        }
+        trueColCount = tableRows[0]?.cells?.length || 0;
+      }
+
+      if (tableRows.length > 0) {
+        blocks.push({
+          type: 'table',
+          content: {
+            type: 'tableContent',
+            columnWidths: Array(trueColCount || tableRows[0].cells.length).fill(null),
+            rows: tableRows,
+          },
+        });
+      }
+      continue;
+    }
+
     // Code block
     if (trimmed.startsWith('```')) {
       const rawLang = trimmed.slice(3).trim();
@@ -534,8 +631,54 @@ function serializeRegularBlock(block: any): string {
       }
       return '';
 
-    case 'table':
-      return '<!-- Table not fully supported in markdown round-trip -->';
+    case 'table': {
+      const tableContent = block.content;
+      if (!tableContent?.rows?.length) return '';
+      const rows = tableContent.rows;
+
+      // Check if any cell has colspan > 1 or rowspan > 1
+      const hasMergedCells = rows.some((row: any) =>
+        (row.cells || []).some((cell: any) =>
+          (cell.props?.colspan || 1) > 1 || (cell.props?.rowspan || 1) > 1,
+        ),
+      );
+
+      if (hasMergedCells) {
+        // Use JSON format for tables with merged cells — pipe format can't represent rowspan
+        const jsonData = rows.map((row: any) => ({
+          cells: (row.cells || []).map((cell: any) => ({
+            text: getFormattedText(cell.content),
+            cs: cell.props?.colspan || 1,
+            rs: cell.props?.rowspan || 1,
+            bg: cell.props?.backgroundColor || 'default',
+          })),
+        }));
+        return `<table-block>\n${JSON.stringify(jsonData)}\n</table-block>`;
+      }
+
+      // Standard pipe format for tables without merged cells
+      const colCount = rows[0]?.cells?.length || 0;
+      if (colCount === 0) return '';
+
+      const serializeCell = (cell: any) => {
+        let text = getFormattedText(cell.content).replace(/\|/g, '\\|');
+        const bg = cell.props?.backgroundColor;
+        if (bg && bg !== 'default') {
+          text = `{bg:${bg}}` + text;
+        }
+        return text;
+      };
+
+      const lines: string[] = [];
+      lines.push('<table-block>');
+      lines.push('| ' + rows[0].cells.map(serializeCell).join(' | ') + ' |');
+      lines.push('| ' + Array(colCount).fill('---').join(' | ') + ' |');
+      for (let r = 1; r < rows.length; r++) {
+        lines.push('| ' + rows[r].cells.map(serializeCell).join(' | ') + ' |');
+      }
+      lines.push('</table-block>');
+      return lines.join('\n');
+    }
 
     default:
       return `<!-- Unknown block type: ${block.type} -->`;

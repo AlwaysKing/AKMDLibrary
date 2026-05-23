@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Paintbrush, Eraser } from 'lucide-react';
+import { Paintbrush, Eraser, Merge } from 'lucide-react';
 import { ColorListContent } from './BlockNoteComponents';
+import { mergeCells } from 'prosemirror-tables';
 
 /**
  * TableCellMenu — renders a single blue border frame around selected table cells
@@ -250,6 +251,17 @@ export default function TableCellMenu({
   }, []);
 
   // ---- Actions ----
+  const mergeSelectedCells = useCallback(() => {
+    const editor = getEditor();
+    if (!editor || !menuState) return;
+
+    const view = editor._tiptapEditor.view;
+    const state = view.state;
+    mergeCells(state, view.dispatch.bind(view));
+    setMenuState(null);
+    setColorOpen(false);
+  }, [getEditor, menuState]);
+
   const clearCell = useCallback(() => {
     const editor = getEditor();
     if (!editor || !menuState) return;
@@ -344,7 +356,7 @@ export default function TableCellMenu({
             border: '2px solid rgb(35, 131, 226)',
             borderRadius: '2px',
             pointerEvents: 'none',
-            zIndex: 999,
+            zIndex: 30,
           }}
         />
       )}
@@ -355,11 +367,12 @@ export default function TableCellMenu({
           className="tcm-notch-btn"
           style={{
             position: 'fixed',
-            left: selectionRect.left + selectionRect.width - 3,
-            top: selectionRect.top + selectionRect.height / 2 - 6,
+            left: selectionRect.left + selectionRect.width - 1,
+            top: selectionRect.top + selectionRect.height / 2,
             width: 6,
             height: 12,
-            zIndex: 1000,
+            zIndex: 30,
+            transform: 'translate(-50%, -50%)',
           }}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
@@ -377,7 +390,7 @@ export default function TableCellMenu({
             position: 'fixed',
             left: menuState.x,
             top: menuState.y - 32,
-            zIndex: 1000,
+            zIndex: 30,
           }}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => e.stopPropagation()}
@@ -412,6 +425,17 @@ export default function TableCellMenu({
               );
             })()}
           </div>
+
+          {/* Merge cells item — only for multi-cell selection */}
+          {getAllActiveCells().length > 1 && (
+            <button
+              className="tcm-menu-item-btn"
+              onClick={mergeSelectedCells}
+            >
+              <Merge size={15} />
+              <span>合并单元格</span>
+            </button>
+          )}
 
           {/* Clear content item */}
           <button
