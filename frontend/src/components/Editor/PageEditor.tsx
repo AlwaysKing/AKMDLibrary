@@ -487,6 +487,7 @@ const InternalLinkBadge = Extension.create({
 // ---- Table cell active highlight ----
 // Uses ProseMirror Decoration to add .cell-active class to the td containing the cursor,
 // and .table-active class to the ancestor table node.
+// Supports both single-cell (TextSelection) and multi-cell (CellSelection) highlights.
 // Decorations survive DOM recreation (ProseMirror rebuilds td elements on click).
 const TableCellHighlight = Extension.create({
   name: 'tableCellHighlight',
@@ -498,13 +499,42 @@ const TableCellHighlight = Extension.create({
       new Plugin({
         key: pluginKey,
         state: {
-          init() { return null as number | null; },
+          // Store { primary: number, all: number[] }
+          // primary = the cell that shows the notch (last-selected / $headCell)
+          // all = all highlighted cells
+          init() { return null as { primary: number; all: number[] } | null; },
           apply(tr, _value, _oldState, newState) {
-            const $head = newState.selection.$head;
+            const sel = newState.selection as any;
+
+            // CellSelection (multi-cell drag): highlight ALL selected cells
+            // Use duck-typing ($anchorCell/$headCell) instead of instanceof
+            // because BlockNote bundles its own prosemirror-tables instance.
+            // CellSelection covers a rectangular region of cells between
+            // $anchorCell and $headCell. Use forEachCell to collect ALL of them,
+            // not just the two endpoints.
+            if (sel.$anchorCell && sel.$headCell) {
+              const all: number[] = [];
+
+              // $headCell is the "primary" cell (last selected) — notch goes here
+              const primary = (sel.$headCell as ReturnType<typeof newState.doc.resolve>).pos;
+
+              // forEachCell iterates every cell in the rectangular selection region
+              sel.forEachCell((node: any, pos: number) => {
+                if (node && (node.type.name === 'tableCell' || node.type.name === 'tableHeader')) {
+                  all.push(pos);
+                }
+              });
+
+              return all.length > 0 ? { primary, all } : null;
+            }
+
+            // TextSelection: highlight single cell containing cursor
+            const $head = sel.$head;
             for (let d = $head.depth; d > 0; d--) {
               const node = $head.node(d);
               if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
-                return $head.before(d);
+                const pos = $head.before(d);
+                return { primary: pos, all: [pos] };
               }
             }
             return null;
@@ -512,23 +542,28 @@ const TableCellHighlight = Extension.create({
         },
         props: {
           decorations(state) {
-            const cellPos = pluginKey.getState(state) as number | null;
-            if (cellPos == null) return DecorationSet.empty;
-            const cellNode = state.doc.nodeAt(cellPos);
-            if (!cellNode) return DecorationSet.empty;
+            const data = pluginKey.getState(state) as { primary: number; all: number[] } | null;
+            if (!data || data.all.length === 0) return DecorationSet.empty;
 
-            const decorations: ReturnType<typeof Decoration.node>[] = [
-              Decoration.node(cellPos, cellPos + cellNode.nodeSize, {
-                class: 'cell-active',
-              }),
-            ];
+            const decorations: ReturnType<typeof Decoration.node>[] = [];
+
+            for (const cellPos of data.all) {
+              const cellNode = state.doc.nodeAt(cellPos);
+              if (!cellNode) continue;
+              const isPrimary = cellPos === data.primary;
+              decorations.push(
+                Decoration.node(cellPos, cellPos + cellNode.nodeSize, {
+                  class: isPrimary ? 'cell-active cell-primary' : 'cell-active',
+                }),
+              );
+            }
 
             // Find the ancestor table node and add .table-active class to it
-            const $cell = state.doc.resolve(cellPos);
-            for (let d = $cell.depth; d > 0; d--) {
-              const node = $cell.node(d);
+            const $first = state.doc.resolve(data.all[0]);
+            for (let d = $first.depth; d > 0; d--) {
+              const node = $first.node(d);
               if (node.type.name === 'table') {
-                const tablePos = $cell.before(d);
+                const tablePos = $first.before(d);
                 decorations.push(
                   Decoration.node(tablePos, tablePos + node.nodeSize, {
                     class: 'table-active',
@@ -1814,6 +1849,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const target = e.target as HTMLElement;
       if (target.closest('.bn-block-outer, button, a, input, [contenteditable="true"]')) return;
       if (target.closest('[data-floating-ui-focusable]')) return;
+      if (target.closest('.tcm-menu')) return;
 
       // Click below editor content → append new paragraph
       const editorBottom = container.getBoundingClientRect().bottom;

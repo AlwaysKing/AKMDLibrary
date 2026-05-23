@@ -1214,9 +1214,9 @@ body.multi-drag-active .bn-drag-preview {
   z-index: 10 !important;
 }
 
-/* Blue border overlay (::before) — covers the cell's gray border like Notion's overlay div */
-.bn-editor [data-content-type="table"] td.cell-active::before,
-.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused])::before {
+/* Blue border overlay (::before) — only for empty focused cells without cell-active.
+   For cell-active cells, a React overlay renders a single frame around all selected cells. */
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]):not(.cell-active)::before {
   content: '';
   position: absolute;
   inset: -1px;
@@ -1226,19 +1226,24 @@ body.multi-drag-active .bn-drag-preview {
   z-index: 1;
 }
 
-/* Hide BlockNote's column-resize-handle inside the active cell — Notion replaces it with the notch.
-   Also hide ALL resize handles while the notch is being hovered (JS adds .notch-hovering to editor
-   container) to prevent the column-resize bar from appearing under the notch cursor. */
-.bn-editor [data-content-type="table"] td.cell-active > .column-resize-handle,
-.notch-hovering .column-resize-handle {
+/* Hide prosemirror-tables' built-in selectedCell background — we use our own blue border overlay */
+.bn-editor [data-content-type="table"] td.selectedCell {
+  background: transparent !important;
+}
+
+/* Also hide prosemirror-tables' ::after pseudo-element that adds purple overlay (rgba(200,200,255,0.4)) */
+.bn-editor [data-content-type="table"] td.selectedCell::after {
+  background: transparent !important;
+}
+
+/* Hide BlockNote's column-resize-handle inside the active cell */
+.bn-editor [data-content-type="table"] td.cell-active > .column-resize-handle {
   display: none !important;
 }
 
-/* Notch button (::after) — sits on the right edge of the blue border overlay.
-   Default state: small 6×12 blue pill with white border (Notion's notch).
-   Hover state: expands to 12×16 with three-dot SVG icon (Notion's "open cell menu" button). */
-.bn-editor [data-content-type="table"] td.cell-active::after,
-.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused])::after {
+/* Notch button (::after) — only for empty focused cells without cell-active.
+   For cell-active/cell-primary cells, a React overlay renders the notch button. */
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]):not(.cell-active)::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -1256,35 +1261,28 @@ body.multi-drag-active .bn-drag-preview {
     background-image 0.1s ease-in-out;
 }
 
-/* Notch hover: when the mouse is over the notch area, JS adds .notch-hovering to the editor
-   container. This hides the CSS ::after notch so the React overlay button (.tcm-notch-btn)
-   can take its place. This avoids fighting with ProseMirror's Decoration system which
-   continuously resets TD attributes. */
-.notch-hovering [data-content-type="table"] td.cell-active::after {
-  opacity: 0;
-}
-
 /* ---- Notch Overlay Button (tcm-notch-btn) ---- */
-/* React-rendered button that replaces the CSS ::after notch on hover.
-   Positioned at the notch location (right edge of active cell, vertically centered).
-   Shows three white dots matching Notion's "打开单元格菜单" button. */
+/* React-rendered button at the right edge center of the selection frame.
+   Default: small 6×12 blue pill with white border (Notion's notch).
+   Hover: expands to 12×16 with three-dot SVG icon. */
 .tcm-notch-btn {
   background: rgb(35, 131, 226);
-  border: none;
-  border-radius: 4px;
+  border: 2px solid rgb(255, 255, 255);
+  border-radius: 3px;
   cursor: pointer;
   padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Three white dots via inline SVG background */
+  transition: width 0.1s ease-in-out, height 0.1s ease-in-out,
+    border-radius 0.1s ease-in-out, background-image 0.1s ease-in-out;
+}
+
+.tcm-notch-btn:hover {
+  width: 12px !important;
+  height: 16px !important;
+  border-radius: 4px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 16'%3E%3Ccircle cx='5' cy='3' r='1.5' fill='white'/%3E%3Ccircle cx='5' cy='8' r='1.5' fill='white'/%3E%3Ccircle cx='5' cy='13' r='1.5' fill='white'/%3E%3C/svg%3E");
   background-size: 8px 12px;
   background-repeat: no-repeat;
   background-position: center;
-}
-
-.tcm-notch-btn:hover {
   filter: brightness(0.9);
 }
 

@@ -1,32 +1,30 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Paintbrush, Eraser } from 'lucide-react';
-import { Selection } from 'prosemirror-state';
 import { ColorListContent } from './BlockNoteComponents';
 
 /**
- * TableCellMenu — handles the notch hover detection and cell context menu.
+ * TableCellMenu — renders a single blue border frame around selected table cells
+ * and a notch button (always visible) on the right edge center of the frame.
  *
- * When a cell is active (.cell-active), a CSS ::after pseudo-element shows
- * a small blue notch on the right edge of the blue border. This component:
- * 1. Detects when the mouse is precisely over the notch area
- * 2. Renders an expanded button overlay (three white dots) at the notch position
- * 3. Adds .notch-hovering class to editorContainer to hide the CSS notch while overlay is shown
- * 4. Opens a cell menu on click with "颜色" and "清除内容" options
- *
- * NOTE: We cannot modify the TD element's attributes/classes because ProseMirror's
- * Decoration system continuously resets them. Instead, we use a React-rendered
- * overlay button positioned at the notch location.
+ * Architecture:
+ * - The ProseMirror plugin (TableCellHighlight) adds `cell-active` / `cell-primary`
+ *   classes to selected cells via Decoration.node().
+ * - This component observes those classes and computes a bounding rectangle
+ *   encompassing all `cell-active` cells → renders one blue frame overlay.
+ * - A notch button is always rendered at the right edge center of the frame.
+ * - Clicking the notch opens a context menu with color/clear options.
  */
 export default function TableCellMenu({
   editorContainer,
 }: {
   editorContainer: HTMLDivElement | null;
 }) {
-  // Notch hover state — position of the active cell for overlay rendering
-  const [notchHover, setNotchHover] = useState<{
-    cell: HTMLTableCellElement;
-    x: number;
-    y: number;
+  // Selection border state
+  const [selectionRect, setSelectionRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
   } | null>(null);
 
   // Menu state
@@ -39,9 +37,6 @@ export default function TableCellMenu({
     y: number;
   } | null>(null);
   const [colorOpen, setColorOpen] = useState(false);
-
-  // Track which TD is hovered (ref for event handlers)
-  const hoveredTdRef = useRef<HTMLTableCellElement | null>(null);
   const menuOpenRef = useRef(false);
   menuOpenRef.current = !!menuState;
 
@@ -60,128 +55,122 @@ export default function TableCellMenu({
     return null;
   }, [editorContainer]);
 
-  // ---- Compute notch hit area ----
-  const getNotchHitArea = useCallback((td: HTMLTableCellElement) => {
-    const rect = td.getBoundingClientRect();
-    const cx = rect.right;
-    const cy = rect.top + rect.height / 2;
-    return {
-      left: cx - 8,
-      right: cx + 8,
-      top: cy - 12,
-      bottom: cy + 12,
-    };
-  }, []);
-
-  // ---- Mouse move handler: detect notch hover ----
+  // ---- Track selection rect: single bounding frame around all cell-active cells ----
   useEffect(() => {
     if (!editorContainer) return;
 
-    const onMove = (e: MouseEvent) => {
-      // Don't change hover while menu is open
-      if (menuOpenRef.current) return;
-
-      const activeCell = editorContainer.querySelector('td.cell-active') as HTMLTableCellElement | null;
-      if (!activeCell) {
-        if (hoveredTdRef.current) {
-          hoveredTdRef.current = null;
-          editorContainer.classList.remove('notch-hovering');
-          setNotchHover(null);
-        }
+    const updateRect = () => {
+      const activeCells = editorContainer.querySelectorAll('td.cell-active');
+      if (activeCells.length === 0) {
+        setSelectionRect(null);
         return;
       }
 
-      const hit = getNotchHitArea(activeCell);
-      const mx = e.clientX;
-      const my = e.clientY;
+      let minLeft = Infinity, minTop = Infinity;
+      let maxRight = -Infinity, maxBottom = -Infinity;
 
-      if (mx >= hit.left && mx <= hit.right && my >= hit.top && my <= hit.bottom) {
-        if (hoveredTdRef.current !== activeCell) {
-          hoveredTdRef.current = activeCell;
-          editorContainer.classList.add('notch-hovering');
-          const rect = activeCell.getBoundingClientRect();
-          setNotchHover({
-            cell: activeCell,
-            x: rect.right,
-            y: rect.top + rect.height / 2,
-          });
-        } else {
-          // Same cell, but position might have changed (scroll)
-          const rect = activeCell.getBoundingClientRect();
-          setNotchHover(prev => {
-            if (!prev) return null;
-            const nx = rect.right;
-            const ny = rect.top + rect.height / 2;
-            if (Math.abs(prev.x - nx) < 1 && Math.abs(prev.y - ny) < 1) return prev;
-            return { ...prev, x: nx, y: ny };
-          });
-        }
-      } else {
-        if (hoveredTdRef.current) {
-          hoveredTdRef.current = null;
-          editorContainer.classList.remove('notch-hovering');
-          setNotchHover(null);
-        }
-      }
+      activeCells.forEach((cell) => {
+        const rect = cell.getBoundingClientRect();
+        minLeft = Math.min(minLeft, rect.left);
+        minTop = Math.min(minTop, rect.top);
+        maxRight = Math.max(maxRight, rect.right);
+        maxBottom = Math.max(maxBottom, rect.bottom);
+      });
+
+      // Extend 1px outside cell boundaries to cover the gray border (matches old ::before inset: -1px)
+      setSelectionRect({
+        left: minLeft - 1,
+        top: minTop - 1,
+        width: maxRight - minLeft + 2,
+        height: maxBottom - minTop + 2,
+      });
     };
 
-    window.addEventListener('mousemove', onMove, { passive: true });
+    updateRect();
+
+    // Watch for class changes on td elements (cell-active added/removed)
+    const classObserver = new MutationObserver(updateRect);
+    classObserver.observe(editorContainer, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['class'],
+    });
+
+    // Watch for style changes inside tables (column resize updates col/cell styles)
+    const tableObserver = new MutationObserver(updateRect);
+    editorContainer.querySelectorAll('[data-content-type="table"]').forEach(table => {
+      tableObserver.observe(table, {
+        attributes: true,
+        childList: true,
+        subtree: true,
+        attributeFilter: ['style'],
+      });
+    });
+
+    window.addEventListener('scroll', updateRect, true);
+    window.addEventListener('resize', updateRect);
+
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      hoveredTdRef.current = null;
-      editorContainer.classList.remove('notch-hovering');
+      classObserver.disconnect();
+      tableObserver.disconnect();
+      window.removeEventListener('scroll', updateRect, true);
+      window.removeEventListener('resize', updateRect);
     };
-  }, [editorContainer, getNotchHitArea]);
+  }, [editorContainer]);
 
-  // ---- Click handler: detect notch click ----
-  useEffect(() => {
-    if (!editorContainer) return;
+  // ---- Helper: collect all active cell coordinates (tableId, rowIndex, cellIndex) ----
+  const getAllActiveCells = useCallback((): {
+    tableId: string;
+    rowIndex: number;
+    cellIndex: number;
+  }[] => {
+    if (!editorContainer) return [];
+    const activeCells = editorContainer.querySelectorAll('td.cell-active');
+    return Array.from(activeCells).map(cell => {
+      const tableBlock = cell.closest('[data-id]');
+      const tableId = tableBlock?.getAttribute('data-id') || '';
+      const row = cell.closest('tr');
+      const tableEl = cell.closest('[data-content-type="table"]');
+      const allRows = tableEl ? tableEl.querySelectorAll('tr') : [];
+      const rowIndex = Array.from(allRows).indexOf(row);
+      const cells = row ? Array.from(row.querySelectorAll('td')) : [];
+      const cellIndex = cells.indexOf(cell);
+      return { tableId, rowIndex, cellIndex };
+    }).filter(c => c.rowIndex >= 0 && c.cellIndex >= 0);
+  }, [editorContainer]);
 
-    const onClick = (e: MouseEvent) => {
-      const activeCell = editorContainer.querySelector('td.cell-active') as HTMLTableCellElement | null;
-      if (!activeCell) return;
+  // ---- Open menu from notch button ----
+  const openMenu = useCallback(() => {
+    if (!editorContainer || !selectionRect) return;
+    const activeCell = editorContainer.querySelector('td.cell-primary') as HTMLTableCellElement | null;
+    if (!activeCell) return;
 
-      const hit = getNotchHitArea(activeCell);
-      const mx = e.clientX;
-      const my = e.clientY;
+    const tableBlock = activeCell.closest('[data-id]');
+    const tableId = tableBlock?.getAttribute('data-id') || '';
+    const row = activeCell.closest('tr');
+    const tableEl = activeCell.closest('[data-content-type="table"]');
+    const allRows = tableEl ? tableEl.querySelectorAll('tr') : [];
+    const rowIndex = Array.from(allRows).indexOf(row);
+    const cells = row ? Array.from(row.querySelectorAll('td')) : [];
+    const cellIndex = cells.indexOf(activeCell);
 
-      if (mx >= hit.left && mx <= hit.right && my >= hit.top && my <= hit.bottom) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const tableBlock = activeCell.closest('[data-id]');
-        const tableId = tableBlock?.getAttribute('data-id') || '';
-        const row = activeCell.closest('tr');
-        const tableEl = activeCell.closest('[data-content-type="table"]');
-        const allRows = tableEl ? tableEl.querySelectorAll('tr') : [];
-        const rowIndex = Array.from(allRows).indexOf(row);
-        const cells = row ? Array.from(row.querySelectorAll('td')) : [];
-        const cellIndex = cells.indexOf(activeCell);
-
-        const cellRect = activeCell.getBoundingClientRect();
-        setMenuState({
-          cell: activeCell,
-          tableId,
-          rowIndex,
-          cellIndex,
-          x: cellRect.right + 4,
-          y: cellRect.top + cellRect.height / 2,
-        });
-        setColorOpen(false);
-        // Close notch hover when menu opens
-        setNotchHover(null);
-      }
-    };
-
-    editorContainer.addEventListener('click', onClick, true);
-    return () => editorContainer.removeEventListener('click', onClick, true);
-  }, [editorContainer, getNotchHitArea]);
+    // Position menu at the right edge center of the selection frame
+    setMenuState({
+      cell: activeCell,
+      tableId,
+      rowIndex,
+      cellIndex,
+      x: selectionRect.left + selectionRect.width + 4,
+      y: selectionRect.top + selectionRect.height / 2,
+    });
+    setColorOpen(false);
+  }, [editorContainer, selectionRect]);
 
   // ---- Click outside to close ----
   useEffect(() => {
     if (!menuState) return;
     const handler = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('.tcm-menu')) {
+      if (!(e.target as HTMLElement).closest('.tcm-menu') && !(e.target as HTMLElement).closest('.tcm-notch-btn')) {
         setMenuState(null);
         setColorOpen(false);
       }
@@ -214,14 +203,12 @@ export default function TableCellMenu({
     rowIndex: number,
     cellIndex: number,
   ): { pos: number; node: any } | null => {
-    // Find the blockContainer with the matching id
-    // Doc structure: doc > blockGroup > blockContainer[id] > table > tableRow > tableCell
     let blockOffset = -1;
     doc.descendants((node: any, pos: number) => {
-      if (blockOffset !== -1) return false; // Already found
+      if (blockOffset !== -1) return false;
       if (node.type.name === 'blockContainer' && node.attrs.id === tableId) {
         blockOffset = pos;
-        return false; // Stop descending this branch
+        return false;
       }
     });
     if (blockOffset === -1) return null;
@@ -229,7 +216,6 @@ export default function TableCellMenu({
     const blockNode = doc.nodeAt(blockOffset);
     if (!blockNode) return null;
 
-    // Find the table content node (first child of blockContainer)
     let tableNode: any = null;
     let tableChildIdx = 0;
     for (let i = 0; i < blockNode.childCount; i++) {
@@ -247,16 +233,15 @@ export default function TableCellMenu({
     if (cellIndex >= targetRow.childCount) return null;
     const targetCell = targetRow.child(cellIndex);
 
-    // Calculate absolute position of the cell in the document
-    let pos = blockOffset + 1; // Enter blockContainer
+    let pos = blockOffset + 1;
     for (let i = 0; i < tableChildIdx; i++) {
       pos += blockNode.child(i).nodeSize;
     }
-    pos += 1; // Enter table
+    pos += 1;
     for (let r = 0; r < rowIndex; r++) {
       pos += tableNode.child(r).nodeSize;
     }
-    pos += 1; // Enter row
+    pos += 1;
     for (let c = 0; c < cellIndex; c++) {
       pos += targetRow.child(c).nodeSize;
     }
@@ -269,30 +254,36 @@ export default function TableCellMenu({
     const editor = getEditor();
     if (!editor || !menuState) return;
 
-    const state = editor._tiptapEditor.state;
-    const found = findCellPos(state.doc, menuState.tableId, menuState.rowIndex, menuState.cellIndex);
-    if (!found) return;
+    const allCells = getAllActiveCells();
+    if (allCells.length === 0) return;
 
-    // Replace cell content with an empty tableParagraph, preserving the cell node itself
-    const from = found.pos + 1; // Enter cell content
-    const to = found.pos + found.node.nodeSize - 1; // Exit cell content
-    const emptyParagraph = state.schema.nodes.tableParagraph.create();
-
-    // Use editor.transact to stay within BlockNote's transaction system
-    // so onChange fires and changes are saved.
-    // Also restore selection into the cell since editor may have lost focus
-    // during menu interaction (mousedown on submenu → blur → selection moves out).
     editor.transact((tr: any) => {
-      tr.replaceWith(from, to, emptyParagraph);
-      const $cellPos = tr.doc.resolve(from + 1);
-      tr.setSelection(Selection.near($cellPos));
+      // Process cells in reverse order to avoid position shifts
+      const positions: { pos: number; node: any }[] = [];
+      const state = editor._tiptapEditor.state;
+      for (const cell of allCells) {
+        const found = findCellPos(state.doc, cell.tableId, cell.rowIndex, cell.cellIndex);
+        if (found) positions.push(found);
+      }
+      positions.sort((a, b) => b.pos - a.pos);
+
+      for (const found of positions) {
+        // Clear content
+        const from = found.pos + 1;
+        const to = found.pos + found.node.nodeSize - 1;
+        const emptyParagraph = tr.doc.type.schema.nodes.tableParagraph.create();
+        tr.replaceWith(from, to, emptyParagraph);
+        // Clear all style attributes
+        const resetAttrs = { ...found.node.attrs, textColor: 'default', backgroundColor: 'default' };
+        tr.setNodeMarkup(found.pos, undefined, resetAttrs);
+      }
+      // Do NOT set selection — preserve the CellSelection
     });
 
     setMenuState(null);
     setColorOpen(false);
-  }, [getEditor, menuState, findCellPos]);
+  }, [getEditor, menuState, findCellPos, getAllActiveCells]);
 
-  // Get current cell colors — read directly from ProseMirror node attrs
   const getCurrentCellColors = useCallback((): { textColor: string; bgColor: string } => {
     const defaults = { textColor: 'default', bgColor: 'default' };
     if (!menuState) return defaults;
@@ -313,70 +304,67 @@ export default function TableCellMenu({
     const editor = getEditor();
     if (!editor || !menuState) return;
 
-    const state = editor._tiptapEditor.state;
-    const found = findCellPos(state.doc, menuState.tableId, menuState.rowIndex, menuState.cellIndex);
-    if (!found) return;
+    const allCells = getAllActiveCells();
+    if (allCells.length === 0) return;
 
-    // Update only this cell's attributes without replacing the table
-    const newAttrs = { ...found.node.attrs, [propName]: colorKey };
-
-    // Use editor.transact to stay within BlockNote's transaction system
-    // so onChange fires and changes are saved.
-    // When the user clicks a color in the submenu, the editor loses focus (mousedown → blur)
-    // and TipTap moves the selection outside the table cell.
-    // We must explicitly restore the selection into the cell to preserve cell-active.
     editor.transact((tr: any) => {
-      tr.setNodeMarkup(found.pos, undefined, newAttrs);
-      // Resolve a position inside the cell's content in the NEW document
-      const cellContentStart = found.pos + 1; // Past cell opening
-      const $cellPos = tr.doc.resolve(cellContentStart + 1); // +1 past tableParagraph opening
-      tr.setSelection(Selection.near($cellPos));
+      const positions: { pos: number; node: any }[] = [];
+      const state = editor._tiptapEditor.state;
+      for (const cell of allCells) {
+        const found = findCellPos(state.doc, cell.tableId, cell.rowIndex, cell.cellIndex);
+        if (found) positions.push(found);
+      }
+      // Reverse order so earlier positions stay valid
+      positions.sort((a, b) => b.pos - a.pos);
+
+      for (const found of positions) {
+        const newAttrs = { ...found.node.attrs, [propName]: colorKey };
+        tr.setNodeMarkup(found.pos, undefined, newAttrs);
+      }
+      // Do NOT set selection — preserve the CellSelection
     });
 
     setMenuState(null);
     setColorOpen(false);
-  }, [getEditor, menuState, findCellPos]);
+  }, [getEditor, menuState, findCellPos, getAllActiveCells]);
 
   // ---- Render ----
   return (
     <>
-      {/* Notch hover overlay button — replaces the CSS ::after notch when hovered */}
-      {notchHover && !menuState && (
+      {/* Selection border overlay — single blue frame around all active cells */}
+      {selectionRect && (
+        <div
+          className="cell-selection-frame"
+          style={{
+            position: 'fixed',
+            left: selectionRect.left,
+            top: selectionRect.top,
+            width: selectionRect.width,
+            height: selectionRect.height,
+            border: '2px solid rgb(35, 131, 226)',
+            borderRadius: '2px',
+            pointerEvents: 'none',
+            zIndex: 999,
+          }}
+        />
+      )}
+
+      {/* Notch button — always at the right edge center of the selection frame */}
+      {selectionRect && !menuState && (
         <button
           className="tcm-notch-btn"
           style={{
             position: 'fixed',
-            left: notchHover.x - 6,
-            top: notchHover.y - 8,
-            width: 12,
-            height: 16,
+            left: selectionRect.left + selectionRect.width - 3,
+            top: selectionRect.top + selectionRect.height / 2 - 6,
+            width: 6,
+            height: 12,
             zIndex: 1000,
           }}
+          onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
-            const activeCell = editorContainer?.querySelector('td.cell-active') as HTMLTableCellElement | null;
-            if (!activeCell) return;
-
-            const tableBlock = activeCell.closest('[data-id]');
-            const tableId = tableBlock?.getAttribute('data-id') || '';
-            const row = activeCell.closest('tr');
-            const tableEl = activeCell.closest('[data-content-type="table"]');
-            const allRows = tableEl ? tableEl.querySelectorAll('tr') : [];
-            const rowIndex = Array.from(allRows).indexOf(row);
-            const cells = row ? Array.from(row.querySelectorAll('td')) : [];
-            const cellIndex = cells.indexOf(activeCell);
-
-            const cellRect = activeCell.getBoundingClientRect();
-            setMenuState({
-              cell: activeCell,
-              tableId,
-              rowIndex,
-              cellIndex,
-              x: cellRect.right + 4,
-              y: cellRect.top + cellRect.height / 2,
-            });
-            setColorOpen(false);
-            setNotchHover(null);
+            openMenu();
           }}
         />
       )}
@@ -391,6 +379,7 @@ export default function TableCellMenu({
             top: menuState.y - 32,
             zIndex: 1000,
           }}
+          onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Color item — hover to show submenu */}
@@ -408,7 +397,7 @@ export default function TableCellMenu({
               </svg>
             </button>
 
-            {/* Color submenu — reuses ColorListContent from drag handle menu */}
+            {/* Color submenu */}
             {colorOpen && (() => {
               const { textColor, bgColor } = getCurrentCellColors();
               return (
