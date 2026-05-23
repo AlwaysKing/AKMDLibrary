@@ -97,11 +97,20 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       // Try JSON format first (for tables with merged cells)
       let tableRows: any[] | null = null;
       let trueColCount = 0;
-      if (innerContent.startsWith('[')) {
+      let parsedWidths: (number | null)[] | null = null;
+      if (innerContent.startsWith('[') || innerContent.startsWith('{')) {
         try {
           const jsonData = JSON.parse(innerContent);
-          if (Array.isArray(jsonData)) {
-            tableRows = jsonData.map((row: any) => ({
+          // New format: { widths: [...], rows: [...] }
+          const isObject = !Array.isArray(jsonData) && typeof jsonData === 'object';
+          const widths = isObject ? (jsonData as any).widths : null;
+          const rowsData = isObject ? (jsonData as any).rows : jsonData;
+
+          if (Array.isArray(rowsData)) {
+            if (widths && Array.isArray(widths)) {
+              parsedWidths = widths.map((w: any) => (typeof w === 'number' ? w : null));
+            }
+            tableRows = rowsData.map((row: any) => ({
               cells: (row.cells || []).map((cell: any) => ({
                 type: 'tableCell',
                 content: cell.text
@@ -132,8 +141,19 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         tableRows = [];
         for (const innerLine of innerLines) {
           const rowTrimmed = innerLine.trim();
-          // Skip separator row
-          if (/^\|[\s\-:]+(\|[\s\-:]+)*\|?$/.test(rowTrimmed) && rowTrimmed.includes('-')) continue;
+          // Parse separator row — may contain column widths (e.g., | 120 | --- | 240 |)
+          if (/^\|[\s\-:\d]+(\|[\s\-:\d]+)*\|?$/.test(rowTrimmed) && rowTrimmed.includes('-')) {
+            // Check if separator has numeric widths
+            const segs = rowTrimmed.split('|').slice(1, -1);
+            const widths = segs.map((s: string) => {
+              const num = parseInt(s.trim(), 10);
+              return isNaN(num) ? null : num;
+            });
+            if (widths.some((w: any) => w !== null)) {
+              parsedWidths = widths;
+            }
+            continue;
+          }
           if (!rowTrimmed.startsWith('|')) continue;
 
           const segments = rowTrimmed.split('|').slice(1, -1);
@@ -171,7 +191,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
           type: 'table',
           content: {
             type: 'tableContent',
-            columnWidths: Array(trueColCount || tableRows[0].cells.length).fill(null),
+            columnWidths: parsedWidths || Array(trueColCount || tableRows[0].cells.length).fill(null),
             rows: tableRows,
           },
         });
@@ -643,6 +663,9 @@ function serializeRegularBlock(block: any): string {
         ),
       );
 
+      // Extract column widths (numbers in pixels, or null for auto)
+      const columnWidths: (number | null)[] = tableContent.columnWidths || [];
+
       if (hasMergedCells) {
         // Use JSON format for tables with merged cells — pipe format can't represent rowspan
         const jsonData = rows.map((row: any) => ({
@@ -653,7 +676,14 @@ function serializeRegularBlock(block: any): string {
             bg: cell.props?.backgroundColor || 'default',
           })),
         }));
-        return `<table-block>\n${JSON.stringify(jsonData)}\n</table-block>`;
+        // Include column widths if any are non-null
+        const widthsObj: any = {};
+        const hasWidths = columnWidths.some((w: any) => w !== null && w !== undefined);
+        if (hasWidths) {
+          widthsObj.widths = columnWidths;
+        }
+        const payload = hasWidths ? { ...widthsObj, rows: jsonData } : jsonData;
+        return `<table-block>\n${JSON.stringify(payload)}\n</table-block>`;
       }
 
       // Standard pipe format for tables without merged cells
@@ -672,7 +702,13 @@ function serializeRegularBlock(block: any): string {
       const lines: string[] = [];
       lines.push('<table-block>');
       lines.push('| ' + rows[0].cells.map(serializeCell).join(' | ') + ' |');
-      lines.push('| ' + Array(colCount).fill('---').join(' | ') + ' |');
+      // Encode column widths in separator line: | 120 | --- | 240 |
+      const hasWidths = columnWidths.some((w: any) => w !== null && w !== undefined);
+      if (hasWidths) {
+        lines.push('| ' + columnWidths.map((w: any) => (w != null ? String(w) : '---')).join(' | ') + ' |');
+      } else {
+        lines.push('| ' + Array(colCount).fill('---').join(' | ') + ' |');
+      }
       for (let r = 1; r < rows.length; r++) {
         lines.push('| ' + rows[r].cells.map(serializeCell).join(' | ') + ' |');
       }
