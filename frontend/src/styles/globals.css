@@ -1083,6 +1083,14 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
 }
 
 /* Color list (Notion-style vertical list) */
+.color-list-section-title {
+  padding: 6px 12px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: rgba(55, 53, 47, 0.65);
+}
+
 .color-list-item {
   display: flex;
   align-items: center;
@@ -1132,7 +1140,7 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
 .color-list-divider {
   height: 1px;
   background: rgba(55, 53, 47, 0.09);
-  margin: 4px 8px;
+  margin: 8px 8px 6px;
 }
 
 /* ============================================
@@ -1275,7 +1283,9 @@ body.multi-drag-active .bn-drag-preview {
     border-radius 0.1s ease-in-out, background-image 0.1s ease-in-out;
 }
 
-.tcm-notch-btn:hover {
+.tcm-notch-btn.is-active {
+  background: rgb(35, 131, 226);
+  border-color: rgb(35, 131, 226);
   width: 12px !important;
   height: 16px !important;
   border-radius: 4px;
@@ -1283,7 +1293,22 @@ body.multi-drag-active .bn-drag-preview {
   background-size: 8px 12px;
   background-repeat: no-repeat;
   background-position: center;
+}
+
+.tcm-notch-btn:hover {
+  width: 12px !important;
+  height: 16px !important;
+  border-color: rgb(35, 131, 226);
+  border-radius: 4px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 16'%3E%3Ccircle cx='5' cy='3' r='1.5' fill='white'/%3E%3Ccircle cx='5' cy='8' r='1.5' fill='white'/%3E%3Ccircle cx='5' cy='13' r='1.5' fill='white'/%3E%3C/svg%3E");
+  background-size: 8px 12px;
+  background-repeat: no-repeat;
+  background-position: center;
   filter: brightness(0.9);
+}
+
+.tcm-notch-btn.is-active:hover {
+  filter: none;
 }
 
 /* Cell text — Notion uses padding 7px 9px on inner div */
@@ -1361,33 +1386,9 @@ body.multi-drag-active .bn-drag-preview {
 }
 
 /* ---- Table Handles (row/column grab bars) ---- */
-/* Notion: small rounded rect, gray bg, white border, opacity transition */
+/* Hidden: replaced by custom table-header-handle indicators */
 .bn-table-handle {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  width: 14px !important;
-  height: 14px !important;
-  background: rgb(173, 169, 163) !important;
-  border: 2px solid rgb(255, 255, 255) !important;
-  border-radius: 4px !important;
-  cursor: grab !important;
-  color: rgb(255, 255, 255) !important;
-  transition: background 0.15s ease !important;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04) !important;
-}
-
-.bn-table-handle:hover {
-  background: rgb(55, 53, 47) !important;
-}
-
-.bn-table-handle:active {
-  cursor: grabbing !important;
-}
-
-.bn-table-handle svg {
-  width: 8px !important;
-  height: 8px !important;
+  display: none !important;
 }
 
 /* ---- Table Extend Buttons (add row/column) ---- */
@@ -1435,6 +1436,241 @@ body.multi-drag-active .bn-drag-preview {
   background-color: rgb(35, 131, 226) !important;
   width: 2px !important;
   right: -1px !important;
+}
+
+/* ---- Visual cell selection (CSS-driven, survives ProseMirror selection sync) ---- */
+td.visual-cell-selected::after,
+th.visual-cell-selected::after {
+  z-index: 2;
+  position: absolute;
+  content: '';
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(200, 200, 255, 0.4);
+  pointer-events: none;
+}
+
+/* ---- Table Header Handles (column/row notch-style indicators) ---- */
+/* Default state: matches Notion's .notion-simple-table-selector */
+.table-header-indicator {
+  background: rgba(55, 53, 47, 0.4);
+  border: 2px solid rgb(255, 255, 255);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  z-index: 35;
+  position: absolute;
+}
+
+.table-header-indicator.is-active {
+  background: rgb(35, 131, 226);
+  border-color: rgb(255, 255, 255);
+  background-repeat: no-repeat;
+  background-position: center;
+  box-shadow: none;
+}
+
+/* Hover state: matches Notion's button.notion-table-column-selector style */
+.table-header-indicator:hover {
+  background-color: rgb(255, 255, 255);
+  border: 1px solid rgb(230, 229, 227);
+  border-radius: 4px;
+  background-repeat: no-repeat;
+  background-position: center;
+  box-shadow: none;
+  padding: 1px 6px;
+}
+
+.table-header-indicator.is-active:hover {
+  background-color: rgb(35, 131, 226);
+  border: 2px solid rgb(255, 255, 255);
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Column handle: 18×6 horizontal pill */
+.table-header-indicator[data-type="col"] {
+  width: 18px;
+  height: 6px;
+}
+
+/* Column hover: matches Notion exactly — 22×14, white bg, 6 dots (2×3) */
+.table-header-indicator[data-type="col"]:hover {
+  width: 22px !important;
+  height: 14px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 12'%3E%3Ccircle cx='4' cy='3' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='10' cy='3' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='16' cy='3' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='4' cy='9' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='10' cy='9' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='16' cy='9' r='1.25' fill='rgb(173,169,163)'/%3E%3C/svg%3E");
+  background-size: 14px 8px;
+}
+
+.table-header-indicator[data-type="col"].is-active:hover {
+  width: 22px !important;
+  height: 14px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 12'%3E%3Ccircle cx='4' cy='3' r='1.25' fill='white'/%3E%3Ccircle cx='10' cy='3' r='1.25' fill='white'/%3E%3Ccircle cx='16' cy='3' r='1.25' fill='white'/%3E%3Ccircle cx='4' cy='9' r='1.25' fill='white'/%3E%3Ccircle cx='10' cy='9' r='1.25' fill='white'/%3E%3Ccircle cx='16' cy='9' r='1.25' fill='white'/%3E%3C/svg%3E");
+  background-size: 14px 8px;
+}
+
+.table-header-indicator[data-type="col"].is-active {
+  width: 22px !important;
+  height: 14px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 12'%3E%3Ccircle cx='4' cy='3' r='1.25' fill='white'/%3E%3Ccircle cx='10' cy='3' r='1.25' fill='white'/%3E%3Ccircle cx='16' cy='3' r='1.25' fill='white'/%3E%3Ccircle cx='4' cy='9' r='1.25' fill='white'/%3E%3Ccircle cx='10' cy='9' r='1.25' fill='white'/%3E%3Ccircle cx='16' cy='9' r='1.25' fill='white'/%3E%3C/svg%3E");
+  background-size: 14px 8px;
+}
+
+/* Row handle: 6×18 vertical pill */
+.table-header-indicator[data-type="row"] {
+  width: 6px;
+  height: 18px;
+}
+
+/* Row hover: matches Notion — 14×22, white bg, 6 dots (3×2) */
+.table-header-indicator[data-type="row"]:hover {
+  width: 14px !important;
+  height: 22px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 20'%3E%3Ccircle cx='4' cy='4' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='8' cy='4' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='4' cy='10' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='8' cy='10' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='4' cy='16' r='1.25' fill='rgb(173,169,163)'/%3E%3Ccircle cx='8' cy='16' r='1.25' fill='rgb(173,169,163)'/%3E%3C/svg%3E");
+  background-size: 8px 14px;
+}
+
+.table-header-indicator[data-type="row"].is-active:hover {
+  width: 14px !important;
+  height: 22px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 20'%3E%3Ccircle cx='4' cy='4' r='1.25' fill='white'/%3E%3Ccircle cx='8' cy='4' r='1.25' fill='white'/%3E%3Ccircle cx='4' cy='10' r='1.25' fill='white'/%3E%3Ccircle cx='8' cy='10' r='1.25' fill='white'/%3E%3Ccircle cx='4' cy='16' r='1.25' fill='white'/%3E%3Ccircle cx='8' cy='16' r='1.25' fill='white'/%3E%3C/svg%3E");
+  background-size: 8px 14px;
+}
+
+.table-header-indicator[data-type="row"].is-active {
+  width: 14px !important;
+  height: 22px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 20'%3E%3Ccircle cx='4' cy='4' r='1.25' fill='white'/%3E%3Ccircle cx='8' cy='4' r='1.25' fill='white'/%3E%3Ccircle cx='4' cy='10' r='1.25' fill='white'/%3E%3Ccircle cx='8' cy='10' r='1.25' fill='white'/%3E%3Ccircle cx='4' cy='16' r='1.25' fill='white'/%3E%3Ccircle cx='8' cy='16' r='1.25' fill='white'/%3E%3C/svg%3E");
+  background-size: 8px 14px;
+}
+
+/* ---- Table Action Menu (row/column operations) ---- */
+.table-action-menu {
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e9e9e7;
+  padding: 4px;
+  min-width: 190px;
+}
+
+.table-action-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 22px;
+  color: #37352f;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background 0.1s ease;
+}
+
+.table-action-menu-item:hover {
+  background: rgba(55, 53, 47, 0.08);
+}
+
+.table-action-menu-item.danger {
+  color: #eb5757;
+}
+
+.table-action-menu-item.danger:hover {
+  background: rgba(235, 87, 87, 0.08);
+}
+
+.table-action-menu-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: rgba(55, 53, 47, 0.7);
+}
+
+.table-action-menu-item.danger .table-action-menu-item-icon {
+  color: #eb5757;
+}
+
+.table-action-menu-item-label {
+  flex: 1;
+}
+
+.table-action-menu-item-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: rgba(55, 53, 47, 0.35);
+  flex-shrink: 0;
+}
+
+.table-action-menu-item.submenu-open .table-action-color-submenu,
+.table-action-menu-item:hover .table-action-color-submenu {
+  display: block;
+}
+
+.table-action-color-submenu {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: calc(100% + 4px);
+  min-width: 180px;
+  background: #ffffff;
+  border: 1px solid #e9e9e7;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  padding: 4px 0;
+  z-index: 45;
+}
+
+.table-action-color-submenu .color-list-divider {
+  margin: 4px 0;
+}
+
+.table-action-color-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 8px;
+  margin: 0 4px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: #2c2c2b;
+  cursor: pointer;
+  white-space: nowrap;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.table-action-color-item:hover {
+  background: rgba(55, 53, 47, 0.08);
+}
+
+.table-action-color-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.table-action-color-label {
+  flex: 1;
+}
+
+.table-action-color-check {
+  font-size: 13px;
+  margin-left: auto;
 }
 
 /* ---- Table Handle Menu (column/row action menu) ---- */

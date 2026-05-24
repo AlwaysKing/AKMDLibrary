@@ -40,6 +40,7 @@ export default function TableCellMenu({
   const [colorOpen, setColorOpen] = useState(false);
   const menuOpenRef = useRef(false);
   menuOpenRef.current = !!menuState;
+  const resizeTrackingRef = useRef(false);
 
   // ---- Editor access ----
   const getEditor = useCallback((): any => {
@@ -60,10 +61,13 @@ export default function TableCellMenu({
   useEffect(() => {
     if (!editorContainer) return;
 
+    let scheduledFrame = 0;
+    let dragFrame = 0;
+
     const updateRect = () => {
       const activeCells = editorContainer.querySelectorAll('td.cell-active');
       if (activeCells.length === 0) {
-        setSelectionRect(null);
+        setSelectionRect((prev) => (prev ? null : prev));
         return;
       }
 
@@ -79,18 +83,64 @@ export default function TableCellMenu({
       });
 
       // Extend 1px outside cell boundaries to cover the gray border (matches old ::before inset: -1px)
-      setSelectionRect({
+      const nextRect = {
         left: minLeft - 1,
         top: minTop - 1,
         width: maxRight - minLeft + 2,
         height: maxBottom - minTop + 2,
+      };
+
+      setSelectionRect((prev) => {
+        if (
+          prev &&
+          Math.abs(prev.left - nextRect.left) < 0.5 &&
+          Math.abs(prev.top - nextRect.top) < 0.5 &&
+          Math.abs(prev.width - nextRect.width) < 0.5 &&
+          Math.abs(prev.height - nextRect.height) < 0.5
+        ) {
+          return prev;
+        }
+        return nextRect;
       });
     };
 
-    updateRect();
+    const scheduleRectUpdate = () => {
+      cancelAnimationFrame(scheduledFrame);
+      scheduledFrame = requestAnimationFrame(updateRect);
+    };
+
+    const stopResizeTracking = () => {
+      resizeTrackingRef.current = false;
+      cancelAnimationFrame(dragFrame);
+      dragFrame = 0;
+      scheduleRectUpdate();
+    };
+
+    const trackResizeFrame = () => {
+      if (!resizeTrackingRef.current) return;
+      updateRect();
+      dragFrame = requestAnimationFrame(trackResizeFrame);
+    };
+
+    const syncResizeTracking = () => {
+      const isDragging = !!editorContainer.querySelector('td.column-resize-dragging');
+      if (isDragging === resizeTrackingRef.current) {
+        scheduleRectUpdate();
+        return;
+      }
+      if (isDragging) {
+        resizeTrackingRef.current = true;
+        cancelAnimationFrame(dragFrame);
+        dragFrame = requestAnimationFrame(trackResizeFrame);
+      } else {
+        stopResizeTracking();
+      }
+    };
+
+    scheduleRectUpdate();
 
     // Watch for class changes on td elements (cell-active added/removed)
-    const classObserver = new MutationObserver(updateRect);
+    const classObserver = new MutationObserver(syncResizeTracking);
     classObserver.observe(editorContainer, {
       attributes: true,
       subtree: true,
@@ -98,7 +148,7 @@ export default function TableCellMenu({
     });
 
     // Watch for style changes inside tables (column resize updates col/cell styles)
-    const tableObserver = new MutationObserver(updateRect);
+    const tableObserver = new MutationObserver(scheduleRectUpdate);
     editorContainer.querySelectorAll('[data-content-type="table"]').forEach(table => {
       tableObserver.observe(table, {
         attributes: true,
@@ -108,14 +158,18 @@ export default function TableCellMenu({
       });
     });
 
-    window.addEventListener('scroll', updateRect, true);
-    window.addEventListener('resize', updateRect);
+    window.addEventListener('scroll', scheduleRectUpdate, true);
+    window.addEventListener('resize', scheduleRectUpdate);
+    document.addEventListener('mouseup', stopResizeTracking, true);
 
     return () => {
       classObserver.disconnect();
       tableObserver.disconnect();
-      window.removeEventListener('scroll', updateRect, true);
-      window.removeEventListener('resize', updateRect);
+      cancelAnimationFrame(scheduledFrame);
+      cancelAnimationFrame(dragFrame);
+      window.removeEventListener('scroll', scheduleRectUpdate, true);
+      window.removeEventListener('resize', scheduleRectUpdate);
+      document.removeEventListener('mouseup', stopResizeTracking, true);
     };
   }, [editorContainer]);
 
@@ -130,11 +184,11 @@ export default function TableCellMenu({
     return Array.from(activeCells).map(cell => {
       const tableBlock = cell.closest('[data-id]');
       const tableId = tableBlock?.getAttribute('data-id') || '';
-      const row = cell.closest('tr');
+      const row = cell.closest('tr') as HTMLTableRowElement | null;
       const tableEl = cell.closest('[data-content-type="table"]');
-      const allRows = tableEl ? tableEl.querySelectorAll('tr') : [];
+      const allRows = tableEl ? Array.from(tableEl.querySelectorAll('tr')) as HTMLTableRowElement[] : [];
       const rowIndex = Array.from(allRows).indexOf(row);
-      const cells = row ? Array.from(row.querySelectorAll('td')) : [];
+      const cells = row ? Array.from(row.querySelectorAll('td')) as HTMLTableCellElement[] : [];
       const cellIndex = cells.indexOf(cell);
       return { tableId, rowIndex, cellIndex };
     }).filter(c => c.rowIndex >= 0 && c.cellIndex >= 0);
@@ -148,11 +202,11 @@ export default function TableCellMenu({
 
     const tableBlock = activeCell.closest('[data-id]');
     const tableId = tableBlock?.getAttribute('data-id') || '';
-    const row = activeCell.closest('tr');
+    const row = activeCell.closest('tr') as HTMLTableRowElement | null;
     const tableEl = activeCell.closest('[data-content-type="table"]');
-    const allRows = tableEl ? tableEl.querySelectorAll('tr') : [];
+    const allRows = tableEl ? Array.from(tableEl.querySelectorAll('tr')) as HTMLTableRowElement[] : [];
     const rowIndex = Array.from(allRows).indexOf(row);
-    const cells = row ? Array.from(row.querySelectorAll('td')) : [];
+    const cells = row ? Array.from(row.querySelectorAll('td')) as HTMLTableCellElement[] : [];
     const cellIndex = cells.indexOf(activeCell);
 
     // Position menu at the right edge center of the selection frame
@@ -361,16 +415,16 @@ export default function TableCellMenu({
         />
       )}
 
-      {/* Notch button — always at the right edge center of the selection frame */}
-      {selectionRect && !menuState && (
+      {/* Notch button — keep visible while its menu is open */}
+      {selectionRect && (
         <button
-          className="tcm-notch-btn"
+          className={`tcm-notch-btn${menuState ? ' is-active' : ''}`}
           style={{
             position: 'fixed',
             left: selectionRect.left + selectionRect.width - 1,
             top: selectionRect.top + selectionRect.height / 2,
-            width: 6,
-            height: 12,
+            width: menuState ? 12 : 6,
+            height: menuState ? 16 : 12,
             zIndex: 30,
             transform: 'translate(-50%, -50%)',
           }}

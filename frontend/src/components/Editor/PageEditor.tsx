@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
+import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow } from 'prosemirror-tables';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
@@ -8,7 +10,7 @@ import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
-import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER } from './BlockNoteComponents';
+import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER, ColorListContent } from './BlockNoteComponents';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection } from '@tiptap/pm/state';
@@ -27,6 +29,7 @@ import { pagesApi } from '../../api/pages';
 import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { flushSync } from '../../services/syncModule';
+import { clearHeaderHandleLock, getHeaderHandleLock, isHeaderMenuOpen, setHeaderHandleLock, setHeaderMenuOpen } from './tableHandleState';
 
 // Supported languages for code block syntax highlighting
 // Keys must match Shiki bundled language IDs (https://shiki.style/languages)
@@ -595,6 +598,545 @@ const TableCellHighlight = Extension.create({
   },
 });
 
+// ---- Table column/row header indicators ----
+// ---- Table Header Handles (notch-style indicators at column top / row left) ----
+// ---- Table Action Menu (shown when clicking row/column indicator) ----
+function getTableBlockIdFromDom(node: HTMLElement | null): string {
+  return node?.closest('[data-id]')?.getAttribute('data-id') || '';
+}
+
+function getHeaderSelectionInfo(view: any): { tableId: string; type: 'col' | 'row'; index: number } | null {
+  const sel = view.state.selection as any;
+  if (!sel?.$anchorCell || !sel?.$headCell) return null;
+
+  const $anchorCell = sel.$anchorCell as ReturnType<typeof view.state.doc.resolve>;
+  let tableDepth = -1;
+  for (let d = $anchorCell.depth; d > 0; d--) {
+    if ($anchorCell.node(d).type.name === 'table') {
+      tableDepth = d;
+      break;
+    }
+  }
+  if (tableDepth < 0) return null;
+
+  const tableNode = $anchorCell.node(tableDepth);
+  const tablePos = $anchorCell.before(tableDepth);
+  const tableStart = tablePos + 1;
+  const tableMap = TableMap.get(tableNode);
+  const rect = tableMap.rectBetween(sel.$anchorCell.pos - tableStart, sel.$headCell.pos - tableStart);
+  const isSingleCol = rect.right - rect.left === 1;
+  const isSingleRow = rect.bottom - rect.top === 1;
+  const isFullCol = rect.top === 0 && rect.bottom === tableMap.height && isSingleCol;
+  const isFullRow = rect.left === 0 && rect.right === tableMap.width && isSingleRow;
+  if (!isFullCol && !isFullRow) return null;
+
+  const tableDom = view.nodeDOM(tablePos) as HTMLElement | null;
+  const tableId = getTableBlockIdFromDom(tableDom);
+  if (!tableId) return null;
+
+  return {
+    tableId,
+    type: isFullCol ? 'col' : 'row',
+    index: isFullCol ? rect.left : rect.top,
+  };
+}
+
+function syncHeaderHandleLock(view: any) {
+  const lock = getHeaderHandleLock();
+  if (!lock) return;
+  const current = getHeaderSelectionInfo(view);
+  if (!current || current.tableId !== lock.tableId || current.type !== lock.type || current.index !== lock.index) {
+    clearHeaderHandleLock();
+  }
+}
+
+function getSelectedTableDimension(view: any): {
+  tablePos: number;
+  tableStart: number;
+  tableNode: any;
+  tableId: string;
+  type: 'col' | 'row';
+  index: number;
+  cells: Array<{ pos: number; node: any; row: number; col: number }>;
+} | null {
+  const current = getHeaderSelectionInfo(view);
+  if (!current) return null;
+
+  const selection = view.state.selection as any;
+  const $anchorCell = selection?.$anchorCell;
+  if (!$anchorCell) return null;
+
+  let tableDepth = -1;
+  for (let d = $anchorCell.depth; d > 0; d--) {
+    if ($anchorCell.node(d).type.name === 'table') {
+      tableDepth = d;
+      break;
+    }
+  }
+  if (tableDepth < 0) return null;
+
+  const tablePos = $anchorCell.before(tableDepth);
+  const tableNode = $anchorCell.node(tableDepth);
+  const tableStart = tablePos + 1;
+  const tableMap = TableMap.get(tableNode);
+  const seen = new Set<number>();
+  const cells: Array<{ pos: number; node: any; row: number; col: number }> = [];
+
+  if (current.type === 'col') {
+    for (let row = 0; row < tableMap.height; row++) {
+      const offset = tableMap.positionAt(row, current.index, tableNode);
+      if (seen.has(offset)) continue;
+      seen.add(offset);
+      const node = tableNode.nodeAt(offset);
+      if (!node) continue;
+      cells.push({ pos: tableStart + offset, node, row, col: current.index });
+    }
+  } else {
+    for (let col = 0; col < tableMap.width; col++) {
+      const offset = tableMap.positionAt(current.index, col, tableNode);
+      if (seen.has(offset)) continue;
+      seen.add(offset);
+      const node = tableNode.nodeAt(offset);
+      if (!node) continue;
+      cells.push({ pos: tableStart + offset, node, row: current.index, col });
+    }
+  }
+
+  return {
+    tablePos,
+    tableStart,
+    tableNode,
+    tableId: current.tableId,
+    type: current.type,
+    index: current.index,
+    cells,
+  };
+}
+
+function resetTableCellContent(tr: any, pos: number, node: any) {
+  const from = pos + 1;
+  const to = pos + node.nodeSize - 1;
+  const emptyParagraph = tr.doc.type.schema.nodes.tableParagraph.create();
+  tr.replaceWith(from, to, emptyParagraph);
+}
+
+function copyTableCell(tr: any, targetPos: number, sourceNode: any) {
+  const currentTargetNode = tr.doc.nodeAt(targetPos);
+  if (!currentTargetNode) return;
+  const clonedNode = sourceNode.type.create({ ...sourceNode.attrs }, sourceNode.content, sourceNode.marks);
+  tr.replaceWith(targetPos, targetPos + currentTargetNode.nodeSize, clonedNode);
+}
+
+function clearSelectedTableDimension(view: any) {
+  const selected = getSelectedTableDimension(view);
+  if (!selected) return;
+
+  const tr = view.state.tr;
+  const cells = selected.cells.slice().sort((a, b) => b.pos - a.pos);
+  for (const cell of cells) {
+    resetTableCellContent(tr, cell.pos, cell.node);
+    tr.setNodeMarkup(cell.pos, undefined, { ...cell.node.attrs, textColor: 'default', backgroundColor: 'default' });
+  }
+  view.dispatch(tr);
+}
+
+function setSelectedTableDimensionBgColor(view: any, colorKey: string) {
+  const selected = getSelectedTableDimension(view);
+  if (!selected) return;
+
+  const tr = view.state.tr;
+  for (const cell of selected.cells) {
+    tr.setNodeMarkup(cell.pos, undefined, { ...cell.node.attrs, backgroundColor: colorKey });
+  }
+  view.dispatch(tr);
+}
+
+function setSelectedTableDimensionTextColor(view: any, colorKey: string) {
+  const selected = getSelectedTableDimension(view);
+  if (!selected) return;
+
+  const tr = view.state.tr;
+  for (const cell of selected.cells) {
+    tr.setNodeMarkup(cell.pos, undefined, { ...cell.node.attrs, textColor: colorKey });
+  }
+  view.dispatch(tr);
+}
+
+function duplicateSelectedTableDimension(view: any) {
+  const selected = getSelectedTableDimension(view);
+  if (!selected) return;
+
+  const command = selected.type === 'col' ? addColumnAfter : addRowAfter;
+  let nextTr: any = null;
+  if (!command(view.state, (tr: any) => { nextTr = tr; })) return;
+  if (!nextTr) return;
+
+  const mappedTablePos = nextTr.mapping.map(selected.tablePos);
+  const newTableNode = nextTr.doc.nodeAt(mappedTablePos);
+  if (!newTableNode || newTableNode.type.name !== 'table') {
+    view.dispatch(nextTr);
+    return;
+  }
+
+  const newTableStart = mappedTablePos + 1;
+  const newMap = TableMap.get(newTableNode);
+  const cellsWithTargets = selected.cells.map((cell) => {
+    const targetOffset = selected.type === 'col'
+      ? newMap.positionAt(cell.row, selected.index + 1, newTableNode)
+      : newMap.positionAt(selected.index + 1, cell.col, newTableNode);
+    return { cell, targetPos: newTableStart + targetOffset };
+  }).sort((a, b) => b.targetPos - a.targetPos);
+
+  for (const { cell, targetPos } of cellsWithTargets) {
+    copyTableCell(nextTr, targetPos, cell.node);
+  }
+
+  const finalTableNode = nextTr.doc.nodeAt(mappedTablePos);
+  if (finalTableNode && finalTableNode.type.name === 'table') {
+    const finalMap = TableMap.get(finalTableNode);
+    const anchorPos = selected.type === 'col'
+      ? newTableStart + finalMap.positionAt(0, selected.index + 1, finalTableNode)
+      : newTableStart + finalMap.positionAt(selected.index + 1, 0, finalTableNode);
+    const headPos = selected.type === 'col'
+      ? newTableStart + finalMap.positionAt(finalMap.height - 1, selected.index + 1, finalTableNode)
+      : newTableStart + finalMap.positionAt(selected.index + 1, finalMap.width - 1, finalTableNode);
+    const newSelection = selected.type === 'col'
+      ? CellSelection.colSelection(nextTr.doc.resolve(anchorPos), nextTr.doc.resolve(headPos))
+      : CellSelection.rowSelection(nextTr.doc.resolve(anchorPos), nextTr.doc.resolve(headPos));
+    nextTr.setSelection(newSelection);
+  }
+  setHeaderHandleLock({
+    tableId: selected.tableId,
+    type: selected.type,
+    index: selected.index + 1,
+  });
+  view.dispatch(nextTr);
+}
+
+function getSelectedTableDimensionColors(view: any): { textColor: string; bgColor: string } {
+  const firstCellAttrs = getSelectedTableDimension(view)?.cells[0]?.node?.attrs;
+  return {
+    textColor: firstCellAttrs?.textColor || 'default',
+    bgColor: firstCellAttrs?.backgroundColor || 'default',
+  };
+}
+
+function showTableActionMenu(view: any, type: 'col' | 'row', _index: number, anchorRect: DOMRect) {
+  // Remove any existing menu
+  const existing = document.querySelector('.table-action-menu');
+  if (existing) existing.remove();
+  setHeaderMenuOpen(true);
+  let colorSubmenuRoot: Root | null = null;
+
+  const menu = document.createElement('div');
+  menu.className = 'table-action-menu';
+
+  // Prevent mousedown from blurring the editor (keeps CellSelection active)
+  menu.addEventListener('mousedown', (e) => e.preventDefault());
+
+  const iconMap: Record<string, string> = {
+    color: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h5a2 2 0 0 1 0 4h-1v5a2 2 0 1 1-2-2h1v-3h-3a2 2 0 1 1 0-4Z"/><path d="M9.5 3h4"/></svg>`,
+    insertColBefore: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8H3"/><path d="m6.5 4.5-3.5 3.5 3.5 3.5"/><path d="M13 3v10"/></svg>`,
+    insertColAfter: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10"/><path d="m9.5 4.5 3.5 3.5-3.5 3.5"/><path d="M3 3v10"/></svg>`,
+    insertRowAbove: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3"/><path d="m4.5 6.5 3.5-3.5 3.5 3.5"/><path d="M3 13h10"/></svg>`,
+    insertRowBelow: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10"/><path d="m4.5 9.5 3.5 3.5 3.5-3.5"/><path d="M3 3h10"/></svg>`,
+    duplicate: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="8" rx="1.5"/><path d="M3 10V4.5A1.5 1.5 0 0 1 4.5 3H10"/></svg>`,
+    clear: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12.5h10"/><path d="m5.5 10.5 5-5"/><path d="M11.5 12.5 13 4.5H8.5"/></svg>`,
+    deleteCol: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9"/><path d="M6 2.5h4"/><path d="M5 6v5.5"/><path d="M8 6v5.5"/><path d="M11 6v5.5"/><path d="M4.5 4.5v7a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-7"/></svg>`,
+    deleteRow: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9"/><path d="M6 2.5h4"/><path d="M5 6v5.5"/><path d="M8 6v5.5"/><path d="M11 6v5.5"/><path d="M4.5 4.5v7a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-7"/></svg>`,
+  };
+
+  const items = type === 'col'
+    ? [
+        { label: '颜色', action: 'color', submenu: true },
+        { label: '在左侧插入', action: 'insertColBefore' },
+        { label: '在右侧插入', action: 'insertColAfter' },
+        { label: '创建副本', action: 'duplicate' },
+        { label: '清除内容', action: 'clear' },
+        { label: '删除', action: 'deleteCol', danger: true },
+      ]
+    : [
+        { label: '颜色', action: 'color', submenu: true },
+        { label: '在上方插入', action: 'insertRowAbove' },
+        { label: '在下方插入', action: 'insertRowBelow' },
+        { label: '创建副本', action: 'duplicate' },
+        { label: '清除内容', action: 'clear' },
+        { label: '删除', action: 'deleteRow', danger: true },
+      ];
+
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = `table-action-menu-item${item.danger ? ' danger' : ''}`;
+    div.innerHTML = `
+      <span class="table-action-menu-item-icon">${iconMap[item.action] || iconMap.color}</span>
+      <span class="table-action-menu-item-label">${item.label}</span>
+      ${item.submenu ? '<span class="table-action-menu-item-arrow">›</span>' : ''}
+    `;
+    if (item.submenu) {
+      const submenu = document.createElement('div');
+      submenu.className = 'table-action-color-submenu';
+      const { textColor, bgColor } = getSelectedTableDimensionColors(view);
+      colorSubmenuRoot = createRoot(submenu);
+      colorSubmenuRoot.render(
+        <ColorListContent
+          currentTextColor={textColor}
+          currentBgColor={bgColor}
+          onTextColor={(color) => {
+            setSelectedTableDimensionTextColor(view, color);
+            closeMenu();
+            view.focus();
+          }}
+          onBgColor={(color) => {
+            setSelectedTableDimensionBgColor(view, color);
+            closeMenu();
+            view.focus();
+          }}
+        />,
+      );
+
+      div.appendChild(submenu);
+      div.addEventListener('mouseenter', () => div.classList.add('submenu-open'));
+      div.addEventListener('mouseleave', () => div.classList.remove('submenu-open'));
+      menu.appendChild(div);
+      return;
+    }
+
+    div.addEventListener('click', () => {
+      const state = view.state;
+      const dispatch = view.dispatch.bind(view);
+      switch (item.action) {
+        case 'insertColBefore': addColumnBefore(state, dispatch); break;
+        case 'insertColAfter': addColumnAfter(state, dispatch); break;
+        case 'duplicate': duplicateSelectedTableDimension(view); break;
+        case 'clear': clearSelectedTableDimension(view); break;
+        case 'deleteCol': deleteColumn(state, dispatch); break;
+        case 'insertRowAbove': addRowBefore(state, dispatch); break;
+        case 'insertRowBelow': addRowAfter(state, dispatch); break;
+        case 'deleteRow': deleteRow(state, dispatch); break;
+      }
+      closeMenu();
+      view.focus();
+    });
+    menu.appendChild(div);
+  });
+
+  // Position: fixed, near the indicator
+  menu.style.cssText = `
+    position: fixed;
+    left: ${anchorRect.left + anchorRect.width / 2}px;
+    top: ${anchorRect.bottom + 4}px;
+    transform: translateX(-50%);
+    z-index: 40;
+  `;
+  document.body.appendChild(menu);
+
+  // Close handler — also remove visual cell selection
+  const closeMenu = () => {
+    colorSubmenuRoot?.unmount();
+    colorSubmenuRoot = null;
+    menu.remove();
+    document.removeEventListener('mousedown', closeHandler);
+    setHeaderMenuOpen(false);
+    syncHeaderHandleLock(view);
+    setTimeout(() => renderTableHeaderHandles(view), 0);
+  };
+
+  const closeHandler = (e: MouseEvent) => {
+    if (!(e.target as HTMLElement).closest('.table-action-menu') && !(e.target as HTMLElement).closest('.table-header-indicator')) {
+      closeMenu();
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+function renderTableHeaderHandles(view: any) {
+  // Store view reference for click handlers
+  (window as any).__pmView = view;
+  const root = (view.dom as HTMLElement).closest('.bn-editor');
+  if (!root) return;
+
+  root.querySelectorAll('[data-content-type="table"]').forEach((block) => {
+    const wrapper = (block as HTMLElement).querySelector('.tableWrapper');
+    const tableEl = wrapper?.querySelector('table');
+    if (!wrapper || !tableEl) return;
+
+    const isActive = (block as HTMLElement).classList.contains('table-active');
+    let container = (wrapper as HTMLElement).querySelector('.table-header-handles') as HTMLElement | null;
+
+    if (!isActive) {
+      if (container) container.remove();
+      return;
+    }
+
+    // Find active cell
+    const activeCell = tableEl.querySelector('td.cell-active') as HTMLElement | null;
+    if (!activeCell) {
+      if (container) container.innerHTML = '';
+      return;
+    }
+
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'table-header-handles';
+      container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:35;';
+      (wrapper as HTMLElement).appendChild(container);
+    }
+
+    const tableBlockId = getTableBlockIdFromDom(block as HTMLElement);
+    const lock = getHeaderHandleLock();
+
+    // Determine column and row index
+    const activeRow = activeCell.parentElement as HTMLElement;
+    const rows = tableEl.querySelectorAll('tr');
+    let rowIndex = -1;
+    rows.forEach((row, i) => { if (row === activeRow) rowIndex = i; });
+
+    let colIndex = 0;
+    let sibling = activeCell.previousElementSibling as HTMLElement | null;
+    while (sibling) {
+      colIndex += parseInt(sibling.getAttribute('colspan') || '1', 10);
+      sibling = sibling.previousElementSibling as HTMLElement | null;
+    }
+
+    if (rowIndex < 0) { container.innerHTML = ''; return; }
+
+    const tableRect = tableEl.getBoundingClientRect();
+
+    const cols = tableEl.querySelectorAll('colgroup col');
+    const parts: string[] = [];
+
+    // Column handle: centered at top border of the active column
+    let cumX = 0;
+    for (let i = 0; i < colIndex && i < cols.length; i++) {
+      cumX += parseFloat((cols[i] as HTMLElement).style.width) || 100;
+    }
+    const cellColSpan = parseInt(activeCell.getAttribute('colspan') || '1', 10);
+    let spanWidth = 0;
+    for (let i = colIndex; i < colIndex + cellColSpan && i < cols.length; i++) {
+      spanWidth += parseFloat((cols[i] as HTMLElement).style.width) || 100;
+    }
+    // Use fixed positioning (viewport coords) so z-index competes with cell-selection-frame
+    const colCenterX = tableRect.left + cumX + spanWidth / 2;
+    const colCenterY = tableRect.top;
+    const isLockedCol = !!lock && lock.tableId === tableBlockId && lock.type === 'col' && lock.index === colIndex;
+    parts.push(`<div class="table-header-indicator${isLockedCol ? ' is-active' : ''}" data-type="col" data-index="${colIndex}" style="pointer-events:auto;left:${colCenterX}px;top:${colCenterY}px;transform:translate(-50%,-50%)"></div>`);
+
+    // Row handle: centered at left border of the active row
+    const activeRowEl = rows[rowIndex];
+    const rowRect = activeRowEl.getBoundingClientRect();
+    const rowCenterX = tableRect.left;
+    const rowCenterY = rowRect.top + rowRect.height / 2;
+    const isLockedRow = !!lock && lock.tableId === tableBlockId && lock.type === 'row' && lock.index === rowIndex;
+    parts.push(`<div class="table-header-indicator${isLockedRow ? ' is-active' : ''}" data-type="row" data-index="${rowIndex}" style="pointer-events:auto;left:${rowCenterX}px;top:${rowCenterY}px;transform:translate(-50%,-50%)"></div>`);
+
+    container.innerHTML = parts.join('');
+
+    // Click handlers: select entire row/column, then show action menu
+    container.querySelectorAll('.table-header-indicator').forEach((ind) => {
+      // Prevent mousedown from moving focus away from the editor.
+      // Combined with the ProseMirror plugin's handleDOMEvents.blur guard,
+      // this ensures the CellSelection survives when the user clicks the indicator.
+      ind.addEventListener('pointerdown', (e) => e.preventDefault());
+      ind.addEventListener('mousedown', (e) => e.preventDefault());
+
+      ind.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const type = (ind as HTMLElement).getAttribute('data-type') as 'col' | 'row' | null;
+        if (!type) return;
+        const view = (window as any).__pmView || null;
+        if (!view) return;
+
+        const state = view.state;
+        const doc = state.doc;
+
+        // Find the table node position in the document
+        let tablePos = -1;
+        let tableNode: any = null;
+        doc.descendants((node: any, pos: number) => {
+          if (node.type.name === 'table' && tablePos === -1) {
+            // Verify this table contains the active cell
+            const dom = view.nodeDOM(pos) as HTMLElement | null;
+            if (dom && dom.querySelector('td.cell-active')) {
+              tablePos = pos;
+              tableNode = node;
+              return false;
+            }
+          }
+        });
+        if (tablePos === -1 || !tableNode) return;
+        const tableMap = TableMap.get(tableNode);
+        const tableStart = tablePos + 1;
+        const anchorPos = type === 'col'
+          ? tableStart + tableMap.positionAt(0, colIndex, tableNode)
+          : tableStart + tableMap.positionAt(rowIndex, 0, tableNode);
+        const headPos = type === 'col'
+          ? tableStart + tableMap.positionAt(tableMap.height - 1, colIndex, tableNode)
+          : tableStart + tableMap.positionAt(rowIndex, tableMap.width - 1, tableNode);
+        const selection = type === 'col'
+          ? CellSelection.colSelection(doc.resolve(anchorPos), doc.resolve(headPos))
+          : CellSelection.rowSelection(doc.resolve(anchorPos), doc.resolve(headPos));
+        view.dispatch(state.tr.setSelection(selection));
+        setHeaderHandleLock({
+          tableId: tableBlockId,
+          type,
+          index: type === 'col' ? colIndex : rowIndex,
+        });
+        setTimeout(() => renderTableHeaderHandles(view), 0);
+
+        // Show action menu near the clicked indicator.
+        // The menu's operations will use colIndex/rowIndex directly.
+        const indRect = (ind as HTMLElement).getBoundingClientRect();
+        showTableActionMenu(view, type, type === 'col' ? colIndex : rowIndex, indRect);
+      });
+    });
+  });
+}
+
+const TableHeaderIndicators = Extension.create({
+  name: 'tableHeaderIndicators',
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('tableHeaderIndicators'),
+        props: {
+          // When the table action menu is open, block ProseMirror from processing
+          // the editor's blur event. This prevents ProseMirror from removing
+          // `.ProseMirror-focused` and replacing CellSelection with TextSelection
+          // when the user clicks outside the contenteditable (on the indicator/menu).
+          handleDOMEvents: {
+            blur(_view: any, _event: Event) {
+              if (document.querySelector('.table-action-menu')) {
+                return true; // "handled" — ProseMirror skips its blur handling
+              }
+              return false;
+            },
+          },
+        },
+        view() {
+          return {
+            update(view: any) {
+              syncHeaderHandleLock(view);
+              // When the table action menu is open, skip re-rendering the
+              // header indicators. Re-rendering uses innerHTML which would
+              // destroy the current indicators (and their event listeners)
+              // and also wipe any inline styles set on td elements for
+              // visual selection feedback.
+              if (isHeaderMenuOpen()) return;
+              setTimeout(() => renderTableHeaderHandles(view), 0);
+            },
+            destroy() {
+              setHeaderMenuOpen(false);
+              clearHeaderHandleLock();
+              document.querySelectorAll('.table-header-handles').forEach((el) => el.remove());
+            },
+          };
+        },
+      }),
+    ];
+  },
+});
+
 function buildInternalLinkDecorations(doc: any, spaceSlug: string, editorView?: any): DecorationSet {
   const decorations: Decoration[] = [];
   const schema = doc.type.schema;
@@ -776,7 +1318,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
-    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight] },
+    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules

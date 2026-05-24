@@ -1497,6 +1497,7 @@ export function ColorListContent({
   return (
     <>
       {/* Text colors */}
+      <div className="color-list-section-title">文字颜色</div>
       <div
         className={`color-list-item ${currentTextColor === 'default' ? 'selected' : ''}`}
         onClick={() => onTextColor('default')}
@@ -1519,6 +1520,7 @@ export function ColorListContent({
       {/* Divider */}
       <div className="color-list-divider" />
       {/* Background colors — no "A" letter, just colored square */}
+      <div className="color-list-section-title">背景颜色</div>
       <div
         className={`color-list-item ${currentBgColor === 'default' ? 'selected' : ''}`}
         onClick={() => onBgColor('default')}
