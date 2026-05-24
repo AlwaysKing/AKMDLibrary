@@ -1224,11 +1224,6 @@ body.multi-drag-active .bn-drag-preview {
 
 .bn-editor [data-content-type="table"] .tableWrapper-inner {
   width: max-content !important;
-  min-width: 100% !important;
-}
-
-.bn-editor [data-content-type="table"] .tableWrapper table[style*="width"] {
-  min-width: 100% !important;
 }
 
 /* All cells — Notion: border #e6e5e3, text 14px/20px */

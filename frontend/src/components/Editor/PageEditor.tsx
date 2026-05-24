@@ -1043,12 +1043,12 @@ function renderTableHeaderHandles(view: any) {
     // Column handle: centered at top border of the active column
     let cumX = 0;
     for (let i = 0; i < colIndex && i < cols.length; i++) {
-      cumX += parseFloat((cols[i] as HTMLElement).style.width) || 100;
+      cumX += (cols[i] as HTMLElement).getBoundingClientRect().width || parseFloat((cols[i] as HTMLElement).style.width) || 100;
     }
     const cellColSpan = parseInt(activeCell.getAttribute('colspan') || '1', 10);
     let spanWidth = 0;
     for (let i = colIndex; i < colIndex + cellColSpan && i < cols.length; i++) {
-      spanWidth += parseFloat((cols[i] as HTMLElement).style.width) || 100;
+      spanWidth += (cols[i] as HTMLElement).getBoundingClientRect().width || parseFloat((cols[i] as HTMLElement).style.width) || 100;
     }
     // Use fixed positioning (viewport coords) so z-index competes with cell-selection-frame
     const colCenterX = tableRect.left + cumX + spanWidth / 2;

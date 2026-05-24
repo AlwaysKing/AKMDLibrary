@@ -27,6 +27,12 @@ export default function TableCellMenu({
     width: number;
     height: number;
   } | null>(null);
+  const [selectionClipRect, setSelectionClipRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const selectionRectRef = useRef<{
     left: number;
     top: number;
@@ -63,10 +69,6 @@ export default function TableCellMenu({
         frameRef.current.style.display = 'none';
       } else {
         frameRef.current.style.display = 'block';
-        frameRef.current.style.left = `${rect.left}px`;
-        frameRef.current.style.top = `${rect.top}px`;
-        frameRef.current.style.width = `${rect.width}px`;
-        frameRef.current.style.height = `${rect.height}px`;
       }
     }
 
@@ -75,8 +77,6 @@ export default function TableCellMenu({
         notchRef.current.style.display = 'none';
       } else {
         notchRef.current.style.display = 'block';
-        notchRef.current.style.left = `${rect.left + rect.width - 1}px`;
-        notchRef.current.style.top = `${rect.top + rect.height / 2}px`;
       }
     }
   }, []);
@@ -109,6 +109,7 @@ export default function TableCellMenu({
         if (selectionRectRef.current) {
           applyOverlayRect(null);
           setSelectionRect(null);
+          setSelectionClipRect(null);
         }
         return;
       }
@@ -132,21 +133,54 @@ export default function TableCellMenu({
         height: maxBottom - minTop + 2,
       };
 
+      const tableBlock = (activeCells[0] as HTMLElement).closest('[data-content-type="table"]') as HTMLElement | null;
+      const wrapperRect = tableBlock?.querySelector('.tableWrapper')?.getBoundingClientRect?.() || null;
+
+      if (wrapperRect) {
+        const visibleWidth = Math.max(0, Math.min(nextRect.left + nextRect.width, wrapperRect.right) - Math.max(nextRect.left, wrapperRect.left));
+        const visibleHeight = Math.max(0, Math.min(nextRect.top + nextRect.height, wrapperRect.bottom) - Math.max(nextRect.top, wrapperRect.top));
+        if (visibleWidth <= 0 || visibleHeight <= 0) {
+          if (selectionRectRef.current) {
+            applyOverlayRect(null);
+            setSelectionRect(null);
+            setSelectionClipRect(null);
+          }
+          return;
+        }
+      }
+
       const prev = selectionRectRef.current;
+      const prevClip = selectionClipRect;
       if (
         prev &&
         Math.abs(prev.left - nextRect.left) < 0.5 &&
         Math.abs(prev.top - nextRect.top) < 0.5 &&
         Math.abs(prev.width - nextRect.width) < 0.5 &&
-        Math.abs(prev.height - nextRect.height) < 0.5
+        Math.abs(prev.height - nextRect.height) < 0.5 &&
+        (
+          (!prevClip && !wrapperRect) ||
+          (prevClip && wrapperRect &&
+            Math.abs(prevClip.left - wrapperRect.left) < 0.5 &&
+            Math.abs(prevClip.top - wrapperRect.top) < 0.5 &&
+            Math.abs(prevClip.width - wrapperRect.width) < 0.5 &&
+            Math.abs(prevClip.height - wrapperRect.height) < 0.5)
+        )
       ) {
         return;
       }
 
       applyOverlayRect(nextRect);
-      if (!prev) {
-        setSelectionRect(nextRect);
-      }
+      setSelectionClipRect(
+        wrapperRect
+          ? {
+              left: wrapperRect.left,
+              top: wrapperRect.top,
+              width: wrapperRect.width,
+              height: wrapperRect.height,
+            }
+          : null
+      );
+      setSelectionRect(nextRect);
     };
 
     const scheduleRectUpdate = () => {
@@ -457,42 +491,62 @@ export default function TableCellMenu({
       {/* Selection border overlay — single blue frame around all active cells */}
       {selectionRect && (
         <div
-          ref={frameRef}
-          className="cell-selection-frame"
-          style={{
+          style={selectionClipRect ? {
             position: 'fixed',
-            left: selectionRect.left,
-            top: selectionRect.top,
-            width: selectionRect.width,
-            height: selectionRect.height,
-            border: '2px solid rgb(35, 131, 226)',
-            borderRadius: '2px',
+            left: selectionClipRect.left,
+            top: selectionClipRect.top,
+            width: selectionClipRect.width,
+            height: selectionClipRect.height,
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: 30,
+          } : {
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            width: '100vw',
+            height: '100vh',
+            overflow: 'visible',
             pointerEvents: 'none',
             zIndex: 30,
           }}
-        />
-      )}
+        >
+          <div
+            ref={frameRef}
+            className="cell-selection-frame"
+            style={{
+              position: 'absolute',
+              left: selectionClipRect ? selectionRect.left - selectionClipRect.left : selectionRect.left,
+              top: selectionClipRect ? selectionRect.top - selectionClipRect.top : selectionRect.top,
+              width: selectionRect.width,
+              height: selectionRect.height,
+              border: '2px solid rgb(35, 131, 226)',
+              borderRadius: '2px',
+              pointerEvents: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
 
-      {/* Notch button — keep visible while its menu is open */}
-      {selectionRect && (
-        <button
-          ref={notchRef}
-          className={`tcm-notch-btn${menuState ? ' is-active' : ''}`}
-          style={{
-            position: 'fixed',
-            left: selectionRect.left + selectionRect.width - 1,
-            top: selectionRect.top + selectionRect.height / 2,
-            width: menuState ? 12 : 6,
-            height: menuState ? 16 : 12,
-            zIndex: 30,
-            transform: 'translate(-50%, -50%)',
-          }}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.stopPropagation();
-            openMenu();
-          }}
-        />
+          {/* Notch button — keep visible while its menu is open */}
+          <button
+            ref={notchRef}
+            className={`tcm-notch-btn${menuState ? ' is-active' : ''}`}
+            style={{
+              position: 'absolute',
+              left: selectionClipRect ? selectionRect.left + selectionRect.width - 1 - selectionClipRect.left : selectionRect.left + selectionRect.width - 1,
+              top: selectionClipRect ? selectionRect.top + selectionRect.height / 2 - selectionClipRect.top : selectionRect.top + selectionRect.height / 2,
+              width: menuState ? 12 : 6,
+              height: menuState ? 16 : 12,
+              transform: 'translate(-50%, -50%)',
+              pointerEvents: 'auto',
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              openMenu();
+            }}
+          />
+        </div>
       )}
 
       {/* Cell context menu */}

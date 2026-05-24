@@ -1381,6 +1381,7 @@ function getDragHandleBlockId(): string | null {
 
 function getTableBlockElements(blockId: string): {
   tableBlock: HTMLElement;
+  tableWrapper: HTMLElement;
   tableEl: HTMLTableElement;
   cols: HTMLElement[];
 } | null {
@@ -1398,10 +1399,13 @@ function getTableBlockElements(blockId: string): {
   const tableEl = tableBlock.querySelector('table') as HTMLTableElement | null;
   if (!tableEl) return null;
 
+  const tableWrapper = tableBlock.querySelector('.tableWrapper') as HTMLElement | null;
+  if (!tableWrapper) return null;
+
   const cols = Array.from(tableEl.querySelectorAll('colgroup col')) as HTMLElement[];
   if (cols.length === 0) return null;
 
-  return { tableBlock, tableEl, cols };
+  return { tableBlock, tableWrapper, tableEl, cols };
 }
 
 function distributeWidthsToTarget(currentWidths: number[], targetWidth: number, minWidth = 48): number[] {
@@ -1759,8 +1763,11 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    const { tableBlock, cols } = dom;
-    const availableWidth = Math.round(tableBlock.getBoundingClientRect().width);
+    const { tableWrapper, tableEl, cols } = dom;
+    const wrapperRect = tableWrapper.getBoundingClientRect();
+    const tableRect = tableEl.getBoundingClientRect();
+    const leftInset = Math.max(0, Math.round(tableRect.left - wrapperRect.left));
+    const availableWidth = Math.round(tableWrapper.clientWidth - leftInset);
     if (availableWidth <= 0) {
       showToast('表格可用宽度无效');
       return;
