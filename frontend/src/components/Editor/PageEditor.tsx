@@ -1127,6 +1127,46 @@ function renderTableHeaderHandles(view: any) {
   });
 }
 
+function syncTableExtendButtonVisibility(root: HTMLElement) {
+  type MatchedTable = { wrapper: HTMLElement; table: HTMLTableElement };
+  const columnButtons = Array.from(document.querySelectorAll('.bn-extend-button-add-remove-columns')) as HTMLElement[];
+  if (columnButtons.length === 0) return;
+  const tableBlocks = Array.from(root.querySelectorAll('[data-content-type="table"]')) as HTMLElement[];
+
+  columnButtons.forEach((button) => {
+    const buttonRect = button.getBoundingClientRect();
+    const buttonCenterY = buttonRect.top + buttonRect.height / 2;
+    let matchedTable: MatchedTable | null = null;
+    let bestDistance = Infinity;
+
+    tableBlocks.forEach((block) => {
+      const wrapper = block.querySelector('.tableWrapper') as HTMLElement | null;
+      const table = wrapper?.querySelector('table') as HTMLTableElement | null;
+      if (!wrapper || !table) return;
+
+      const tableRect = table.getBoundingClientRect();
+      const verticalOverlap = buttonCenterY >= tableRect.top - 1 && buttonCenterY <= tableRect.bottom + 1;
+      if (!verticalOverlap) return;
+
+      const distance = Math.abs(buttonRect.left - tableRect.right);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        matchedTable = { wrapper, table };
+      }
+    });
+
+    let hideColumnButton = false;
+    if (matchedTable) {
+      const matched = matchedTable as MatchedTable;
+      const wrapperRect = matched.wrapper.getBoundingClientRect();
+      const tableRect = matched.table.getBoundingClientRect();
+      hideColumnButton = tableRect.right - wrapperRect.right > 0.5;
+    }
+
+    button.classList.toggle('is-table-content-clipped', hideColumnButton);
+  });
+}
+
 const TableHeaderIndicators = Extension.create({
   name: 'tableHeaderIndicators',
 
@@ -1165,7 +1205,8 @@ const TableHeaderIndicators = Extension.create({
           const trackDragFrame = () => {
             if (!dragTracking || !currentView) return;
             renderTableHeaderHandles(currentView);
-            const root = (currentView.dom as HTMLElement).closest('.bn-editor');
+            const root = (currentView.dom as HTMLElement).closest('.bn-editor') as HTMLElement | null;
+            if (root) syncTableExtendButtonVisibility(root);
             if (!root?.querySelector('td.column-resize-dragging, th.column-resize-dragging')) {
               stopDragTracking();
               return;
@@ -1194,6 +1235,10 @@ const TableHeaderIndicators = Extension.create({
               currentView = view;
               syncHeaderHandleLock(view);
               syncDragTracking(view);
+              const root = (view.dom as HTMLElement).closest('.bn-editor') as HTMLElement | null;
+              if (root) {
+                setTimeout(() => syncTableExtendButtonVisibility(root), 0);
+              }
               if (isHeaderMenuOpen()) return;
               setTimeout(() => renderTableHeaderHandles(view), 0);
             },
@@ -1203,6 +1248,9 @@ const TableHeaderIndicators = Extension.create({
               setHeaderMenuOpen(false);
               clearHeaderHandleLock();
               document.querySelectorAll('.table-header-handles').forEach((el) => el.remove());
+              document.querySelectorAll('.bn-extend-button-add-remove-columns').forEach((el) => {
+                el.classList.remove('is-table-content-clipped');
+              });
             },
           };
         },
@@ -2655,6 +2703,31 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     window.addEventListener('error', handler);
     return () => window.removeEventListener('error', handler);
   }, []);
+
+  useEffect(() => {
+    if (!editorEl) return;
+
+    const sync = () => syncTableExtendButtonVisibility(editorEl);
+    const scheduleSync = () => requestAnimationFrame(sync);
+    const observer = new MutationObserver(scheduleSync);
+
+    observer.observe(editorEl, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      attributeFilter: ['class', 'style'],
+    });
+
+    editorEl.addEventListener('scroll', scheduleSync, true);
+    window.addEventListener('resize', scheduleSync);
+    scheduleSync();
+
+    return () => {
+      observer.disconnect();
+      editorEl.removeEventListener('scroll', scheduleSync, true);
+      window.removeEventListener('resize', scheduleSync);
+    };
+  }, [editorEl]);
 
   return (
     <div className="relative" ref={editorRefCallback}>

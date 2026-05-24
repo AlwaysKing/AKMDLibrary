@@ -1214,6 +1214,8 @@ body.multi-drag-active .bn-drag-preview {
   padding-top: 8px !important;
   padding-bottom: 24px !important;
   padding-left: 6px !important;
+  padding-right: 0 !important;
+  box-sizing: border-box !important;
 }
 
 /* Table — collapse borders, override BlockNote width:auto */
@@ -1467,6 +1469,11 @@ body.multi-drag-active .bn-drag-preview {
 .bn-extend-button-add-remove-columns {
   width: 16px !important;
   margin-left: 8px !important;
+}
+
+.bn-extend-button-add-remove-columns.is-table-content-clipped {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 /* Row extend: wide short strip below table, 8px gap from table edge (Notion) */

@@ -1408,6 +1408,13 @@ function getTableBlockElements(blockId: string): {
   return { tableBlock, tableWrapper, tableEl, cols };
 }
 
+function getTableContentViewportWidth(tableWrapper: HTMLElement): number {
+  const computedStyle = window.getComputedStyle(tableWrapper);
+  const paddingLeft = parseFloat(computedStyle.paddingLeft || '0') || 0;
+  const paddingRight = parseFloat(computedStyle.paddingRight || '0') || 0;
+  return Math.max(0, Math.round(tableWrapper.clientWidth - paddingLeft - paddingRight));
+}
+
 function distributeWidthsToTarget(currentWidths: number[], targetWidth: number, minWidth = 48): number[] {
   const widths = currentWidths.map((width) => Math.max(minWidth, Math.round(width)));
   const colCount = widths.length;
@@ -1763,11 +1770,8 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    const { tableWrapper, tableEl, cols } = dom;
-    const wrapperRect = tableWrapper.getBoundingClientRect();
-    const tableRect = tableEl.getBoundingClientRect();
-    const leftInset = Math.max(0, Math.round(tableRect.left - wrapperRect.left));
-    const availableWidth = Math.round(tableWrapper.clientWidth - leftInset);
+    const { tableWrapper, cols } = dom;
+    const availableWidth = getTableContentViewportWidth(tableWrapper);
     if (availableWidth <= 0) {
       showToast('表格可用宽度无效');
       return;
