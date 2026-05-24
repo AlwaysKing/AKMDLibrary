@@ -1203,7 +1203,8 @@ body.multi-drag-active .bn-drag-preview {
 }
 
 /* All cells — Notion: border #e6e5e3, font 16px, line-height 24px */
-.bn-editor [data-content-type="table"] td {
+.bn-editor [data-content-type="table"] td,
+.bn-editor [data-content-type="table"] th {
   border: 1px solid #e6e5e3 !important;
   padding: 0 !important;
   font-size: 16px !important;
@@ -1213,18 +1214,28 @@ body.multi-drag-active .bn-drag-preview {
   transition: border-color 0.15s ease;
 }
 
+/* Header cells keep the same geometry, but use Notion-like muted header styling. */
+.bn-editor [data-content-type="table"] th {
+  background: #f7f6f3;
+  font-weight: 500;
+  text-align: left;
+}
+
 /* Active cell — Notion-style: ::before = blue border overlay, ::after = notch button.
    ::before mimics Notion's overlay div with pointer-events:none.
    inset: 0 stretches to padding-box edge; we offset -1px to cover the cell border too. */
 .bn-editor [data-content-type="table"] td.cell-active,
-.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]) {
+.bn-editor [data-content-type="table"] th.cell-active,
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]),
+.bn-editor [data-content-type="table"] th:has([data-is-empty-and-focused]) {
   position: relative;
   z-index: 10 !important;
 }
 
 /* Blue border overlay (::before) — only for empty focused cells without cell-active.
    For cell-active cells, a React overlay renders a single frame around all selected cells. */
-.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]):not(.cell-active)::before {
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]):not(.cell-active)::before,
+.bn-editor [data-content-type="table"] th:has([data-is-empty-and-focused]):not(.cell-active)::before {
   content: '';
   position: absolute;
   inset: -1px;
@@ -1239,19 +1250,26 @@ body.multi-drag-active .bn-drag-preview {
   background: transparent !important;
 }
 
+.bn-editor [data-content-type="table"] th.selectedCell {
+  background: #f7f6f3 !important;
+}
+
 /* Also hide prosemirror-tables' ::after pseudo-element that adds purple overlay (rgba(200,200,255,0.4)) */
-.bn-editor [data-content-type="table"] td.selectedCell::after {
+.bn-editor [data-content-type="table"] td.selectedCell::after,
+.bn-editor [data-content-type="table"] th.selectedCell::after {
   background: transparent !important;
 }
 
 /* Hide BlockNote's column-resize-handle inside the active cell */
-.bn-editor [data-content-type="table"] td.cell-active > .column-resize-handle {
+.bn-editor [data-content-type="table"] td.cell-active > .column-resize-handle,
+.bn-editor [data-content-type="table"] th.cell-active > .column-resize-handle {
   display: none !important;
 }
 
 /* Notch button (::after) — only for empty focused cells without cell-active.
    For cell-active/cell-primary cells, a React overlay renders the notch button. */
-.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]):not(.cell-active)::after {
+.bn-editor [data-content-type="table"] td:has([data-is-empty-and-focused]):not(.cell-active)::after,
+.bn-editor [data-content-type="table"] th:has([data-is-empty-and-focused]):not(.cell-active)::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -1312,7 +1330,8 @@ body.multi-drag-active .bn-drag-preview {
 }
 
 /* Cell text — Notion uses padding 7px 9px on inner div */
-.bn-editor [data-content-type="table"] td p {
+.bn-editor [data-content-type="table"] td p,
+.bn-editor [data-content-type="table"] th p {
   margin: 0 !important;
   padding: 7px 9px !important;
   line-height: 24px !important;
@@ -1378,11 +1397,6 @@ body.multi-drag-active .bn-drag-preview {
 .tcm-menu-item-btn.tcm-danger:hover {
   background: rgba(235, 87, 87, 0.08);
   color: #eb5757;
-}
-
-/* Selected cell — subtle blue background */
-.bn-editor [data-content-type="table"] td.selected {
-  background: rgba(35, 131, 226, 0.04) !important;
 }
 
 /* ---- Table Handles (row/column grab bars) ---- */
@@ -1556,6 +1570,74 @@ th.visual-cell-selected::after {
   min-width: 190px;
 }
 
+.table-action-menu-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: rgba(55, 53, 47, 0.09);
+}
+
+.table-action-toggle-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: #37352f;
+  cursor: pointer;
+  user-select: none;
+}
+
+.table-action-toggle-item:hover {
+  background: rgba(55, 53, 47, 0.08);
+}
+
+.table-action-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: rgba(55, 53, 47, 0.78);
+  flex-shrink: 0;
+}
+
+.table-action-toggle-label {
+  flex: 1;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+}
+
+.table-action-toggle-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(55, 53, 47, 0.16);
+  transition: background 0.12s ease;
+  flex-shrink: 0;
+}
+
+.table-action-toggle-switch.is-active {
+  background: rgb(35, 131, 226);
+}
+
+.table-action-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  transition: transform 0.12s ease;
+}
+
+.table-action-toggle-switch.is-active .table-action-toggle-knob {
+  transform: translateX(14px);
+}
+
 .table-action-menu-item {
   position: relative;
   display: flex;
@@ -1701,17 +1783,26 @@ th.visual-cell-selected::after {
 }
 
 /* ---- Table Cell Background Color ---- */
-/* BlockNote stores backgroundColor as data-background-color attribute on td.
+/* BlockNote stores backgroundColor as data-background-color attribute on table cells.
    These rules render the actual background color. */
-.bn-editor [data-content-type="table"] td[data-background-color="gray"]   { background-color: #f0efed !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="brown"]  { background-color: #f5ede9 !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="red"]    { background-color: #fce9e7 !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="orange"] { background-color: #fbebde !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="yellow"] { background-color: #f9f3dc !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="green"]  { background-color: #e8f1ec !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="blue"]   { background-color: #e5f2fc !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="purple"] { background-color: #f3ebf9 !important; }
-.bn-editor [data-content-type="table"] td[data-background-color="pink"]   { background-color: #fae9f1 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="gray"],
+.bn-editor [data-content-type="table"] th[data-background-color="gray"]   { background-color: #f0efed !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="brown"],
+.bn-editor [data-content-type="table"] th[data-background-color="brown"]  { background-color: #f5ede9 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="red"],
+.bn-editor [data-content-type="table"] th[data-background-color="red"]    { background-color: #fce9e7 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="orange"],
+.bn-editor [data-content-type="table"] th[data-background-color="orange"] { background-color: #fbebde !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="yellow"],
+.bn-editor [data-content-type="table"] th[data-background-color="yellow"] { background-color: #f9f3dc !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="green"],
+.bn-editor [data-content-type="table"] th[data-background-color="green"]  { background-color: #e8f1ec !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="blue"],
+.bn-editor [data-content-type="table"] th[data-background-color="blue"]   { background-color: #e5f2fc !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="purple"],
+.bn-editor [data-content-type="table"] th[data-background-color="purple"] { background-color: #f3ebf9 !important; }
+.bn-editor [data-content-type="table"] td[data-background-color="pink"],
+.bn-editor [data-content-type="table"] th[data-background-color="pink"]   { background-color: #fae9f1 !important; }
 
 /* ============================================
    Image Block Styles - Notion-like

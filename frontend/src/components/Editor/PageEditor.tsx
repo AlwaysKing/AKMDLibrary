@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
-import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow } from 'prosemirror-tables';
+import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow, toggleHeader } from 'prosemirror-tables';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
@@ -821,6 +821,12 @@ function getSelectedTableDimensionColors(view: any): { textColor: string; bgColo
   };
 }
 
+function isSelectedTableDimensionHeaderEnabled(view: any): boolean {
+  const selected = getSelectedTableDimension(view);
+  if (!selected) return false;
+  return selected.cells.length > 0 && selected.cells.every((cell) => cell.node.type.name === 'tableHeader');
+}
+
 function showTableActionMenu(view: any, type: 'col' | 'row', _index: number, anchorRect: DOMRect) {
   // Remove any existing menu
   const existing = document.querySelector('.table-action-menu');
@@ -830,6 +836,9 @@ function showTableActionMenu(view: any, type: 'col' | 'row', _index: number, anc
 
   const menu = document.createElement('div');
   menu.className = 'table-action-menu';
+  const selectedDimension = getSelectedTableDimension(view);
+  const showHeaderToggle = !!selectedDimension && selectedDimension.index === 0;
+  const isHeaderEnabled = showHeaderToggle ? isSelectedTableDimensionHeaderEnabled(view) : false;
 
   // Prevent mousedown from blurring the editor (keeps CellSelection active)
   menu.addEventListener('mousedown', (e) => e.preventDefault());
@@ -844,6 +853,7 @@ function showTableActionMenu(view: any, type: 'col' | 'row', _index: number, anc
     clear: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12.5h10"/><path d="m5.5 10.5 5-5"/><path d="M11.5 12.5 13 4.5H8.5"/></svg>`,
     deleteCol: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9"/><path d="M6 2.5h4"/><path d="M5 6v5.5"/><path d="M8 6v5.5"/><path d="M11 6v5.5"/><path d="M4.5 4.5v7a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-7"/></svg>`,
     deleteRow: `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h9"/><path d="M6 2.5h4"/><path d="M5 6v5.5"/><path d="M8 6v5.5"/><path d="M11 6v5.5"/><path d="M4.5 4.5v7a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-7"/></svg>`,
+    headerToggle: `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25"/><path d="M2.75 8.25h14.5"/><path d="M7.75 8.25v8"/></svg>`,
   };
 
   const items = type === 'col'
@@ -863,6 +873,31 @@ function showTableActionMenu(view: any, type: 'col' | 'row', _index: number, anc
         { label: '清除内容', action: 'clear' },
         { label: '删除', action: 'deleteRow', danger: true },
       ];
+
+  if (showHeaderToggle) {
+    const headerItem = document.createElement('div');
+    headerItem.className = 'table-action-toggle-item';
+    headerItem.innerHTML = `
+      <span class="table-action-toggle-icon">${iconMap.headerToggle}</span>
+      <span class="table-action-toggle-label">${type === 'col' ? '标题列' : '标题行'}</span>
+      <span class="table-action-toggle-switch${isHeaderEnabled ? ' is-active' : ''}">
+        <span class="table-action-toggle-knob"></span>
+      </span>
+    `;
+    headerItem.addEventListener('click', () => {
+      const state = view.state;
+      const dispatch = view.dispatch.bind(view);
+      const command = toggleHeader(type === 'col' ? 'column' : 'row');
+      command(state, dispatch);
+      closeMenu();
+      view.focus();
+    });
+    menu.appendChild(headerItem);
+
+    const divider = document.createElement('div');
+    divider.className = 'table-action-menu-divider';
+    menu.appendChild(divider);
+  }
 
   items.forEach(item => {
     const div = document.createElement('div');
@@ -969,7 +1004,7 @@ function renderTableHeaderHandles(view: any) {
     }
 
     // Find active cell
-    const activeCell = tableEl.querySelector('td.cell-active') as HTMLElement | null;
+    const activeCell = tableEl.querySelector('td.cell-active, th.cell-active') as HTMLElement | null;
     if (!activeCell) {
       if (container) container.innerHTML = '';
       return;
@@ -1056,7 +1091,7 @@ function renderTableHeaderHandles(view: any) {
           if (node.type.name === 'table' && tablePos === -1) {
             // Verify this table contains the active cell
             const dom = view.nodeDOM(pos) as HTMLElement | null;
-            if (dom && dom.querySelector('td.cell-active')) {
+            if (dom && dom.querySelector('td.cell-active, th.cell-active')) {
               tablePos = pos;
               tableNode = node;
               return false;
@@ -1114,9 +1149,51 @@ const TableHeaderIndicators = Extension.create({
           },
         },
         view() {
+          let currentView: any = null;
+          let dragFrame = 0;
+          let dragTracking = false;
+
+          const stopDragTracking = () => {
+            dragTracking = false;
+            cancelAnimationFrame(dragFrame);
+            dragFrame = 0;
+            if (currentView && !isHeaderMenuOpen()) {
+              renderTableHeaderHandles(currentView);
+            }
+          };
+
+          const trackDragFrame = () => {
+            if (!dragTracking || !currentView) return;
+            renderTableHeaderHandles(currentView);
+            const root = (currentView.dom as HTMLElement).closest('.bn-editor');
+            if (!root?.querySelector('td.column-resize-dragging, th.column-resize-dragging')) {
+              stopDragTracking();
+              return;
+            }
+            dragFrame = requestAnimationFrame(trackDragFrame);
+          };
+
+          const syncDragTracking = (view: any) => {
+            currentView = view;
+            const root = (view.dom as HTMLElement).closest('.bn-editor');
+            const isDragging = !!root?.querySelector('td.column-resize-dragging, th.column-resize-dragging');
+            if (isDragging === dragTracking) return;
+            if (isDragging) {
+              dragTracking = true;
+              cancelAnimationFrame(dragFrame);
+              dragFrame = requestAnimationFrame(trackDragFrame);
+            } else {
+              stopDragTracking();
+            }
+          };
+
+          document.addEventListener('mouseup', stopDragTracking, true);
+
           return {
             update(view: any) {
+              currentView = view;
               syncHeaderHandleLock(view);
+              syncDragTracking(view);
               // When the table action menu is open, skip re-rendering the
               // header indicators. Re-rendering uses innerHTML which would
               // destroy the current indicators (and their event listeners)
@@ -1126,6 +1203,8 @@ const TableHeaderIndicators = Extension.create({
               setTimeout(() => renderTableHeaderHandles(view), 0);
             },
             destroy() {
+              document.removeEventListener('mouseup', stopDragTracking, true);
+              stopDragTracking();
               setHeaderMenuOpen(false);
               clearHeaderHandleLock();
               document.querySelectorAll('.table-header-handles').forEach((el) => el.remove());

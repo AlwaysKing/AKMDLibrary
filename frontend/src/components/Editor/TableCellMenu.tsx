@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react';
 import { Paintbrush, Eraser, Merge } from 'lucide-react';
 import { ColorListContent } from './BlockNoteComponents';
 import { mergeCells } from 'prosemirror-tables';
@@ -27,6 +27,14 @@ export default function TableCellMenu({
     width: number;
     height: number;
   } | null>(null);
+  const selectionRectRef = useRef<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const notchRef = useRef<HTMLButtonElement | null>(null);
 
   // Menu state
   const [menuState, setMenuState] = useState<{
@@ -41,6 +49,37 @@ export default function TableCellMenu({
   const menuOpenRef = useRef(false);
   menuOpenRef.current = !!menuState;
   const resizeTrackingRef = useRef(false);
+
+  const applyOverlayRect = useCallback((rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null) => {
+    selectionRectRef.current = rect;
+
+    if (frameRef.current) {
+      if (!rect) {
+        frameRef.current.style.display = 'none';
+      } else {
+        frameRef.current.style.display = 'block';
+        frameRef.current.style.left = `${rect.left}px`;
+        frameRef.current.style.top = `${rect.top}px`;
+        frameRef.current.style.width = `${rect.width}px`;
+        frameRef.current.style.height = `${rect.height}px`;
+      }
+    }
+
+    if (notchRef.current) {
+      if (!rect) {
+        notchRef.current.style.display = 'none';
+      } else {
+        notchRef.current.style.display = 'block';
+        notchRef.current.style.left = `${rect.left + rect.width - 1}px`;
+        notchRef.current.style.top = `${rect.top + rect.height / 2}px`;
+      }
+    }
+  }, []);
 
   // ---- Editor access ----
   const getEditor = useCallback((): any => {
@@ -65,9 +104,12 @@ export default function TableCellMenu({
     let dragFrame = 0;
 
     const updateRect = () => {
-      const activeCells = editorContainer.querySelectorAll('td.cell-active');
+      const activeCells = editorContainer.querySelectorAll('td.cell-active, th.cell-active');
       if (activeCells.length === 0) {
-        setSelectionRect((prev) => (prev ? null : prev));
+        if (selectionRectRef.current) {
+          applyOverlayRect(null);
+          setSelectionRect(null);
+        }
         return;
       }
 
@@ -90,18 +132,21 @@ export default function TableCellMenu({
         height: maxBottom - minTop + 2,
       };
 
-      setSelectionRect((prev) => {
-        if (
-          prev &&
-          Math.abs(prev.left - nextRect.left) < 0.5 &&
-          Math.abs(prev.top - nextRect.top) < 0.5 &&
-          Math.abs(prev.width - nextRect.width) < 0.5 &&
-          Math.abs(prev.height - nextRect.height) < 0.5
-        ) {
-          return prev;
-        }
-        return nextRect;
-      });
+      const prev = selectionRectRef.current;
+      if (
+        prev &&
+        Math.abs(prev.left - nextRect.left) < 0.5 &&
+        Math.abs(prev.top - nextRect.top) < 0.5 &&
+        Math.abs(prev.width - nextRect.width) < 0.5 &&
+        Math.abs(prev.height - nextRect.height) < 0.5
+      ) {
+        return;
+      }
+
+      applyOverlayRect(nextRect);
+      if (!prev) {
+        setSelectionRect(nextRect);
+      }
     };
 
     const scheduleRectUpdate = () => {
@@ -123,7 +168,7 @@ export default function TableCellMenu({
     };
 
     const syncResizeTracking = () => {
-      const isDragging = !!editorContainer.querySelector('td.column-resize-dragging');
+      const isDragging = !!editorContainer.querySelector('td.column-resize-dragging, th.column-resize-dragging');
       if (isDragging === resizeTrackingRef.current) {
         scheduleRectUpdate();
         return;
@@ -173,6 +218,17 @@ export default function TableCellMenu({
     };
   }, [editorContainer]);
 
+  useLayoutEffect(() => {
+    applyOverlayRect(selectionRect);
+  }, [selectionRect, applyOverlayRect]);
+
+  useLayoutEffect(() => {
+    if (!selectionRectRef.current || !notchRef.current) return;
+    const rect = selectionRectRef.current;
+    notchRef.current.style.left = `${rect.left + rect.width - 1}px`;
+    notchRef.current.style.top = `${rect.top + rect.height / 2}px`;
+  }, [menuState]);
+
   // ---- Helper: collect all active cell coordinates (tableId, rowIndex, cellIndex) ----
   const getAllActiveCells = useCallback((): {
     tableId: string;
@@ -180,7 +236,7 @@ export default function TableCellMenu({
     cellIndex: number;
   }[] => {
     if (!editorContainer) return [];
-    const activeCells = editorContainer.querySelectorAll('td.cell-active');
+    const activeCells = editorContainer.querySelectorAll('td.cell-active, th.cell-active');
     return Array.from(activeCells).map(cell => {
       const tableBlock = cell.closest('[data-id]');
       const tableId = tableBlock?.getAttribute('data-id') || '';
@@ -188,7 +244,7 @@ export default function TableCellMenu({
       const tableEl = cell.closest('[data-content-type="table"]');
       const allRows = tableEl ? Array.from(tableEl.querySelectorAll('tr')) as HTMLTableRowElement[] : [];
       const rowIndex = Array.from(allRows).indexOf(row);
-      const cells = row ? Array.from(row.querySelectorAll('td')) as HTMLTableCellElement[] : [];
+      const cells = row ? Array.from(row.querySelectorAll('td, th')) as HTMLTableCellElement[] : [];
       const cellIndex = cells.indexOf(cell);
       return { tableId, rowIndex, cellIndex };
     }).filter(c => c.rowIndex >= 0 && c.cellIndex >= 0);
@@ -196,8 +252,9 @@ export default function TableCellMenu({
 
   // ---- Open menu from notch button ----
   const openMenu = useCallback(() => {
-    if (!editorContainer || !selectionRect) return;
-    const activeCell = editorContainer.querySelector('td.cell-primary') as HTMLTableCellElement | null;
+    const currentRect = selectionRectRef.current;
+    if (!editorContainer || !currentRect) return;
+    const activeCell = editorContainer.querySelector('td.cell-primary, th.cell-primary') as HTMLTableCellElement | null;
     if (!activeCell) return;
 
     const tableBlock = activeCell.closest('[data-id]');
@@ -206,7 +263,7 @@ export default function TableCellMenu({
     const tableEl = activeCell.closest('[data-content-type="table"]');
     const allRows = tableEl ? Array.from(tableEl.querySelectorAll('tr')) as HTMLTableRowElement[] : [];
     const rowIndex = Array.from(allRows).indexOf(row);
-    const cells = row ? Array.from(row.querySelectorAll('td')) as HTMLTableCellElement[] : [];
+    const cells = row ? Array.from(row.querySelectorAll('td, th')) as HTMLTableCellElement[] : [];
     const cellIndex = cells.indexOf(activeCell);
 
     // Position menu at the right edge center of the selection frame
@@ -215,11 +272,11 @@ export default function TableCellMenu({
       tableId,
       rowIndex,
       cellIndex,
-      x: selectionRect.left + selectionRect.width + 4,
-      y: selectionRect.top + selectionRect.height / 2,
+      x: currentRect.left + currentRect.width + 4,
+      y: currentRect.top + currentRect.height / 2,
     });
     setColorOpen(false);
-  }, [editorContainer, selectionRect]);
+  }, [editorContainer]);
 
   // ---- Click outside to close ----
   useEffect(() => {
@@ -400,6 +457,7 @@ export default function TableCellMenu({
       {/* Selection border overlay — single blue frame around all active cells */}
       {selectionRect && (
         <div
+          ref={frameRef}
           className="cell-selection-frame"
           style={{
             position: 'fixed',
@@ -418,6 +476,7 @@ export default function TableCellMenu({
       {/* Notch button — keep visible while its menu is open */}
       {selectionRect && (
         <button
+          ref={notchRef}
           className={`tcm-notch-btn${menuState ? ' is-active' : ''}`}
           style={{
             position: 'fixed',
