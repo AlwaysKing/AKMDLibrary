@@ -1957,19 +1957,56 @@ a.is-internal-link {
 .mention-badge:hover {
   background: transparent;
 }
+.mention-badge-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 0.3em;
+}
 .mention-badge-icon {
   width: 1.2em;
   height: 1.2em;
   flex-shrink: 0;
   border-radius: 3px;
   vertical-align: -0.22em;
-  margin-right: 0.3em;
+}
+.mention-badge-emoji-icon {
+  width: 1.2em;
+  height: 1.2em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05em;
+  line-height: 1;
+}
+.mention-badge-page-icon {
+  width: 1.2em;
+  height: 1.2em;
+  color: #91918e;
+  flex-shrink: 0;
 }
 .mention-badge-fallback-icon {
   font-size: 1.1em;
   line-height: 1;
   flex-shrink: 0;
-  margin-right: 0.3em;
+}
+.mention-badge-internal-arrow {
+  position: absolute;
+  right: -0.24em;
+  bottom: -0.2em;
+  width: 0.98em;
+  height: 0.98em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #000000;
+  font-size: 0.74em;
+  font-weight: 700;
+  line-height: 1;
 }
 .mention-badge-title {
   font-size: inherit;
@@ -2041,9 +2078,50 @@ a.is-internal-link {
   border-radius: 3px;
   flex-shrink: 0;
 }
+.link-preview-favicon-wrap {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.link-preview-favicon-emoji {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.link-preview-page-icon {
+  width: 16px;
+  height: 16px;
+  color: #91918e;
+  flex-shrink: 0;
+}
 .link-preview-favicon-fallback {
   font-size: 14px;
   flex-shrink: 0;
+}
+.link-preview-favicon-arrow {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 13px;
+  height: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #000000;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 .link-preview-title {
   font-size: 13px;

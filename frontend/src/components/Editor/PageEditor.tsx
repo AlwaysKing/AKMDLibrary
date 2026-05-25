@@ -104,6 +104,34 @@ const APP_ORIGIN = typeof window !== 'undefined' ? window.location.origin : '';
 const INTERNAL_URL_RE = new RegExp(`^${APP_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/s/([^/]+)/p/([a-f0-9]{32})(?:$|/)`);
 const URL_RE = /^https?:\/\/.+/;
 
+function createDefaultInternalPageIcon() {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('class', 'mention-badge-page-icon');
+
+  const paths = [
+    'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z',
+    'M14 2v4a2 2 0 0 0 2 2h4',
+    'M10 9H8',
+    'M16 13H8',
+    'M16 17H8',
+  ];
+
+  paths.forEach((d) => {
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  });
+
+  return svg;
+}
+
 // Override zh dictionary: reorganize groups + rename toggle headings
 const customZh = {
   ...zh,
@@ -1309,35 +1337,60 @@ function buildInternalLinkDecorations(doc: any, spaceSlug: string, editorView?: 
       badge.setAttribute('data-href', mentionUrl);
 
       if (meta) {
+        const iconWrap = document.createElement('span');
+        iconWrap.className = `mention-badge-icon-wrap${meta.is_internal ? ' is-internal' : ''}`;
+
         if (meta.favicon_url) {
-          const img = document.createElement('img');
-          img.className = 'mention-badge-icon';
-          img.src = meta.favicon_url;
-          img.alt = '';
-          img.onerror = () => {
-            // Replace failed favicon with fallback icon
-            const fallback = document.createElement('span');
-            fallback.className = 'mention-badge-fallback-icon';
-            fallback.textContent = '🔗';
-            img.replaceWith(fallback);
-          };
-          badge.appendChild(img);
+          if (meta.is_internal && !(meta.favicon_url.startsWith('/') || meta.favicon_url.startsWith('http'))) {
+            const iconEmoji = document.createElement('span');
+            iconEmoji.className = 'mention-badge-emoji-icon';
+            iconEmoji.textContent = meta.favicon_url;
+            iconWrap.appendChild(iconEmoji);
+          } else {
+            const img = document.createElement('img');
+            img.className = 'mention-badge-icon';
+            img.src = meta.favicon_url;
+            img.alt = '';
+            img.onerror = () => {
+              const fallback = document.createElement('span');
+              fallback.className = 'mention-badge-fallback-icon';
+              fallback.textContent = '🔗';
+              iconWrap.replaceChildren(fallback);
+            };
+            iconWrap.appendChild(img);
+          }
         } else {
-          const icon = document.createElement('span');
-          icon.className = 'mention-badge-fallback-icon';
-          icon.textContent = '🔗';
-          badge.appendChild(icon);
+          if (meta.is_internal) {
+            iconWrap.appendChild(createDefaultInternalPageIcon());
+          } else {
+            const icon = document.createElement('span');
+            icon.className = 'mention-badge-fallback-icon';
+            icon.textContent = '🔗';
+            iconWrap.appendChild(icon);
+          }
         }
+
+        if (meta.is_internal) {
+          const marker = document.createElement('span');
+          marker.className = 'mention-badge-internal-arrow';
+          marker.textContent = '↗';
+          iconWrap.appendChild(marker);
+        }
+
+        badge.appendChild(iconWrap);
         const titleEl = document.createElement('span');
         titleEl.className = 'mention-badge-title';
         titleEl.textContent = meta.title;
         badge.appendChild(titleEl);
       } else {
         // No meta yet: show URL, fetch in background
+        const iconWrap = document.createElement('span');
+        iconWrap.className = 'mention-badge-icon-wrap';
         const icon = document.createElement('span');
         icon.className = 'mention-badge-fallback-icon';
         icon.textContent = '🔗';
-        badge.appendChild(icon);
+        iconWrap.appendChild(icon);
+        badge.appendChild(iconWrap);
         const titleEl = document.createElement('span');
         titleEl.className = 'mention-badge-title mention-badge-loading';
         titleEl.textContent = mentionUrl;
@@ -1357,6 +1410,14 @@ function buildInternalLinkDecorations(doc: any, spaceSlug: string, editorView?: 
       badge.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (meta?.is_internal) {
+          if (e.metaKey) {
+            window.open(mentionUrl, '_blank', 'noopener,noreferrer');
+          } else {
+            window.location.href = mentionUrl;
+          }
+          return;
+        }
         window.open(mentionUrl, '_blank', 'noopener,noreferrer');
       });
 
@@ -1882,17 +1943,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // Check if internal URL
       const internalMatch = text.match(INTERNAL_URL_RE);
       if (internalMatch) {
-        const pageId = internalMatch[2];
-        const currentBlock = editor.getTextCursorPosition().block;
-        const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
-
-        const newBlock: any = { type: 'pageReference', props: { pageId } };
-
-        if (isEmpty) {
-          editor.updateBlock(currentBlock, newBlock);
-        } else {
-          editor.insertBlocks([newBlock], currentBlock, 'after');
-        }
+        handleInsertMention(text);
         return;
       }
 

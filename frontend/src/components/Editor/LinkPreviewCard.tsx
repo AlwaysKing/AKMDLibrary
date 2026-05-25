@@ -7,6 +7,33 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { mentionMetaCache, LinkMeta } from './MentionMetaCache';
 
+function isImageIcon(icon: string): boolean {
+  return icon.startsWith('/') || icon.startsWith('http');
+}
+
+function DefaultInternalPageIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="link-preview-page-icon"
+    >
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+    </svg>
+  );
+}
+
 const LinkPreviewCard: React.FC = () => {
   const [visible, setVisible] = useState(false);
   const [meta, setMeta] = useState<LinkMeta | null>(null);
@@ -118,7 +145,9 @@ const LinkPreviewCard: React.FC = () => {
   let displayUrl = url;
   try {
     const u = new URL(url);
-    displayUrl = u.hostname + (u.pathname !== '/' ? u.pathname : '');
+    displayUrl = meta?.is_internal
+      ? u.pathname
+      : u.hostname + (u.pathname !== '/' ? u.pathname : '');
   } catch {}
 
   return createPortal(
@@ -153,22 +182,35 @@ const LinkPreviewCard: React.FC = () => {
     >
       <div className="link-preview-header">
         <div className="link-preview-title-row">
-          {meta?.favicon_url ? (
-            <img
-              className="link-preview-favicon"
-              src={meta.favicon_url}
-              alt=""
-              onError={(e) => {
-                const el = e.target as HTMLImageElement;
-                const fallback = document.createElement('span');
-                fallback.className = 'link-preview-favicon-fallback';
-                fallback.textContent = '🔗';
-                el.replaceWith(fallback);
-              }}
-            />
-          ) : (
-            <span className="link-preview-favicon-fallback">🔗</span>
-          )}
+          <span className={`link-preview-favicon-wrap${meta?.is_internal ? ' is-internal' : ''}`}>
+            {meta?.favicon_url ? (
+              meta.is_internal && !isImageIcon(meta.favicon_url) ? (
+                <span className="link-preview-favicon-emoji">{meta.favicon_url}</span>
+              ) : (
+                <img
+                  className="link-preview-favicon"
+                  src={meta.favicon_url}
+                  alt=""
+                  onError={(e) => {
+                    const el = e.target as HTMLImageElement;
+                    const fallback = document.createElement('span');
+                    fallback.className = 'link-preview-favicon-fallback';
+                    fallback.textContent = '🔗';
+                    el.replaceWith(fallback);
+                  }}
+                />
+              )
+            ) : (
+              meta?.is_internal ? (
+                <DefaultInternalPageIcon />
+              ) : (
+                <span className="link-preview-favicon-fallback">🔗</span>
+              )
+            )}
+            {meta?.is_internal && (
+              <span className="link-preview-favicon-arrow">↗</span>
+            )}
+          </span>
           <span className="link-preview-title">
             {meta?.title || url}
           </span>
