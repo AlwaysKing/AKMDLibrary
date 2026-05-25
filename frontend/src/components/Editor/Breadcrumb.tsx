@@ -14,6 +14,7 @@ interface BreadcrumbProps {
 const SUBMENU_WIDTH = 260;
 const ROOT_CLOSE_DELAY = 500;
 const SUBMENU_CLOSE_DELAY = 100;
+const ROOT_OPEN_DELAY = 280;
 
 function CascadingPageItem({ page, spaceSlug, onClose }: { page: Page; spaceSlug: string; onClose: () => void }) {
   const navigate = useNavigate();
@@ -262,13 +263,18 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
   const menuRef = useRef<HTMLDivElement>(null);
   const fetchedSlugs = useRef<Set<string>>(new Set());
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const openTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   const handleItemEnter = (item: ActiveItem) => {
+    clearTimeout(openTimeoutRef.current);
     clearTimeout(closeTimeoutRef.current);
-    setActiveItem(item);
+    openTimeoutRef.current = setTimeout(() => {
+      setActiveItem(item);
+    }, ROOT_OPEN_DELAY);
   };
 
   const handleItemLeave = () => {
+    clearTimeout(openTimeoutRef.current);
     closeTimeoutRef.current = setTimeout(() => {
       setActiveItem(null);
       setActiveSpaceId(null);
@@ -311,6 +317,13 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [activeItem]);
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(openTimeoutRef.current);
+      clearTimeout(closeTimeoutRef.current);
+    };
+  }, []);
 
   return (
     <div className="flex items-center justify-between text-base text-notion-textSecondary h-11 px-4 select-none">
