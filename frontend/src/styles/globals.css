@@ -2131,6 +2131,27 @@ a.is-internal-link {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.bn-upload-progress-overlay {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  min-width: 52px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.82);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.bn-upload-progress-overlay[data-status="error"] {
+  background: rgba(196, 49, 47, 0.92);
+}
 .link-preview-desc {
   font-size: 12px;
   line-height: 1.5;

@@ -1,15 +1,45 @@
-import apiClient from './client';
-
 export const uploadApi = {
-  upload: async (file: File): Promise<{ url: string; filename: string }> => {
+  uploadWithProgress: async (
+    file: File,
+    options?: { onProgress?: (progress: number) => void }
+  ): Promise<{ path: string }> => {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await apiClient.post<{ url: string; filename: string }>('/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const progress = Math.round((event.loaded / event.total) * 100);
+        options?.onProgress?.(progress);
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch (error) {
+            reject(error);
+          }
+        } else {
+          reject(new Error('Upload failed'));
+        }
+      });
+
+      xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+      xhr.open('POST', '/api/upload');
+
+      const token = localStorage.getItem('token');
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
+      xhr.send(formData);
     });
-    return response.data;
+  },
+
+  upload: async (file: File): Promise<{ path: string }> => {
+    return uploadApi.uploadWithProgress(file);
   },
 };

@@ -26,6 +26,7 @@ import { getBlockDragData, markDragHandled } from './blockDragState';
 import { pageMetaCache } from './PageMetaCache';
 import { mentionMetaCache } from './MentionMetaCache';
 import { pagesApi } from '../../api/pages';
+import { uploadApi } from '../../api/upload';
 import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { flushSync } from '../../services/syncModule';
@@ -753,6 +754,13 @@ function copyTableCell(tr: any, targetPos: number, sourceNode: any) {
   if (!currentTargetNode) return;
   const clonedNode = sourceNode.type.create({ ...sourceNode.attrs }, sourceNode.content, sourceNode.marks);
   tr.replaceWith(targetPos, targetPos + currentTargetNode.nodeSize, clonedNode);
+}
+
+function getFileBlockType(file: File): 'image' | 'video' | 'audio' | 'file' {
+  if (file.type.startsWith('image/')) return 'image';
+  if (file.type.startsWith('video/')) return 'video';
+  if (file.type.startsWith('audio/')) return 'audio';
+  return 'file';
 }
 
 function clearSelectedTableDimension(view: any) {
@@ -1487,6 +1495,12 @@ interface PageEditorProps {
   readOnly?: boolean;
 }
 
+type FileUploadVisualState = {
+  progress: number;
+  status: 'uploading' | 'error';
+  objectUrl?: string;
+};
+
 export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const editorRef = useRef<HTMLDivElement | null>(null);
@@ -1511,6 +1525,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     url: string;
     position: { x: number; y: number };
   } | null>(null);
+  const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editor = useCreateBlockNote({
@@ -1518,6 +1533,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
+    uploadFile: async (file: File) => {
+      const result = await uploadApi.upload(file);
+      return result.path;
+    },
     _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators] },
   } as any);
 
@@ -1657,6 +1676,42 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
   }, [editor, readOnly]);
 
+  useEffect(() => {
+    if (!editorEl) return;
+
+    editorEl.querySelectorAll('.bn-upload-progress-overlay').forEach((node) => {
+      const overlay = node as HTMLElement;
+      const blockEl = overlay.closest('[data-id]') as HTMLElement | null;
+      const blockId = blockEl?.getAttribute('data-id') || '';
+      if (!blockId || !fileUploadStates[blockId]) {
+        overlay.remove();
+      }
+    });
+
+    Object.entries(fileUploadStates).forEach(([blockId, state]) => {
+      const blockEl = editorEl.querySelector(`[data-id="${blockId}"]`) as HTMLElement | null;
+      if (!blockEl) return;
+
+      const wrapper = (blockEl.querySelector('.bn-visual-media-wrapper') ||
+        blockEl.querySelector('.bn-file-block-content-wrapper')) as HTMLElement | null;
+      if (!wrapper) return;
+
+      if (getComputedStyle(wrapper).position === 'static') {
+        wrapper.style.position = 'relative';
+      }
+
+      let overlay = wrapper.querySelector('.bn-upload-progress-overlay') as HTMLElement | null;
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'bn-upload-progress-overlay';
+        wrapper.appendChild(overlay);
+      }
+
+      overlay.textContent = state.status === 'error' ? '上传失败' : `${state.progress}%`;
+      overlay.dataset.status = state.status;
+    });
+  }, [editorEl, fileUploadStates]);
+
   // Subpage block drop target: allow dropping blocks onto subpage blocks to move content
   useEffect(() => {
     const container = editorRef.current;
@@ -1793,6 +1848,139 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       container.removeEventListener('drop', handleDrop, true);
       container.removeEventListener('dragleave', handleDragLeave);
       clearHighlight();
+    };
+  }, [editor, readOnly]);
+
+  useEffect(() => {
+    if (readOnly) return;
+
+    const handleFileDragOver = (e: DragEvent) => {
+      if (getBlockDragData()) return;
+      const hasFiles = !!e.dataTransfer?.types?.includes('Files');
+      if (!hasFiles) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const handleFileDrop = async (e: DragEvent) => {
+      if (getBlockDragData()) return;
+
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length === 0) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const dropTarget = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const targetBlockEl = dropTarget?.closest('[data-id]') as HTMLElement | null;
+      const targetBlockId = targetBlockEl?.getAttribute('data-id') || null;
+
+      let referenceBlock: any = null;
+      let placement: 'before' | 'after' = 'after';
+
+      if (targetBlockId) {
+        referenceBlock = editor.document.find((block: any) => block.id === targetBlockId) || null;
+        if (referenceBlock && targetBlockEl) {
+          const rect = targetBlockEl.getBoundingClientRect();
+          placement = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        }
+      }
+
+      if (!referenceBlock) {
+        referenceBlock = editor.document[editor.document.length - 1] || null;
+      }
+
+      for (const file of files) {
+        const fileType = getFileBlockType(file);
+        const objectUrl = fileType === 'image' ? URL.createObjectURL(file) : undefined;
+        const newBlock: any = {
+          type: fileType,
+          props: {
+            name: file.name,
+            ...(objectUrl ? { url: objectUrl } : {}),
+          },
+        };
+
+        let insertedBlock: any = null;
+        if (
+          referenceBlock &&
+          Array.isArray(referenceBlock.content) &&
+          referenceBlock.content.length === 0
+        ) {
+          insertedBlock = editor.updateBlock(referenceBlock, newBlock);
+        } else if (referenceBlock) {
+          insertedBlock = editor.insertBlocks([newBlock], referenceBlock, placement)[0];
+        } else {
+          insertedBlock = editor.insertBlocks([newBlock], editor.document[0], 'before')[0];
+        }
+
+        setFileUploadStates((prev) => ({
+          ...prev,
+          [insertedBlock.id]: {
+            progress: 0,
+            status: 'uploading',
+            objectUrl,
+          },
+        }));
+
+        try {
+          const uploadedPath = await uploadApi.uploadWithProgress(file, {
+            onProgress: (progress) => {
+              setFileUploadStates((prev) => {
+                const current = prev[insertedBlock.id];
+                if (!current) return prev;
+                return {
+                  ...prev,
+                  [insertedBlock.id]: {
+                    ...current,
+                    progress,
+                  },
+                };
+              });
+            },
+          });
+
+          editor.updateBlock(insertedBlock, {
+            props: {
+              name: file.name,
+              url: uploadedPath.path,
+            },
+          } as any);
+
+          setFileUploadStates((prev) => {
+            const next = { ...prev };
+            const current = next[insertedBlock.id];
+            if (current?.objectUrl) {
+              URL.revokeObjectURL(current.objectUrl);
+            }
+            delete next[insertedBlock.id];
+            return next;
+          });
+        } catch (error) {
+          setFileUploadStates((prev) => ({
+            ...prev,
+            [insertedBlock.id]: {
+              progress: prev[insertedBlock.id]?.progress ?? 0,
+              status: 'error',
+              objectUrl,
+            },
+          }));
+        }
+
+        referenceBlock = insertedBlock;
+        placement = 'after';
+      }
+    };
+
+    window.addEventListener('dragover', handleFileDragOver, true);
+    window.addEventListener('drop', handleFileDrop, true);
+    return () => {
+      window.removeEventListener('dragover', handleFileDragOver, true);
+      window.removeEventListener('drop', handleFileDrop, true);
     };
   }, [editor, readOnly]);
 
