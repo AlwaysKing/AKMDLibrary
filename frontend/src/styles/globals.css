@@ -1216,6 +1216,27 @@ body.multi-drag-active .bn-drag-preview {
   padding-left: 6px !important;
   padding-right: 0 !important;
   box-sizing: border-box !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-color: #c9c8c4 transparent !important;
+}
+
+.bn-editor [data-content-type="table"] .tableWrapper::-webkit-scrollbar {
+  height: 8px;
+  background: transparent !important;
+}
+
+.bn-editor [data-content-type="table"] .tableWrapper::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.bn-editor [data-content-type="table"] .tableWrapper::-webkit-scrollbar-thumb {
+  background-color: #c9c8c4 !important;
+  border-radius: 999px !important;
+}
+
+.bn-editor [data-content-type="table"] .tableWrapper::-webkit-scrollbar-thumb:hover {
+  background-color: #b8b6b2 !important;
 }
 
 /* Table — collapse borders, override BlockNote width:auto */
@@ -1479,7 +1500,8 @@ body.multi-drag-active .bn-drag-preview {
 /* Row extend: wide short strip below table, 8px gap from table edge (Notion) */
 .bn-extend-button-add-remove-rows {
   height: 16px !important;
-  width: 100% !important;
+  width: var(--table-row-extend-width, 100%) !important;
+  max-width: 100% !important;
   margin-top: 8px !important;
 }
 

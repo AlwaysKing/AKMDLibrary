@@ -1013,7 +1013,7 @@ function renderTableHeaderHandles(view: any) {
     if (!container) {
       container = document.createElement('div');
       container.className = 'table-header-handles';
-      container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:35;';
+      container.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:35;';
       (wrapper as HTMLElement).appendChild(container);
     }
 
@@ -1036,6 +1036,7 @@ function renderTableHeaderHandles(view: any) {
     if (rowIndex < 0) { container.innerHTML = ''; return; }
 
     const tableRect = tableEl.getBoundingClientRect();
+    const wrapperRect = (wrapper as HTMLElement).getBoundingClientRect();
 
     const cols = tableEl.querySelectorAll('colgroup col');
     const parts: string[] = [];
@@ -1050,17 +1051,16 @@ function renderTableHeaderHandles(view: any) {
     for (let i = colIndex; i < colIndex + cellColSpan && i < cols.length; i++) {
       spanWidth += (cols[i] as HTMLElement).getBoundingClientRect().width || parseFloat((cols[i] as HTMLElement).style.width) || 100;
     }
-    // Use fixed positioning (viewport coords) so z-index competes with cell-selection-frame
-    const colCenterX = tableRect.left + cumX + spanWidth / 2;
-    const colCenterY = tableRect.top;
+    const colCenterX = tableRect.left + cumX + spanWidth / 2 - wrapperRect.left;
+    const colCenterY = tableRect.top - wrapperRect.top;
     const isLockedCol = !!lock && lock.tableId === tableBlockId && lock.type === 'col' && lock.index === colIndex;
     parts.push(`<div class="table-header-indicator${isLockedCol ? ' is-active' : ''}" data-type="col" data-index="${colIndex}" style="pointer-events:auto;left:${colCenterX}px;top:${colCenterY}px;transform:translate(-50%,-50%)"></div>`);
 
     // Row handle: centered at left border of the active row
     const activeRowEl = rows[rowIndex];
     const rowRect = activeRowEl.getBoundingClientRect();
-    const rowCenterX = tableRect.left;
-    const rowCenterY = rowRect.top + rowRect.height / 2;
+    const rowCenterX = tableRect.left - wrapperRect.left;
+    const rowCenterY = rowRect.top + rowRect.height / 2 - wrapperRect.top;
     const isLockedRow = !!lock && lock.tableId === tableBlockId && lock.type === 'row' && lock.index === rowIndex;
     parts.push(`<div class="table-header-indicator${isLockedRow ? ' is-active' : ''}" data-type="row" data-index="${rowIndex}" style="pointer-events:auto;left:${rowCenterX}px;top:${rowCenterY}px;transform:translate(-50%,-50%)"></div>`);
 
@@ -1129,6 +1129,20 @@ function renderTableHeaderHandles(view: any) {
 
 function syncTableExtendButtonVisibility(root: HTMLElement) {
   type MatchedTable = { wrapper: HTMLElement; table: HTMLTableElement };
+  const findHorizontalScrollContainer = (start: HTMLElement): HTMLElement | null => {
+    let current: HTMLElement | null = start;
+    while (current) {
+      const style = window.getComputedStyle(current);
+      const overflowX = style.overflowX;
+      const canScrollX = overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay';
+      if (canScrollX && current.scrollWidth - current.clientWidth > 0.5) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+
   const columnButtons = Array.from(document.querySelectorAll('.bn-extend-button-add-remove-columns')) as HTMLElement[];
   if (columnButtons.length === 0) return;
   const tableBlocks = Array.from(root.querySelectorAll('[data-content-type="table"]')) as HTMLElement[];
@@ -1158,9 +1172,12 @@ function syncTableExtendButtonVisibility(root: HTMLElement) {
     let hideColumnButton = false;
     if (matchedTable) {
       const matched = matchedTable as MatchedTable;
-      const wrapperRect = matched.wrapper.getBoundingClientRect();
-      const tableRect = matched.table.getBoundingClientRect();
-      hideColumnButton = tableRect.right - wrapperRect.right > 0.5;
+      const scrollContainer = findHorizontalScrollContainer(matched.wrapper);
+      if (scrollContainer) {
+        const hasHorizontalOverflow = scrollContainer.scrollWidth - scrollContainer.clientWidth > 0.5;
+        const scrolledToEnd = scrollContainer.scrollLeft + scrollContainer.clientWidth >= scrollContainer.scrollWidth - 0.5;
+        hideColumnButton = hasHorizontalOverflow && !scrolledToEnd;
+      }
     }
 
     button.classList.toggle('is-table-content-clipped', hideColumnButton);

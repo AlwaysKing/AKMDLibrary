@@ -227,7 +227,7 @@ export default function PageViewPage() {
       />
 
       {/* 可滚动的内容区域 — Breadcrumb 固定，只有这部分滚动 */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="page-content-scroll flex-1 overflow-y-auto">
 
         {/* Cover image - full width at top */}
         {showCover && (

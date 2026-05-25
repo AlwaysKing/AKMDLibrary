@@ -17,7 +17,8 @@ import React, {
   ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { useBlockNoteEditor } from '@blocknote/react';
+import { useBlockNoteEditor, useExtensionState } from '@blocknote/react';
+import { TableHandlesExtension } from '@blocknote/core/extensions';
 import { showToast } from '../Toast';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { setBlockDragData, isDragHandled, clearBlockDragData, getBlockDragData, syncSubpageOrderToBackend } from './blockDragState';
@@ -1237,8 +1238,58 @@ const TableHandleExtendButton: React.FC<{
   children: ReactNode;
 }> = (props) => {
   const { className, onClick, onMouseDown, children } = props;
+  const tableBlockId = useExtensionState(TableHandlesExtension, {
+    selector: (state: any) => state.block?.id as string | undefined,
+  });
+  const isColumnExtendButton = !!className?.includes('bn-extend-button-add-remove-columns');
+  const isRowExtendButton = !!className?.includes('bn-extend-button-add-remove-rows');
+  const [renderVersion, setRenderVersion] = useState(0);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+
+  useLayoutEffect(() => {
+    if ((!isColumnExtendButton && !isRowExtendButton) || !tableBlockId) {
+      return;
+    }
+
+    const dom = getTableBlockElements(tableBlockId);
+    if (!dom) return;
+
+    const scrollContainer = findHorizontalScrollContainer(dom.tableWrapper);
+
+    let frame = 0;
+    const scheduleUpdate = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        setRenderVersion((value) => value + 1);
+      });
+    };
+
+    scrollContainer?.addEventListener('scroll', scheduleUpdate, true);
+    window.addEventListener('resize', scheduleUpdate);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      scrollContainer?.removeEventListener('scroll', scheduleUpdate, true);
+      window.removeEventListener('resize', scheduleUpdate);
+    };
+  }, [isColumnExtendButton, isRowExtendButton, tableBlockId]);
+
+  void renderVersion;
+
+  if (isColumnExtendButton && shouldHideColumnExtendButton(tableBlockId)) {
+    return null;
+  }
+
+  const rowExtendMetrics = isRowExtendButton ? getRowExtendButtonMetrics(tableBlockId) : null;
+  const buttonStyle = rowExtendMetrics
+    ? ({
+        '--table-row-extend-width': `${rowExtendMetrics.width}px`,
+        alignSelf: 'flex-start',
+      } as React.CSSProperties)
+    : undefined;
+
   return (
-    <button className={className} onClick={onClick} onMouseDown={onMouseDown} type="button">
+    <button ref={buttonRef} className={className} onClick={onClick} onMouseDown={onMouseDown} type="button" style={buttonStyle}>
       {children}
     </button>
   );
@@ -1413,6 +1464,51 @@ function getTableContentViewportWidth(tableWrapper: HTMLElement): number {
   const paddingLeft = parseFloat(computedStyle.paddingLeft || '0') || 0;
   const paddingRight = parseFloat(computedStyle.paddingRight || '0') || 0;
   return Math.max(0, Math.round(tableWrapper.clientWidth - paddingLeft - paddingRight));
+}
+
+function findHorizontalScrollContainer(start: HTMLElement): HTMLElement | null {
+  let current: HTMLElement | null = start;
+  while (current) {
+    if (current.scrollWidth - current.clientWidth > 0.5) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function shouldHideColumnExtendButton(tableBlockId: string | undefined): boolean {
+  if (!tableBlockId) return false;
+
+  const dom = getTableBlockElements(tableBlockId);
+  if (!dom) return false;
+
+  const scrollContainer = findHorizontalScrollContainer(dom.tableWrapper);
+  if (scrollContainer) {
+    const hasHorizontalOverflow = scrollContainer.scrollWidth - scrollContainer.clientWidth > 0.5;
+    const scrolledToEnd = scrollContainer.scrollLeft + scrollContainer.clientWidth >= scrollContainer.scrollWidth - 0.5;
+    return hasHorizontalOverflow && !scrolledToEnd;
+  }
+
+  const viewportWidth = getTableContentViewportWidth(dom.tableWrapper);
+  const tableWidth = dom.tableEl.getBoundingClientRect().width;
+  return tableWidth - viewportWidth > 0.5;
+}
+
+function getRowExtendButtonMetrics(tableBlockId: string | undefined): { width: number; offsetX: number } | null {
+  if (!tableBlockId) return null;
+
+  const dom = getTableBlockElements(tableBlockId);
+  if (!dom) return null;
+
+  const scrollContainer = findHorizontalScrollContainer(dom.tableWrapper);
+  const viewportWidth = getTableContentViewportWidth(dom.tableWrapper);
+  const scrollViewportWidth = scrollContainer ? scrollContainer.clientWidth : viewportWidth;
+  const tableWidth = dom.tableEl.getBoundingClientRect().width;
+  const width = Math.max(0, Math.round(Math.min(tableWidth, viewportWidth, scrollViewportWidth)));
+  const offsetX = Math.round(dom.tableWrapper.scrollLeft || 0);
+
+  return { width, offsetX };
 }
 
 function distributeWidthsToTarget(currentWidths: number[], targetWidth: number, minWidth = 48): number[] {

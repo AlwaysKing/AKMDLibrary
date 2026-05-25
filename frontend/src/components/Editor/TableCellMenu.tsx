@@ -33,6 +33,12 @@ export default function TableCellMenu({
     width: number;
     height: number;
   } | null>(null);
+  const selectionClipRectRef = useRef<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const selectionRectRef = useRef<{
     left: number;
     top: number;
@@ -64,11 +70,17 @@ export default function TableCellMenu({
   } | null) => {
     selectionRectRef.current = rect;
 
+    const clipRect = selectionClipRectRef.current;
+
     if (frameRef.current) {
       if (!rect) {
         frameRef.current.style.display = 'none';
       } else {
         frameRef.current.style.display = 'block';
+        frameRef.current.style.left = `${clipRect ? rect.left - clipRect.left : rect.left}px`;
+        frameRef.current.style.top = `${clipRect ? rect.top - clipRect.top : rect.top}px`;
+        frameRef.current.style.width = `${rect.width}px`;
+        frameRef.current.style.height = `${rect.height}px`;
       }
     }
 
@@ -77,6 +89,8 @@ export default function TableCellMenu({
         notchRef.current.style.display = 'none';
       } else {
         notchRef.current.style.display = 'block';
+        notchRef.current.style.left = `${clipRect ? rect.left + rect.width - 1 - clipRect.left : rect.left + rect.width - 1}px`;
+        notchRef.current.style.top = `${clipRect ? rect.top + rect.height / 2 - clipRect.top : rect.top + rect.height / 2}px`;
       }
     }
   }, []);
@@ -170,6 +184,15 @@ export default function TableCellMenu({
       }
 
       applyOverlayRect(nextRect);
+      selectionClipRectRef.current =
+        wrapperRect
+          ? {
+              left: wrapperRect.left,
+              top: wrapperRect.top,
+              width: wrapperRect.width,
+              height: wrapperRect.height,
+            }
+          : null;
       setSelectionClipRect(
         wrapperRect
           ? {
@@ -237,6 +260,11 @@ export default function TableCellMenu({
       });
     });
 
+    const tableWrappers = Array.from(editorContainer.querySelectorAll('[data-content-type="table"] .tableWrapper')) as HTMLElement[];
+    tableWrappers.forEach((wrapper) => {
+      wrapper.addEventListener('scroll', scheduleRectUpdate, { passive: true });
+    });
+
     window.addEventListener('scroll', scheduleRectUpdate, true);
     window.addEventListener('resize', scheduleRectUpdate);
     document.addEventListener('mouseup', stopResizeTracking, true);
@@ -244,6 +272,9 @@ export default function TableCellMenu({
     return () => {
       classObserver.disconnect();
       tableObserver.disconnect();
+      tableWrappers.forEach((wrapper) => {
+        wrapper.removeEventListener('scroll', scheduleRectUpdate);
+      });
       cancelAnimationFrame(scheduledFrame);
       cancelAnimationFrame(dragFrame);
       window.removeEventListener('scroll', scheduleRectUpdate, true);
