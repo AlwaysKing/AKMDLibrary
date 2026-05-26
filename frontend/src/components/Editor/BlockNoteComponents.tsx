@@ -81,13 +81,21 @@ function setBlockSelection(blockIds: string[] | null) {
       .bn-block-outer:has(> [data-id="${id}"]) {
         position: relative;
       }
-      .bn-block-outer:has(> [data-id="${id}"]):not(:has(> [data-id="${id}"] [data-content-type="table"]))::after {
+      .bn-block-outer:has(> [data-id="${id}"]):not(:has(> [data-id="${id}"] [data-content-type="table"])):not(:has(> [data-id="${id}"] [data-content-type="image"]))::after {
         content: '';
         position: absolute;
         inset: 2px 2px;
         background: rgba(35, 131, 226, 0.14);
         border-radius: 4px;
         pointer-events: none;
+      }
+      .bn-block-outer:has(> [data-id="${id}"] [data-content-type="image"]) [data-content-type="image"] .bn-file-block-content-wrapper::after {
+        content: '' !important;
+        position: absolute !important;
+        inset: -6px !important;
+        background: rgba(35, 131, 226, 0.14) !important;
+        border-radius: 4px !important;
+        pointer-events: none !important;
       }
       .bn-block-outer:has(> [data-id="${id}"] [data-content-type="table"]) > [data-id="${id}"] [data-content-type="table"] .tableWrapper-inner {
         position: relative;

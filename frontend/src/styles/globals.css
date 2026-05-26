@@ -1902,9 +1902,7 @@ th.visual-cell-selected::after {
   background: transparent !important;
 }
 
-.bn-image-shell.is-selected::after {
-  content: none !important;
-}
+
 
 .bn-editor [data-content-type="image"] img {
   display: block !important;
