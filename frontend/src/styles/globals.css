@@ -2154,7 +2154,7 @@ a.is-internal-link {
   font-size: inherit;
   line-height: inherit;
   color: inherit;
-  vertical-align: baseline;
+  vertical-align: bottom;
   white-space: nowrap;
 }
 .mention-badge:hover {

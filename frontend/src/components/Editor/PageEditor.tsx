@@ -507,6 +507,89 @@ const InternalLinkBadge = Extension.create({
           decorations(state) {
             return internalLinkBadgeKey.getState(state) ?? DecorationSet.empty;
           },
+          handleKeyDown(view, event) {
+            // Fix: arrow-key navigation past a mention whose link text is
+            // display:none.  When the cursor sits right after the hidden mention
+            // text, pressing Left would normally try every position inside the
+            // hidden <a>, fail to render any of them, and fall through to the
+            // previous block.  We intercept here: insert a zero-width space
+            // before the mention so the browser has a real text node to anchor
+            // the cursor to, then place the selection there.
+            if (event.key !== 'ArrowLeft') return false;
+
+            const { from } = view.state.selection;
+            if (!view.state.selection.empty) return false;
+
+            const $head = view.state.selection.$head;
+            const nodeBefore = $head.nodeBefore;
+            if (!nodeBefore?.isText) return false;
+
+            const linkMark = nodeBefore.marks?.find(
+              (m: any) => m.type.name === 'link'
+            );
+            const MENTION_PREFIX = '​​';
+            if (!linkMark || !nodeBefore.text?.startsWith(MENTION_PREFIX)) return false;
+
+            const mentionStart = from - nodeBefore.nodeSize;
+
+            // Check if there's already a zero-width space right before the mention
+            const $ms = view.state.doc.resolve(mentionStart);
+            const prev = $ms.nodeBefore;
+            const hasExistingZWS = prev?.isText && prev.text === '​';
+
+            if (!hasExistingZWS) {
+              // Insert a zero-width space anchor before the mention
+              const tr = view.state.tr.insertText('​', mentionStart);
+              const $pos = tr.doc.resolve(mentionStart);
+              tr.setSelection(TextSelection.near($pos));
+              view.dispatch(tr);
+            } else {
+              // Already have a ZWS anchor — move cursor into it
+              const $pos = view.state.doc.resolve(mentionStart - 1);
+              view.dispatch(
+                view.state.tr.setSelection(TextSelection.near($pos))
+              );
+            }
+
+            // ProseMirror's DOM selection sync fails for positions near a
+            // contenteditable=false widget decoration — domAtPos() returns the
+            // parent <p> element with an offset that lands between the badge
+            // span and the hidden <a>, where no visible cursor can render.
+            // Fix: find the ZWS text node directly in the DOM and place the
+            // browser selection inside it.
+            const ms = mentionStart;
+            setTimeout(() => {
+              try {
+                // Resolve the paragraph's DOM node via its start position
+                const $p = view.state.doc.resolve(
+                  hasExistingZWS ? ms - 1 : ms
+                );
+                const paraStart = ms - $p.parentOffset;
+                const dom = view.domAtPos(paraStart);
+                const pNode = dom.node;
+                if (pNode) {
+                  // Walk children to find the ZWS text node
+                  for (const child of pNode.childNodes) {
+                    if (
+                      child.nodeType === 3 &&
+                      child.textContent === '​'
+                    ) {
+                      const range = document.createRange();
+                      range.setStart(child, 0);
+                      range.collapse(true);
+                      const sel = window.getSelection();
+                      if (sel) {
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                      }
+                      break;
+                    }
+                  }
+                }
+              } catch { /* ignore */ }
+            }, 0);
+            return true;
+          },
         },
         view(view) {
           _badgeEditorView = view;
