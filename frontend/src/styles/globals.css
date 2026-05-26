@@ -124,12 +124,14 @@ h4[contenteditable],
 .bn-editor .bn-block-content[data-content-type="subpage"] {
   padding: 0 !important;
 }
-.bn-block-content.ProseMirror-selectednode > [data-content-type="pageReference"] > *,
-.bn-block-content.ProseMirror-selectednode > [data-content-type="bookmark"] > *,
-.bn-block-content.ProseMirror-selectednode > [data-content-type="subpage"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="pageReference"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="bookmark"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="subpage"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="image"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="pageReference"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > *,
-.ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > * {
+.ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="image"] > * {
   outline: none !important;
 }
 
@@ -522,6 +524,10 @@ h4[contenteditable],
   left: -20px !important;
 }
 
+[data-floating-ui-focusable]:has(> .bn-side-menu[data-block-type="image"]) {
+  left: var(--bn-image-side-menu-left, -14px) !important;
+}
+
 body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
   opacity: 1 !important;
   pointer-events: auto !important;
@@ -556,6 +562,10 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
   position: relative !important;
   left: 12px !important;
   top: 11px !important;
+}
+
+.bn-side-menu[data-block-type="image"] {
+  height: 38px !important;
 }
 
 /* SideMenu 按钮通用样式 — Notion: rgb(44,44,43), transparent bg, 4px radius */
@@ -1530,7 +1540,7 @@ th.visual-cell-selected::after {
 /* ---- Table Header Handles (column/row notch-style indicators) ---- */
 /* Default state: matches Notion's .notion-simple-table-selector */
 .table-header-indicator {
-  background: rgba(55, 53, 47, 0.4);
+  background: rgb(186, 182, 176);
   border: 2px solid rgb(255, 255, 255);
   border-radius: 4px;
   cursor: pointer;
@@ -1869,12 +1879,217 @@ th.visual-cell-selected::after {
    Image Block Styles - Notion-like
    ============================================ */
 .bn-editor [data-content-type="image"] {
-  text-align: center !important;
+  position: relative !important;
+  padding: 2px 2px 2px 0 !important;
+}
+
+.bn-editor [data-content-type="image"] .bn-file-block-content-wrapper {
+  position: relative !important;
+  max-width: min(100%, 1052px) !important;
+  overflow: visible !important;
+}
+
+.bn-editor [data-content-type="image"] .bn-visual-media-wrapper,
+.bn-image-shell {
+  position: relative !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+.bn-editor [data-content-type="image"] .bn-visual-media-wrapper,
+.bn-image-media-shell {
+  overflow: hidden !important;
+  background: transparent !important;
+}
+
+.bn-editor [data-content-type="image"] .bn-visual-media-wrapper::after,
+.bn-image-shell.is-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  background: rgba(35, 131, 226, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.bn-image-shell.is-selected::after {
+  opacity: 1;
 }
 
 .bn-editor [data-content-type="image"] img {
-  border-radius: 4px !important;
+  display: block !important;
+  border-radius: 0 !important;
   max-width: 100% !important;
+  user-select: none !important;
+}
+
+.bn-image-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: rgba(15, 15, 15, 0.06) 0 8px 20px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: auto;
+  transform: none;
+  transition: none;
+  z-index: 20;
+}
+
+.bn-image-shell.is-selected .bn-image-toolbar,
+.bn-image-shell[data-align-open='true'] .bn-image-toolbar,
+.bn-image-shell[data-caption-open='true'] .bn-image-toolbar,
+.bn-editor [data-content-type="image"].ProseMirror-selectednode .bn-image-toolbar,
+.bn-editor [data-content-type="image"]:hover .bn-image-toolbar {
+  opacity: 1;
+  visibility: visible;
+}
+
+.bn-image-toolbar-button {
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.bn-image-toolbar-button:hover {
+  background: rgba(55, 53, 47, 0.08);
+  color: rgba(55, 53, 47, 0.86);
+}
+
+.bn-image-toolbar-button-text {
+  padding: 0 8px;
+  min-width: auto;
+  font-size: 12px;
+  line-height: 24px;
+  color: rgba(55, 53, 47, 0.72);
+}
+
+.bn-image-toolbar-label {
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.bn-image-toolbar-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bn-image-toolbar-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.bn-image-align-menu {
+  position: absolute;
+  top: 36px;
+  right: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: rgba(25, 25, 25, 0.05) 0 20px 24px 0, rgba(25, 25, 25, 0.027) 0 5px 8px 0, rgba(42, 28, 0, 0.07) 0 0 0 1px;
+  z-index: 21;
+}
+
+.bn-image-align-menu-item {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.55);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bn-image-align-menu-item:hover,
+.bn-image-align-menu-item.is-active {
+  background: rgba(42, 28, 0, 0.07);
+  color: rgba(55, 53, 47, 0.9);
+}
+
+.bn-image-align-menu-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bn-image-align-menu-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: currentColor;
+}
+
+.bn-image-caption {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 0 4px;
+  min-height: 20px;
+  outline: none;
+  text-align: center;
+  font-size: 13px;
+  line-height: 20px;
+  color: rgba(55, 53, 47, 0.65);
+  white-space: break-spaces;
+}
+
+.bn-image-caption:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(55, 53, 47, 0.32);
+}
+
+.bn-editor [data-content-type="image"] .bn-resize-handle {
+  width: 8px !important;
+  height: 30px !important;
+  background-color: black !important;
+  border: 1px solid white !important;
+  border-radius: 4px !important;
+  cursor: ew-resize !important;
+  pointer-events: auto !important;
+  z-index: 10;
+}
+
+.bn-editor [data-content-type="image"] .bn-resize-handle::after {
+  content: none;
+}
+
+.bn-editor [data-content-type="image"]:hover .bn-resize-handle::after,
+.bn-image-shell.is-selected .bn-resize-handle::after {
+  opacity: 1;
+}
+
+.bn-editor [data-content-type="image"] .bn-resize-handle:hover::after {
+  opacity: 1;
 }
 
 /* ============================================
@@ -2331,4 +2546,45 @@ a.is-internal-link {
 .custom-link-toolbar-remove:hover {
   background: rgba(235, 87, 87, 0.08);
   color: rgb(235, 87, 87);
+}
+
+.bn-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(15, 15, 15, 0.78);
+  backdrop-filter: blur(2px);
+}
+
+.bn-image-lightbox-media {
+  display: block;
+  max-width: min(92vw, 1400px);
+  max-height: 88vh;
+  border-radius: 8px;
+  box-shadow: rgba(0, 0, 0, 0.28) 0 18px 60px;
+  object-fit: contain;
+  user-select: none;
+}
+
+.bn-image-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bn-image-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.22);
 }

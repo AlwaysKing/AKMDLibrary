@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, type ChangeEvent } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
 import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow, toggleHeader } from 'prosemirror-tables';
@@ -31,6 +31,7 @@ import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { flushSync } from '../../services/syncModule';
 import { clearHeaderHandleLock, getHeaderHandleLock, isHeaderMenuOpen, setHeaderHandleLock, setHeaderMenuOpen } from './tableHandleState';
+import { showToast } from '../Toast';
 
 // Supported languages for code block syntax highlighting
 // Keys must match Shiki bundled language IDs (https://shiki.style/languages)
@@ -1501,6 +1502,15 @@ type FileUploadVisualState = {
   objectUrl?: string;
 };
 
+const IMAGE_TOOLBAR_ICONS = {
+  alignLeft: `<svg viewBox="1.77 0 12.45 16" fill="currentColor"><path d="M2.4 2.175a.625.625 0 1 0 0 1.25h11.2a.625.625 0 1 0 0-1.25zm1.2 2A1.825 1.825 0 0 0 1.775 6v4c0 1.008.817 1.825 1.825 1.825H8A1.825 1.825 0 0 0 9.825 10V6A1.825 1.825 0 0 0 8 4.175zM3.025 6c0-.318.258-.575.575-.575H8c.318 0 .575.257.575.575v4a.575.575 0 0 1-.575.575H3.6A.575.575 0 0 1 3.025 10zM2.4 12.575a.625.625 0 1 0 0 1.25h11.2a.625.625 0 1 0 0-1.25z"></path></svg>`,
+  alignCenter: `<svg viewBox="1.77 0 12.45 16" fill="currentColor"><path d="M2.4 2.175a.625.625 0 1 0 0 1.25h11.2a.625.625 0 1 0 0-1.25zm3.4 2h4.4c1.008 0 1.825.817 1.825 1.825v4a1.825 1.825 0 0 1-1.825 1.825H5.8A1.825 1.825 0 0 1 3.975 10V6c0-1.008.817-1.825 1.825-1.825M5.225 6v4c0 .318.258.575.575.575h4.4a.575.575 0 0 0 .575-.575V6a.575.575 0 0 0-.575-.575H5.8A.575.575 0 0 0 5.225 6M2.4 12.575a.625.625 0 1 0 0 1.25h11.2a.625.625 0 1 0 0-1.25z"></path></svg>`,
+  alignRight: `<svg viewBox="1.77 0 12.45 16" fill="currentColor"><path d="M2.4 2.175a.625.625 0 1 0 0 1.25h11.2a.625.625 0 1 0 0-1.25zm5.6 2A1.825 1.825 0 0 0 6.175 6v4c0 1.008.817 1.825 1.825 1.825h4.4A1.825 1.825 0 0 0 14.225 10V6A1.825 1.825 0 0 0 12.4 4.175zM7.425 6c0-.318.257-.575.575-.575h4.4c.318 0 .575.257.575.575v4a.575.575 0 0 1-.575.575H8A.575.575 0 0 1 7.425 10zM2.4 12.575a.625.625 0 1 0 0 1.25h11.2a.625.625 0 1 0 0-1.25z"></path></svg>`,
+  caption: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5h8"/><path d="M4 8h8"/><path d="M6 11.5h4"/></svg>`,
+  fullscreen: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5H3.5V5"/><path d="M10 2.5h2.5V5"/><path d="M6 13.5H3.5V11"/><path d="M10 13.5h2.5V11"/></svg>`,
+  download: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7"/><path d="M5.5 7.5L8 10l2.5-2.5"/><path d="M3 12.5h10"/></svg>`,
+};
+
 export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const editorRef = useRef<HTMLDivElement | null>(null);
@@ -1526,6 +1536,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     position: { x: number; y: number };
   } | null>(null);
   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
+  const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string } | null>(null);
+  const imageReplaceInputRef = useRef<HTMLInputElement | null>(null);
+  const imageReplaceTargetRef = useRef<string | null>(null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editor = useCreateBlockNote({
@@ -1711,6 +1724,447 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       overlay.dataset.status = state.status;
     });
   }, [editorEl, fileUploadStates]);
+
+  const getBlockById = useCallback((blockId: string) => {
+    return editor.document.find((block: any) => block.id === blockId) || null;
+  }, [editor]);
+
+  const uploadImageReplacement = useCallback(async (blockId: string, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      showToast('请选择图片文件');
+      return;
+    }
+
+    const block = getBlockById(blockId);
+    if (!block) return;
+
+    const previousProps = { ...(block.props as any) };
+    const objectUrl = URL.createObjectURL(file);
+
+    editor.updateBlock(block, {
+      props: {
+        ...previousProps,
+        name: file.name,
+        url: objectUrl,
+      },
+    } as any);
+
+    setFileUploadStates((prev) => ({
+      ...prev,
+      [blockId]: {
+        progress: 0,
+        status: 'uploading',
+        objectUrl,
+      },
+    }));
+
+    try {
+      const uploadedPath = await uploadApi.uploadWithProgress(file, {
+        onProgress: (progress) => {
+          setFileUploadStates((prev) => {
+            const current = prev[blockId];
+            if (!current) return prev;
+            return {
+              ...prev,
+              [blockId]: {
+                ...current,
+                progress,
+              },
+            };
+          });
+        },
+      });
+
+      editor.updateBlock(block, {
+        props: {
+          ...previousProps,
+          name: file.name,
+          url: uploadedPath.path,
+        },
+      } as any);
+
+      setFileUploadStates((prev) => {
+        const next = { ...prev };
+        if (next[blockId]?.objectUrl) {
+          URL.revokeObjectURL(next[blockId].objectUrl!);
+        }
+        delete next[blockId];
+        return next;
+      });
+    } catch {
+      editor.updateBlock(block, {
+        props: previousProps,
+      } as any);
+      setFileUploadStates((prev) => {
+        const next = { ...prev };
+        if (next[blockId]?.objectUrl) {
+          URL.revokeObjectURL(next[blockId].objectUrl!);
+        }
+        delete next[blockId];
+        return next;
+      });
+      showToast('图片上传失败');
+    }
+  }, [editor, getBlockById]);
+
+  const triggerImageReplace = useCallback((blockId: string) => {
+    imageReplaceTargetRef.current = blockId;
+    imageReplaceInputRef.current?.click();
+  }, []);
+
+  const handleImageReplaceInput = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const blockId = imageReplaceTargetRef.current;
+    e.target.value = '';
+    imageReplaceTargetRef.current = null;
+    if (!file || !blockId) return;
+    await uploadImageReplacement(blockId, file);
+  }, [uploadImageReplacement]);
+
+  const saveImageCaption = useCallback((blockId: string, caption: string) => {
+    const block = getBlockById(blockId);
+    if (!block) return;
+    editor.updateBlock(block, {
+      props: {
+        ...(block.props as any),
+        caption,
+      },
+    } as any);
+  }, [editor, getBlockById]);
+
+  const setImageAlignment = useCallback((blockId: string, textAlignment: 'left' | 'center' | 'right') => {
+    const block = getBlockById(blockId);
+    if (!block) return;
+    editor.updateBlock(block, {
+      props: {
+        ...(block.props as any),
+        textAlignment,
+      },
+    } as any);
+  }, [editor, getBlockById]);
+
+  const downloadImageBlock = useCallback((blockId: string) => {
+    const block = getBlockById(blockId);
+    const url = (block?.props as any)?.url;
+    if (!url) return;
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = (block?.props as any)?.name || 'image';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, [getBlockById]);
+
+  const duplicateImageBlock = useCallback((blockId: string) => {
+    const block = getBlockById(blockId);
+    if (!block) return;
+    editor.insertBlocks([{
+      type: block.type,
+      props: { ...(block.props as any) },
+      content: block.content,
+      children: block.children,
+    } as any], block, 'after');
+  }, [editor, getBlockById]);
+
+  const deleteImageBlock = useCallback((blockId: string) => {
+    removeBlocksEnhanced(editor, [{ id: blockId } as any]);
+  }, [editor]);
+
+  const openImageFullscreen = useCallback((blockId: string) => {
+    const block = getBlockById(blockId);
+    const url = (block?.props as any)?.url;
+    if (!url) return;
+    setImageLightbox({
+      url,
+      name: String((block?.props as any)?.name || 'image'),
+    });
+  }, [getBlockById]);
+
+  useEffect(() => {
+    if (!imageLightbox) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setImageLightbox(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [imageLightbox]);
+
+  useEffect(() => {
+    if (readOnly || !editorEl) return;
+
+    const closeImageMenus = () => {
+      editorEl.querySelectorAll('.bn-file-block-content-wrapper').forEach((node) => {
+        const wrapper = node as HTMLElement;
+        wrapper.querySelector('.bn-image-toolbar-menu')?.remove();
+      });
+    };
+
+    const activateImageBlockSelection = (blockId: string, wrapper: HTMLElement) => {
+      editor.focus();
+      editor.setTextCursorPosition(blockId as any);
+      setBlockSelection([blockId]);
+      editorEl.querySelectorAll('.bn-image-shell.is-selected').forEach((node) => {
+        if (node !== wrapper) {
+          node.classList.remove('is-selected');
+        }
+      });
+      wrapper.classList.add('is-selected');
+    };
+
+    const syncImageBlocks = () => {
+      const selectedIds = new Set(getSelectedBlockIds());
+      const imageBlocks = Array.from(editorEl.querySelectorAll('.bn-block-content[data-content-type="image"]')) as HTMLElement[];
+
+      imageBlocks.forEach((blockContent) => {
+        const blockId = blockContent.closest('[data-id]')?.getAttribute('data-id');
+        if (!blockId) return;
+
+        const block = getBlockById(blockId);
+        const blockProps = (block?.props as any) || {};
+        const currentAlignment = (blockProps.textAlignment || 'center') as 'left' | 'center' | 'right';
+        const wrapper = blockContent.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
+        const mediaWrapper = blockContent.querySelector('.bn-visual-media-wrapper') as HTMLElement | null;
+        const imageEl = blockContent.querySelector('.bn-visual-media') as HTMLImageElement | null;
+        if (!wrapper || !mediaWrapper || !imageEl) return;
+
+        const isSelected = blockContent.classList.contains('ProseMirror-selectednode') || selectedIds.has(blockId);
+        wrapper.classList.add('bn-image-shell');
+        mediaWrapper.classList.add('bn-image-media-shell');
+        imageEl.classList.add('bn-image-media');
+        wrapper.classList.toggle('is-selected', isSelected);
+
+        if (!wrapper.dataset.selectionBound) {
+          wrapper.dataset.selectionBound = 'true';
+          wrapper.addEventListener('click', (event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-caption, .bn-resize-handle')) {
+              return;
+            }
+            activateImageBlockSelection(blockId, wrapper);
+          });
+          wrapper.addEventListener('dblclick', (event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-caption, .bn-resize-handle')) {
+              return;
+            }
+            activateImageBlockSelection(blockId, wrapper);
+            openImageFullscreen(blockId);
+          });
+        }
+
+        let toolbar = wrapper.querySelector('.bn-image-toolbar') as HTMLElement | null;
+        if (!toolbar) {
+          toolbar = document.createElement('div');
+          toolbar.className = 'bn-image-toolbar';
+          toolbar.draggable = false;
+          toolbar.contentEditable = 'false';
+          toolbar.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+          wrapper.appendChild(toolbar);
+        }
+
+        const ensureButton = (
+          key: string,
+          label: string,
+          icon: string | null,
+          className: string,
+          onClick: () => void,
+        ) => {
+          let button = toolbar!.querySelector(`.bn-image-toolbar-button[data-key="${key}"]`) as HTMLButtonElement | null;
+          if (!button) {
+            button = document.createElement('button');
+            button.type = 'button';
+            button.draggable = false;
+            button.contentEditable = 'false';
+            button.className = `bn-image-toolbar-button ${className}`;
+            button.dataset.key = key;
+            button.onpointerdown = (event) => {
+              activateImageBlockSelection(blockId, wrapper);
+              event.preventDefault();
+              event.stopPropagation();
+              onClick();
+            };
+            toolbar!.appendChild(button);
+          }
+          button.innerHTML = `${icon ? `<span class="bn-image-toolbar-icon">${icon}</span>` : ''}${label ? `<span class="bn-image-toolbar-label">${label}</span>` : ''}`;
+          button.onmousedown = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          };
+          return button;
+        };
+
+        ensureButton('replace', '替换', null, 'bn-image-toolbar-button-text', () => triggerImageReplace(blockId));
+        const currentAlignIcon = currentAlignment === 'left'
+          ? IMAGE_TOOLBAR_ICONS.alignLeft
+          : currentAlignment === 'right'
+            ? IMAGE_TOOLBAR_ICONS.alignRight
+            : IMAGE_TOOLBAR_ICONS.alignCenter;
+        ensureButton('align', '', currentAlignIcon, '', () => {
+          imageBlocks.forEach((otherBlock) => {
+            const otherWrapper = otherBlock.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
+            if (otherWrapper && otherWrapper !== wrapper) {
+              otherWrapper.dataset.alignOpen = 'false';
+              otherWrapper.querySelector('.bn-image-align-menu')?.remove();
+            }
+          });
+          wrapper.dataset.alignOpen = wrapper.dataset.alignOpen === 'true' ? 'false' : 'true';
+          syncImageBlocks();
+        });
+        ensureButton('caption', '', IMAGE_TOOLBAR_ICONS.caption, '', () => {
+          wrapper.dataset.captionOpen = 'true';
+          syncImageBlocks();
+          requestAnimationFrame(() => {
+            const captionEl = blockContent.querySelector('.bn-image-caption') as HTMLDivElement | null;
+            if (!captionEl) return;
+            captionEl.focus();
+            const selection = window.getSelection();
+            if (!selection) return;
+            const range = document.createRange();
+            range.selectNodeContents(captionEl);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          });
+        });
+        ensureButton('fullscreen', '', IMAGE_TOOLBAR_ICONS.fullscreen, '', () => openImageFullscreen(blockId));
+        ensureButton('download', '', IMAGE_TOOLBAR_ICONS.download, '', () => downloadImageBlock(blockId));
+        let alignMenu = wrapper.querySelector('.bn-image-align-menu') as HTMLElement | null;
+        if (wrapper.dataset.alignOpen === 'true') {
+          if (!alignMenu) {
+            alignMenu = document.createElement('div');
+            alignMenu.className = 'bn-image-align-menu';
+            alignMenu.draggable = false;
+            alignMenu.contentEditable = 'false';
+            alignMenu.addEventListener('mousedown', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            });
+            wrapper.appendChild(alignMenu);
+          }
+
+          const items = [
+            { key: 'left', icon: IMAGE_TOOLBAR_ICONS.alignLeft },
+            { key: 'center', icon: IMAGE_TOOLBAR_ICONS.alignCenter },
+            { key: 'right', icon: IMAGE_TOOLBAR_ICONS.alignRight },
+          ] as const;
+          alignMenu.innerHTML = '';
+          items.forEach((item) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.draggable = false;
+            button.contentEditable = 'false';
+            button.className = `bn-image-align-menu-item${currentAlignment === item.key ? ' is-active' : ''}`;
+            button.innerHTML = `<span class="bn-image-align-menu-icon">${item.icon}</span>`;
+            button.onpointerdown = (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setImageAlignment(blockId, item.key);
+              wrapper.dataset.alignOpen = 'false';
+              syncImageBlocks();
+            };
+            button.onmousedown = (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            };
+            alignMenu!.appendChild(button);
+          });
+        } else {
+          alignMenu?.remove();
+        }
+
+        let caption = blockContent.querySelector('.bn-image-caption') as HTMLDivElement | null;
+        const captionValue = String(blockProps.caption || '');
+        const shouldShowCaption = wrapper.dataset.captionOpen === 'true' || !!captionValue.trim();
+        if (shouldShowCaption) {
+          if (!caption) {
+            caption = document.createElement('div');
+            caption.className = 'bn-image-caption';
+            caption.contentEditable = 'true';
+            caption.dataset.placeholder = '输入标题';
+            caption.spellcheck = true;
+            caption.draggable = false;
+            caption.addEventListener('mousedown', (event) => {
+              event.stopPropagation();
+            });
+            blockContent.appendChild(caption);
+            caption.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                (event.currentTarget as HTMLDivElement).blur();
+              }
+            });
+            caption.addEventListener('blur', (event) => {
+              saveImageCaption(blockId, (event.currentTarget as HTMLDivElement).textContent || '');
+              if (!((event.currentTarget as HTMLDivElement).textContent || '').trim()) {
+                wrapper.dataset.captionOpen = 'false';
+                syncImageBlocks();
+              }
+            });
+          }
+          if (caption.textContent !== captionValue) {
+            caption.textContent = captionValue;
+          }
+        } else {
+          caption?.remove();
+        }
+      });
+    };
+
+    const scheduleSync = () => requestAnimationFrame(syncImageBlocks);
+    const observer = new MutationObserver(scheduleSync);
+
+    observer.observe(editorEl, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-url', 'data-name'],
+    });
+
+    editorEl.addEventListener('scroll', scheduleSync, true);
+    window.addEventListener('resize', scheduleSync);
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-align-menu, .bn-image-caption, .bn-resize-handle')) return;
+      closeImageMenus();
+      editorEl.querySelectorAll('.bn-file-block-content-wrapper').forEach((node) => {
+        const wrapper = node as HTMLElement;
+        if (wrapper.dataset.alignOpen === 'true') {
+          wrapper.dataset.alignOpen = 'false';
+        }
+      });
+    };
+    document.addEventListener('mousedown', handleDocumentMouseDown, true);
+    scheduleSync();
+    const delayedSyncA = window.setTimeout(syncImageBlocks, 200);
+    const delayedSyncB = window.setTimeout(syncImageBlocks, 900);
+
+    return () => {
+      observer.disconnect();
+      editorEl.removeEventListener('scroll', scheduleSync, true);
+      window.removeEventListener('resize', scheduleSync);
+      document.removeEventListener('mousedown', handleDocumentMouseDown, true);
+      window.clearTimeout(delayedSyncA);
+      window.clearTimeout(delayedSyncB);
+    };
+  }, [
+    editorEl,
+    readOnly,
+    getBlockById,
+    triggerImageReplace,
+    openImageFullscreen,
+    downloadImageBlock,
+    duplicateImageBlock,
+    deleteImageBlock,
+    saveImageCaption,
+    setImageAlignment,
+  ]);
 
   // Subpage block drop target: allow dropping blocks onto subpage blocks to move content
   useEffect(() => {
@@ -2594,6 +3048,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         dragOccurred = false;
         return;
       }
+      if ((e.target as HTMLElement).closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-align-menu, .bn-image-caption, .bn-resize-handle, .bn-file-block-content-wrapper')) {
+        return;
+      }
       // Don't clear selection when clicking side menu (drag handle, add button)
       if ((e.target as HTMLElement).closest('.bn-side-menu, [data-floating-ui-focusable]')) return;
       // If a floating menu is open, this click just closes the menu — don't deselect yet
@@ -2668,6 +3125,69 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     document.addEventListener('mousemove', handleSideMenuZone);
     return () => document.removeEventListener('mousemove', handleSideMenuZone);
   }, [editor, readOnly]);
+
+  useEffect(() => {
+    if (readOnly) return;
+
+    const syncImageSideMenuPosition = () => {
+      const wrappers = Array.from(document.querySelectorAll('[data-floating-ui-focusable]')) as HTMLElement[];
+
+      wrappers.forEach((wrapper) => {
+        const sideMenu = wrapper.querySelector('.bn-side-menu[data-block-type="image"]') as HTMLElement | null;
+        if (!sideMenu) {
+          wrapper.style.removeProperty('--bn-image-side-menu-left');
+          return;
+        }
+
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const probeX = Math.min(window.innerWidth - 1, Math.round(wrapperRect.right + 20));
+        const probeY = Math.min(window.innerHeight - 1, Math.max(0, Math.round(wrapperRect.top + 2)));
+        const elements = document.elementsFromPoint(probeX, probeY);
+
+        let blockOuter: HTMLElement | null = null;
+        for (const el of elements) {
+          const candidate = (el as HTMLElement).closest('.bn-block-outer') as HTMLElement | null;
+          if (candidate) {
+            blockOuter = candidate;
+            break;
+          }
+        }
+
+        if (!blockOuter) {
+          wrapper.style.removeProperty('--bn-image-side-menu-left');
+          return;
+        }
+
+        const blockContent = blockOuter.querySelector('.bn-block-content[data-content-type="image"]') as HTMLElement | null;
+        const imageWrapper = blockContent?.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
+        if (!blockContent || !imageWrapper) {
+          wrapper.style.removeProperty('--bn-image-side-menu-left');
+          return;
+        }
+
+        const blockRect = blockContent.getBoundingClientRect();
+        const imageRect = imageWrapper.getBoundingClientRect();
+        const offset = Math.round(-14 + (imageRect.left - blockRect.left));
+        wrapper.style.setProperty('--bn-image-side-menu-left', `${offset}px`);
+      });
+    };
+
+    const scheduleSync = () => requestAnimationFrame(syncImageSideMenuPosition);
+    const observer = new MutationObserver(scheduleSync);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+
+    document.addEventListener('mousemove', scheduleSync, true);
+    window.addEventListener('resize', scheduleSync);
+    document.addEventListener('scroll', scheduleSync, true);
+    scheduleSync();
+
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('mousemove', scheduleSync, true);
+      window.removeEventListener('resize', scheduleSync);
+      document.removeEventListener('scroll', scheduleSync, true);
+    };
+  }, [readOnly]);
 
   // Helper: check if a block outer element is input-capable (has editable text content)
   // Blocks with .bn-inline-content are input-capable (paragraph, heading, list, etc.)
@@ -3044,6 +3564,38 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           onInsertMention={handleInsertMention}
           onClose={() => setPasteMenu(null)}
         />
+      )}
+      <input
+        ref={imageReplaceInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleImageReplaceInput}
+      />
+      {imageLightbox && (
+        <div
+          className="bn-image-lightbox"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setImageLightbox(null);
+            }
+          }}
+        >
+          <button
+            type="button"
+            className="bn-image-lightbox-close"
+            onClick={() => setImageLightbox(null)}
+            aria-label="关闭图片预览"
+          >
+            ×
+          </button>
+          <img
+            className="bn-image-lightbox-media"
+            src={imageLightbox.url}
+            alt={imageLightbox.name}
+            draggable={false}
+          />
+        </div>
       )}
     </div>
   );

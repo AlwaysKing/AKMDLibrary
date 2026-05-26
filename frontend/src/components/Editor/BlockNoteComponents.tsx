@@ -81,7 +81,7 @@ function setBlockSelection(blockIds: string[] | null) {
       .bn-block-outer:has(> [data-id="${id}"]) {
         position: relative;
       }
-      .bn-block-outer:has(> [data-id="${id}"]):not(:has(> [data-id="${id}"] [data-content-type="table"]))::after {
+      .bn-block-outer:has(> [data-id="${id}"]):not(:has(> [data-id="${id}"] [data-content-type="table"])):not(:has(> [data-id="${id}"] [data-content-type="image"]))::after {
         content: '';
         position: absolute;
         inset: 1px 2px;
