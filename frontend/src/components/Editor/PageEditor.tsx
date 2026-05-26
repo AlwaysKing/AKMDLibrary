@@ -2438,6 +2438,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           type: fileType,
           props: {
             name: file.name,
+            ...(fileType === 'image' ? { textAlignment: 'center' } : {}),
             ...(objectUrl ? { url: objectUrl } : {}),
           },
         };

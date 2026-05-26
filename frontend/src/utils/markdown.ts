@@ -301,16 +301,23 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     }
 
     // Image
-    const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+    const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)(?:<!-- img:([^&]*)&([^ ]*) -->)?/);
     if (imageMatch) {
       const alt = imageMatch[1];
       const src = imageMatch[2];
+      const serializedWidth = imageMatch[3];
+      const serializedAlign = imageMatch[4];
+      const props: Record<string, any> = {
+        url: src,
+        caption: alt,
+        textAlignment: serializedAlign || 'center',
+      };
+      if (serializedWidth) {
+        props.previewWidth = Number(serializedWidth);
+      }
       blocks.push({
         type: 'image',
-        props: {
-          url: src,
-          caption: alt,
-        },
+        props,
       });
       i++;
       continue;
@@ -630,7 +637,12 @@ function serializeRegularBlock(block: any): string {
     case 'image': {
       const url = block.props?.url || '';
       const caption = block.props?.caption || '';
-      return `![${caption}](${url})`;
+      const previewWidth = block.props?.previewWidth;
+      const textAlignment = block.props?.textAlignment;
+      const propsSuffix = (previewWidth || textAlignment)
+        ? `<!-- img:${previewWidth || ''}&${textAlignment || ''} -->`
+        : '';
+      return `![${caption}](${url})${propsSuffix}`;
     }
 
     case 'pageReference':
