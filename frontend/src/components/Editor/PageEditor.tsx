@@ -2472,7 +2472,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       for (const file of files) {
         const fileType = getFileBlockType(file);
-        const objectUrl = fileType === 'image' ? URL.createObjectURL(file) : undefined;
+        const objectUrl = (fileType === 'image' || fileType === 'video') ? URL.createObjectURL(file) : undefined;
         const newBlock: any = {
           type: fileType,
           props: {

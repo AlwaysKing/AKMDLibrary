@@ -301,6 +301,30 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     }
 
     // Image
+    // Video: ![caption](url)<!-- video:width&alignment --> (check BEFORE image to avoid mis-match)
+    const videoMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)<!-- video:([^&]*)&([^ ]*) -->/);
+    if (videoMatch) {
+      const vAlt = videoMatch[1];
+      const vSrc = videoMatch[2];
+      const vSerializedWidth = videoMatch[3];
+      const vSerializedAlign = videoMatch[4];
+      const vProps: Record<string, any> = {
+        url: vSrc,
+        caption: vAlt,
+        textAlignment: vSerializedAlign || 'center',
+      };
+      if (vSerializedWidth) {
+        vProps.previewWidth = Number(vSerializedWidth);
+      }
+      blocks.push({
+        type: 'video',
+        props: vProps,
+      });
+      i++;
+      continue;
+    }
+
+    // Image: ![caption](url) or ![caption](url)<!-- img:width&alignment -->
     const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)(?:<!-- img:([^&]*)&([^ ]*) -->)?/);
     if (imageMatch) {
       const alt = imageMatch[1];
@@ -318,29 +342,6 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       blocks.push({
         type: 'image',
         props,
-      });
-      i++;
-      continue;
-    }
-
-    // Video: ![caption](url)<!-- video:width&alignment -->
-    const videoMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)(?:<!-- video:([^&]*)&([^ ]*) -->)?/);
-    if (videoMatch) {
-      const vAlt = videoMatch[1];
-      const vSrc = videoMatch[2];
-      const vSerializedWidth = videoMatch[3];
-      const vSerializedAlign = videoMatch[4];
-      const vProps: Record<string, any> = {
-        url: vSrc,
-        caption: vAlt,
-        textAlignment: vSerializedAlign || 'center',
-      };
-      if (vSerializedWidth) {
-        vProps.previewWidth = Number(vSerializedWidth);
-      }
-      blocks.push({
-        type: 'video',
-        props: vProps,
       });
       i++;
       continue;
