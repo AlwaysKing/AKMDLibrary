@@ -1,10 +1,20 @@
 export const uploadApi = {
   uploadWithProgress: async (
     file: File,
-    options?: { onProgress?: (progress: number) => void }
+    options?: {
+      onProgress?: (progress: number) => void;
+      pageId?: string;
+      spaceSlug?: string;
+    }
   ): Promise<{ path: string }> => {
     const formData = new FormData();
     formData.append('file', file);
+    if (options?.pageId) {
+      formData.append('page_id', options.pageId);
+    }
+    if (options?.spaceSlug) {
+      formData.append('space_slug', options.spaceSlug);
+    }
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -39,7 +49,10 @@ export const uploadApi = {
     });
   },
 
-  upload: async (file: File): Promise<{ path: string }> => {
-    return uploadApi.uploadWithProgress(file);
+  upload: async (
+    file: File,
+    options?: { pageId?: string; spaceSlug?: string }
+  ): Promise<{ path: string }> => {
+    return uploadApi.uploadWithProgress(file, options);
   },
 };

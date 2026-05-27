@@ -347,6 +347,44 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Audio: ![name](url)<!-- audio:caption&showPreview --> (check BEFORE regular image)
+    const audioMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)<!-- audio:([^&]*)&([^ ]*) -->/);
+    if (audioMatch) {
+      const aName = audioMatch[1];
+      const aSrc = audioMatch[2];
+      const aCaption = audioMatch[3];
+      const aShowPreview = audioMatch[4] !== 'false';
+      blocks.push({
+        type: 'audio',
+        props: {
+          url: aSrc,
+          name: aName,
+          caption: aCaption,
+          showPreview: aShowPreview,
+        },
+      });
+      i++;
+      continue;
+    }
+
+    // File: [name](url)<!-- file:caption --> (must check AFTER image/audio patterns)
+    const fileMatch = line.match(/^\[([^\]]*)\]\(([^)]+)\)<!-- file:([^ ]*) -->$/);
+    if (fileMatch) {
+      const fName = fileMatch[1];
+      const fSrc = fileMatch[2];
+      const fCaption = fileMatch[3];
+      blocks.push({
+        type: 'file',
+        props: {
+          url: fSrc,
+          name: fName,
+          caption: fCaption,
+        },
+      });
+      i++;
+      continue;
+    }
+
     // Page reference: <page-ref data-id="uuid"></page-ref> (legacy: <!-- pageref:uuid -->)
     const pagerefId = trimmed.match(/^<page-ref\s+data-id="([a-f0-9]{32})"\s*><\/page-ref>$/)?.[1]
       || trimmed.match(/^<!--\s*pageref:([a-f0-9]{32})\s*-->$/)?.[1];
@@ -678,6 +716,23 @@ function serializeRegularBlock(block: any): string {
         ? `<!-- video:${vPreviewWidth || ''}&${vTextAlignment || ''} -->`
         : '';
       return `![${vCaption}](${vUrl})${vPropsSuffix}`;
+    }
+
+    case 'file': {
+      const fUrl = block.props?.url || '';
+      const fName = block.props?.name || '';
+      const fCaption = block.props?.caption || '';
+      // Use link syntax to distinguish from image/video: [name](url)<!-- file:caption -->
+      return `[${fName}](${fUrl})<!-- file:${fCaption} -->`;
+    }
+
+    case 'audio': {
+      const aUrl = block.props?.url || '';
+      const aName = block.props?.name || '';
+      const aCaption = block.props?.caption || '';
+      const aShowPreview = block.props?.showPreview !== false;
+      // Use image syntax with audio marker: ![name](url)<!-- audio:caption&showPreview -->
+      return `![${aName}](${aUrl})<!-- audio:${aCaption}&${aShowPreview} -->`;
     }
 
     case 'pageReference':

@@ -1592,6 +1592,7 @@ const IMAGE_TOOLBAR_ICONS = {
   caption: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5h8"/><path d="M4 8h8"/><path d="M6 11.5h4"/></svg>`,
   fullscreen: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5H3.5V5"/><path d="M10 2.5h2.5V5"/><path d="M6 13.5H3.5V11"/><path d="M10 13.5h2.5V11"/></svg>`,
   download: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7"/><path d="M5.5 7.5L8 10l2.5-2.5"/><path d="M3 12.5h10"/></svg>`,
+  replace: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5L5 13l2.5-2.5"/><path d="M5 3v10"/><path d="M13.5 5.5L11 3 8.5 5.5"/><path d="M11 13V3"/></svg>`,
 };
 
 export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false }: PageEditorProps) {
@@ -1630,7 +1631,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     dictionary: customZh as any,
     trailingBlock: false,
     uploadFile: async (file: File) => {
-      const result = await uploadApi.upload(file);
+      const { spaceSlug, pageId } = identityRef.current;
+      const result = await uploadApi.upload(file, { pageId, spaceSlug });
       return result.path;
     },
     _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators] },
@@ -1842,7 +1844,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     }));
 
     try {
+      const { spaceSlug, pageId } = identityRef.current;
       const uploadedPath = await uploadApi.uploadWithProgress(file, {
+        pageId,
+        spaceSlug,
         onProgress: (progress) => {
           setFileUploadStates((prev) => {
             const current = prev[blockId];
@@ -2016,6 +2021,58 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const videoEl = blockContent.querySelector('.bn-visual-media') as HTMLVideoElement | null;
         if (!wrapper || !mediaWrapper || (!imageEl && !videoEl)) return;
 
+        // === Broken media detection ===
+        const mediaEl = imageEl || videoEl;
+        const isImage = !!imageEl;
+        const isBroken = isImage
+          ? (imageEl!.complete && imageEl!.naturalWidth === 0 && !!imageEl!.src)
+          : (videoEl!.error !== null && !!videoEl!.src); // videoEl.error is null when OK, MediaError when broken
+
+        // Bind one-time error listener to catch async load failures
+        if (!mediaWrapper.dataset.errorBound) {
+          mediaWrapper.dataset.errorBound = 'true';
+          if (isImage) {
+            imageEl!.addEventListener('error', () => {
+              mediaWrapper.closest('.bn-block-content')?.setAttribute('data-media-broken', 'true');
+              syncImageBlocks();
+            }, { once: true });
+          } else if (videoEl) {
+            videoEl.addEventListener('error', () => {
+              mediaWrapper.closest('.bn-block-content')?.setAttribute('data-media-broken', 'true');
+              syncImageBlocks();
+            }, { once: true });
+          }
+        }
+
+        if (isBroken) {
+          blockContent.setAttribute('data-media-broken', 'true');
+        }
+
+        // Show/hide broken placeholder
+        let placeholder = mediaWrapper.querySelector('.bn-media-broken-placeholder') as HTMLElement | null;
+        if (isBroken) {
+          if (!placeholder) {
+            placeholder = document.createElement('div');
+            placeholder.className = 'bn-media-broken-placeholder';
+            placeholder.contentEditable = 'false';
+            placeholder.draggable = false;
+            placeholder.innerHTML = `
+              <div class="bn-media-broken-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                  <circle cx="8.5" cy="8.5" r="1.5"/>
+                  <path d="M21 15l-5-5L5 21"/>
+                </svg>
+              </div>
+              <div class="bn-media-broken-text">${isImage ? '图片' : '视频'}资源丢失</div>
+            `;
+            mediaWrapper.appendChild(placeholder);
+          }
+        } else {
+          blockContent.removeAttribute('data-media-broken');
+          placeholder?.remove();
+        }
+
         const captionFocused = !!wrapper.querySelector('.bn-image-caption:focus');
         const captionOpen = wrapper.dataset.captionOpen === 'true';
         const alignMenuOpen = wrapper.dataset.alignOpen === 'true';
@@ -2091,7 +2148,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           return button;
         };
 
-        ensureButton('replace', '替换', null, 'bn-image-toolbar-button-text', () => triggerImageReplace(blockId));
+        ensureButton('replace', '', IMAGE_TOOLBAR_ICONS.replace, '', () => triggerImageReplace(blockId));
         const currentAlignIcon = currentAlignment === 'left'
           ? IMAGE_TOOLBAR_ICONS.alignLeft
           : currentAlignment === 'right'
@@ -2217,6 +2274,29 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           caption?.remove();
         }
       });
+
+      // Handle file blocks: bind click to open download URL in new tab
+      const fileBlocks = Array.from(editorEl.querySelectorAll('.bn-block-content[data-content-type="file"]')) as HTMLElement[];
+      fileBlocks.forEach((blockContent) => {
+        const wrapper = blockContent.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
+        if (!wrapper) return;
+        wrapper.style.cursor = 'pointer';
+        if (wrapper.dataset.fileClickBound) return;
+        wrapper.dataset.fileClickBound = 'true';
+        wrapper.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const blockContainer = blockContent.closest('[data-id]');
+          const blockId = blockContainer?.getAttribute('data-id');
+          if (!blockId) return;
+          const block = editor.document.find((b: any) => b.id === blockId);
+          if (!block) return;
+          const url = (block.props as any)?.url;
+          if (url) {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
+        });
+      });
     };
 
     const scheduleSync = () => requestAnimationFrame(syncImageBlocks);
@@ -2258,6 +2338,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     document.addEventListener('compositionstart', captionEventGuard, true);
     document.addEventListener('compositionupdate', captionEventGuard, true);
     document.addEventListener('compositionend', captionEventGuard, true);
+
+    // File block clicks are handled inside syncImageBlocks (direct DOM binding)
 
     scheduleSync();
     const delayedSyncA = window.setTimeout(syncImageBlocks, 200);
@@ -2505,7 +2587,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         }));
 
         try {
+          const { spaceSlug, pageId } = identityRef.current;
           const uploadedPath = await uploadApi.uploadWithProgress(file, {
+            pageId,
+            spaceSlug,
             onProgress: (progress) => {
               setFileUploadStates((prev) => {
                 const current = prev[insertedBlock.id];
@@ -2538,6 +2623,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             return next;
           });
         } catch (error) {
+          console.error('[FileDrop] upload FAILED', error);
           setFileUploadStates((prev) => ({
             ...prev,
             [insertedBlock.id]: {

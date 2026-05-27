@@ -63,11 +63,13 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	var filePath string
 	if pageID != "" && slug != "" {
 		// Upload to page's public directory
-		filePath, err = h.pageService.UploadAsset(slug, pageID, header.Filename, content)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		relativePath, uploadErr := h.pageService.UploadAsset(slug, pageID, header.Filename, content)
+		if uploadErr != nil {
+			http.Error(w, uploadErr.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Return the full serving URL so the frontend can use it directly
+		filePath = fmt.Sprintf("/api/spaces/%s/pages/%s/assets/%s", slug, pageID, relativePath)
 	} else {
 		// Upload to system upload directory
 		filePath = fmt.Sprintf("/api/upload/%s", header.Filename)

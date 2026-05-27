@@ -128,12 +128,16 @@ h4[contenteditable],
 .bn-block-content.ProseMirror-selectednode[data-content-type="bookmark"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="subpage"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="image"] > *,
-	.bn-block-content.ProseMirror-selectednode[data-content-type="video"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="video"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="file"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="audio"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="pageReference"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="image"] > *,
-	.ProseMirror-selectednode > .bn-block-content[data-content-type="video"] > * {
+.ProseMirror-selectednode > .bn-block-content[data-content-type="video"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="file"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="audio"] > * {
   outline: none !important;
 }
 
@@ -1885,20 +1889,20 @@ th.visual-cell-selected::after {
   padding: 2px 2px 2px 0 !important;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-file-block-content-wrapper {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-file-block-content-wrapper {
   position: relative !important;
   max-width: min(100%, 1052px) !important;
   overflow: visible !important;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-visual-media-wrapper,
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-visual-media-wrapper,
 .bn-image-shell {
   position: relative !important;
   border-radius: 0 !important;
   background: transparent !important;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-visual-media-wrapper,
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-visual-media-wrapper,
 .bn-image-media-shell {
   overflow: hidden !important;
   background: transparent !important;
@@ -1907,21 +1911,48 @@ th.visual-cell-selected::after {
 
 
 /* Hide selection overlay and ProseMirror outline when caption is focused or align menu is open */
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-caption:focus) .bn-file-block-content-wrapper::after,
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-align-menu) .bn-file-block-content-wrapper::after {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]):has(.bn-image-caption:focus) .bn-file-block-content-wrapper::after,
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]):has(.bn-image-align-menu) .bn-file-block-content-wrapper::after {
   content: none !important;
 }
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-caption:focus) > *,
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-align-menu) > * {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]):has(.bn-image-caption:focus) > *,
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]):has(.bn-image-align-menu) > * {
   outline: none !important;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] img,
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] video {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) :is(img, video) {
   display: block !important;
   border-radius: 0 !important;
   max-width: 100% !important;
   user-select: none !important;
+}
+/* Hide broken media element (override the display rule above) */
+.bn-editor [data-media-broken="true"] :is(img, video) {
+  display: none !important;
+}
+
+/* Broken media placeholder */
+.bn-media-broken-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 120px;
+  padding: 24px 16px;
+  border: 1px dashed rgba(55, 53, 47, 0.16);
+  border-radius: 4px;
+  background: rgba(55, 53, 47, 0.02);
+  user-select: none;
+}
+.bn-media-broken-icon {
+  color: rgba(55, 53, 47, 0.3);
+}
+.bn-media-broken-text {
+  font-size: 14px;
+  color: rgba(55, 53, 47, 0.4);
+  line-height: 1.5;
 }
 
 .bn-image-toolbar {
@@ -1946,8 +1977,8 @@ th.visual-cell-selected::after {
 .bn-image-shell.is-selected .bn-image-toolbar,
 .bn-image-shell[data-align-open='true'] .bn-image-toolbar,
 .bn-image-shell[data-caption-open='true'] .bn-image-toolbar,
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"].ProseMirror-selectednode .bn-image-toolbar,
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:hover .bn-image-toolbar {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]).ProseMirror-selectednode .bn-image-toolbar,
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]):hover .bn-image-toolbar {
   opacity: 1;
   visibility: visible;
 }
@@ -2049,7 +2080,7 @@ th.visual-cell-selected::after {
 }
 
 /* Hide BlockNote's default caption - we use a custom <input> instead */
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-file-caption {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-file-caption {
   display: none !important;
 }
 
@@ -2068,7 +2099,7 @@ th.visual-cell-selected::after {
   font-family: inherit;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-resize-handle {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-resize-handle {
   width: 8px !important;
   height: 45px !important;
   background-color: rgba(0, 0, 0, 0.4) !important;
@@ -2079,16 +2110,16 @@ th.visual-cell-selected::after {
   z-index: 10;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-resize-handle::after {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-resize-handle::after {
   content: none;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:hover .bn-resize-handle::after,
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]):hover .bn-resize-handle::after,
 .bn-image-shell.is-selected .bn-resize-handle::after {
   opacity: 1;
 }
 
-.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-resize-handle:hover::after {
+.bn-editor :is([data-content-type="image"], [data-content-type="video"]) .bn-resize-handle:hover::after {
   opacity: 1;
 }
 
