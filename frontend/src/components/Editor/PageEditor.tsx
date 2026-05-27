@@ -1619,7 +1619,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     position: { x: number; y: number };
   } | null>(null);
   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
-  const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string } | null>(null);
+  const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string; type?: 'image' | 'video' } | null>(null);
   const imageReplaceInputRef = useRef<HTMLInputElement | null>(null);
   const imageReplaceTargetRef = useRef<string | null>(null);
 
@@ -1813,8 +1813,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   }, [editor]);
 
   const uploadImageReplacement = useCallback(async (blockId: string, file: File) => {
-    if (!file.type.startsWith('image/')) {
-      showToast('请选择图片文件');
+    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+      showToast('请选择图片或视频文件');
       return;
     }
 
@@ -1959,7 +1959,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     if (!url) return;
     setImageLightbox({
       url,
-      name: String((block?.props as any)?.name || 'image'),
+      name: String((block?.props as any)?.name || 'media'),
+      type: block?.type === 'video' ? 'video' : 'image',
     });
   }, [getBlockById]);
 
@@ -2000,7 +2001,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     const syncImageBlocks = () => {
       const selectedIds = new Set(getSelectedBlockIds());
-      const imageBlocks = Array.from(editorEl.querySelectorAll('.bn-block-content[data-content-type="image"]')) as HTMLElement[];
+      const imageBlocks = Array.from(editorEl.querySelectorAll('.bn-block-content[data-content-type="image"], .bn-block-content[data-content-type="video"]')) as HTMLElement[];
 
       imageBlocks.forEach((blockContent) => {
         const blockId = blockContent.closest('[data-id]')?.getAttribute('data-id');
@@ -2012,7 +2013,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const wrapper = blockContent.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
         const mediaWrapper = blockContent.querySelector('.bn-visual-media-wrapper') as HTMLElement | null;
         const imageEl = blockContent.querySelector('.bn-visual-media') as HTMLImageElement | null;
-        if (!wrapper || !mediaWrapper || !imageEl) return;
+        const videoEl = blockContent.querySelector('.bn-visual-media') as HTMLVideoElement | null;
+        if (!wrapper || !mediaWrapper || (!imageEl && !videoEl)) return;
 
         const captionFocused = !!wrapper.querySelector('.bn-image-caption:focus');
         const captionOpen = wrapper.dataset.captionOpen === 'true';
@@ -2475,7 +2477,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           type: fileType,
           props: {
             name: file.name,
-            ...(fileType === 'image' ? { textAlignment: 'center' } : {}),
+            ...(fileType === 'image' || fileType === 'video' ? { textAlignment: 'center' } : {}),
             ...(objectUrl ? { url: objectUrl } : {}),
           },
         };
@@ -3710,12 +3712,22 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           >
             ×
           </button>
-          <img
-            className="bn-image-lightbox-media"
-            src={imageLightbox.url}
-            alt={imageLightbox.name}
-            draggable={false}
-          />
+          {imageLightbox.type === 'video' ? (
+            <video
+              className="bn-image-lightbox-media"
+              src={imageLightbox.url}
+              controls
+              autoPlay
+              draggable={false}
+            />
+          ) : (
+            <img
+              className="bn-image-lightbox-media"
+              src={imageLightbox.url}
+              alt={imageLightbox.name}
+              draggable={false}
+            />
+          )}
         </div>
       )}
     </div>

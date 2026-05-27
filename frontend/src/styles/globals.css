@@ -128,10 +128,12 @@ h4[contenteditable],
 .bn-block-content.ProseMirror-selectednode[data-content-type="bookmark"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="subpage"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="image"] > *,
+	.bn-block-content.ProseMirror-selectednode[data-content-type="video"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="pageReference"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > *,
-.ProseMirror-selectednode > .bn-block-content[data-content-type="image"] > * {
+.ProseMirror-selectednode > .bn-block-content[data-content-type="image"] > *,
+	.ProseMirror-selectednode > .bn-block-content[data-content-type="video"] > * {
   outline: none !important;
 }
 
@@ -1878,25 +1880,25 @@ th.visual-cell-selected::after {
 /* ============================================
    Image Block Styles - Notion-like
    ============================================ */
-.bn-editor [data-content-type="image"] {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] {
   position: relative !important;
   padding: 2px 2px 2px 0 !important;
 }
 
-.bn-editor [data-content-type="image"] .bn-file-block-content-wrapper {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-file-block-content-wrapper {
   position: relative !important;
   max-width: min(100%, 1052px) !important;
   overflow: visible !important;
 }
 
-.bn-editor [data-content-type="image"] .bn-visual-media-wrapper,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-visual-media-wrapper,
 .bn-image-shell {
   position: relative !important;
   border-radius: 0 !important;
   background: transparent !important;
 }
 
-.bn-editor [data-content-type="image"] .bn-visual-media-wrapper,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-visual-media-wrapper,
 .bn-image-media-shell {
   overflow: hidden !important;
   background: transparent !important;
@@ -1905,16 +1907,17 @@ th.visual-cell-selected::after {
 
 
 /* Hide selection overlay and ProseMirror outline when caption is focused or align menu is open */
-.bn-editor [data-content-type="image"]:has(.bn-image-caption:focus) .bn-file-block-content-wrapper::after,
-.bn-editor [data-content-type="image"]:has(.bn-image-align-menu) .bn-file-block-content-wrapper::after {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-caption:focus) .bn-file-block-content-wrapper::after,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-align-menu) .bn-file-block-content-wrapper::after {
   content: none !important;
 }
-.bn-editor [data-content-type="image"]:has(.bn-image-caption:focus) > *,
-.bn-editor [data-content-type="image"]:has(.bn-image-align-menu) > * {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-caption:focus) > *,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:has(.bn-image-align-menu) > * {
   outline: none !important;
 }
 
-.bn-editor [data-content-type="image"] img {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] img,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] video {
   display: block !important;
   border-radius: 0 !important;
   max-width: 100% !important;
@@ -1943,8 +1946,8 @@ th.visual-cell-selected::after {
 .bn-image-shell.is-selected .bn-image-toolbar,
 .bn-image-shell[data-align-open='true'] .bn-image-toolbar,
 .bn-image-shell[data-caption-open='true'] .bn-image-toolbar,
-.bn-editor [data-content-type="image"].ProseMirror-selectednode .bn-image-toolbar,
-.bn-editor [data-content-type="image"]:hover .bn-image-toolbar {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"].ProseMirror-selectednode .bn-image-toolbar,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:hover .bn-image-toolbar {
   opacity: 1;
   visibility: visible;
 }
@@ -2046,7 +2049,7 @@ th.visual-cell-selected::after {
 }
 
 /* Hide BlockNote's default caption - we use a custom <input> instead */
-.bn-editor [data-content-type="image"] .bn-file-caption {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-file-caption {
   display: none !important;
 }
 
@@ -2065,7 +2068,7 @@ th.visual-cell-selected::after {
   font-family: inherit;
 }
 
-.bn-editor [data-content-type="image"] .bn-resize-handle {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-resize-handle {
   width: 8px !important;
   height: 45px !important;
   background-color: rgba(0, 0, 0, 0.4) !important;
@@ -2076,16 +2079,16 @@ th.visual-cell-selected::after {
   z-index: 10;
 }
 
-.bn-editor [data-content-type="image"] .bn-resize-handle::after {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-resize-handle::after {
   content: none;
 }
 
-.bn-editor [data-content-type="image"]:hover .bn-resize-handle::after,
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"]:hover .bn-resize-handle::after,
 .bn-image-shell.is-selected .bn-resize-handle::after {
   opacity: 1;
 }
 
-.bn-editor [data-content-type="image"] .bn-resize-handle:hover::after {
+.bn-editor [data-content-type="image"], .bn-editor [data-content-type="video"] .bn-resize-handle:hover::after {
   opacity: 1;
 }
 

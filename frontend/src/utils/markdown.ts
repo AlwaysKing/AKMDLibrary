@@ -323,6 +323,29 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Video: ![caption](url)<!-- video:width&alignment -->
+    const videoMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)(?:<!-- video:([^&]*)&([^ ]*) -->)?/);
+    if (videoMatch) {
+      const vAlt = videoMatch[1];
+      const vSrc = videoMatch[2];
+      const vSerializedWidth = videoMatch[3];
+      const vSerializedAlign = videoMatch[4];
+      const vProps: Record<string, any> = {
+        url: vSrc,
+        caption: vAlt,
+        textAlignment: vSerializedAlign || 'center',
+      };
+      if (vSerializedWidth) {
+        vProps.previewWidth = Number(vSerializedWidth);
+      }
+      blocks.push({
+        type: 'video',
+        props: vProps,
+      });
+      i++;
+      continue;
+    }
+
     // Page reference: <page-ref data-id="uuid"></page-ref> (legacy: <!-- pageref:uuid -->)
     const pagerefId = trimmed.match(/^<page-ref\s+data-id="([a-f0-9]{32})"\s*><\/page-ref>$/)?.[1]
       || trimmed.match(/^<!--\s*pageref:([a-f0-9]{32})\s*-->$/)?.[1];
@@ -643,6 +666,17 @@ function serializeRegularBlock(block: any): string {
         ? `<!-- img:${previewWidth || ''}&${textAlignment || ''} -->`
         : '';
       return `![${caption}](${url})${propsSuffix}`;
+    }
+
+    case 'video': {
+      const vUrl = block.props?.url || '';
+      const vCaption = block.props?.caption || '';
+      const vPreviewWidth = block.props?.previewWidth;
+      const vTextAlignment = block.props?.textAlignment;
+      const vPropsSuffix = (vPreviewWidth || vTextAlignment)
+        ? `<!-- video:${vPreviewWidth || ''}&${vTextAlignment || ''} -->`
+        : '';
+      return `![${vCaption}](${vUrl})${vPropsSuffix}`;
     }
 
     case 'pageReference':

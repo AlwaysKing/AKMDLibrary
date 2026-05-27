@@ -81,7 +81,7 @@ function setBlockSelection(blockIds: string[] | null) {
       .bn-block-outer:has(> [data-id="${id}"]) {
         position: relative;
       }
-      .bn-block-outer:has(> [data-id="${id}"]):not(:has(> [data-id="${id}"] [data-content-type="table"])):not(:has(> [data-id="${id}"] [data-content-type="image"]))::after {
+      .bn-block-outer:has(> [data-id="${id}"]):not(:has(> [data-id="${id}"] [data-content-type="table"])):not(:has(> [data-id="${id}"] [data-content-type="image"])):not(:has(> [data-id="${id}"] [data-content-type="video"]))::after {
         content: '';
         position: absolute;
         inset: 2px 2px;
@@ -89,7 +89,8 @@ function setBlockSelection(blockIds: string[] | null) {
         border-radius: 4px;
         pointer-events: none;
       }
-      .bn-block-outer:has(> [data-id="${id}"] [data-content-type="image"]) [data-content-type="image"] .bn-file-block-content-wrapper::after {
+      .bn-block-outer:has(> [data-id="${id}"] [data-content-type="image"]) [data-content-type="image"] .bn-file-block-content-wrapper::after,
+      .bn-block-outer:has(> [data-id="${id}"] [data-content-type="video"]) [data-content-type="video"] .bn-file-block-content-wrapper::after {
         content: '' !important;
         position: absolute !important;
         inset: -6px !important;
