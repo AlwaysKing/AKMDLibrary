@@ -2313,7 +2313,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     window.addEventListener('resize', scheduleSync);
     const handleDocumentMouseDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (target.closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-align-menu, .bn-image-caption, .bn-resize-handle')) return;
+      if (target.closest?.('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-align-menu, .bn-image-caption, .bn-resize-handle')) return;
       closeImageMenus();
       editorEl.querySelectorAll('.bn-file-block-content-wrapper').forEach((node) => {
         const wrapper = node as HTMLElement;
