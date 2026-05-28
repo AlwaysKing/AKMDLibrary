@@ -152,11 +152,11 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
       const parentId = findParentId(useSpaceStore.getState().pageTree, null);
       const parentIsCurrent = currentPageId && parentId === currentPageId;
 
+      await deletePage(spaceSlug, page.id);
+      await Promise.all([refreshPageTree(), refreshStarredAndRecent()]);
       if (isActive) {
         navigate(target, { replace: true });
       }
-      await deletePage(spaceSlug, page.id);
-      await Promise.all([refreshPageTree(), refreshStarredAndRecent()]);
 
       // Notify editor if the deleted page's parent is currently viewed
       if (parentIsCurrent) {

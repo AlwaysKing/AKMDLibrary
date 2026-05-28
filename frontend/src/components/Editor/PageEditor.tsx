@@ -2509,6 +2509,185 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
   }, [editor, readOnly]);
 
+  // Empty toggle heading/list drop target: allow dropping blocks into toggle blocks with no children
+  // Pattern follows subpage drop target above (lines 2373-2510)
+  useEffect(() => {
+    const container = editorRef.current;
+    if (!container || readOnly) return;
+
+    // Overlay elements — live outside React tree so re-renders won't destroy them
+    let overlayEl: HTMLDivElement | null = null;
+    let insertLineEl: HTMLDivElement | null = null;
+
+    const createOverlay = () => {
+      if (!overlayEl) {
+        overlayEl = document.createElement('div');
+        overlayEl.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;border-radius:4px;background:rgba(35,131,226,0.08);display:none;';
+        document.body.appendChild(overlayEl);
+      }
+      if (!insertLineEl) {
+        insertLineEl = document.createElement('div');
+        insertLineEl.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;height:5px;background:rgba(35,131,226,0.35);border-radius:2px;display:none;';
+        document.body.appendChild(insertLineEl);
+      }
+    };
+
+    const clearToggleHighlight = () => {
+      if (overlayEl) overlayEl.style.display = 'none';
+      if (insertLineEl) insertLineEl.style.display = 'none';
+      // Restore ProseMirror dropcursor if it was hidden
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = ''; });
+    };
+
+    const removeOverlay = () => {
+      if (overlayEl) { overlayEl.remove(); overlayEl = null; }
+      if (insertLineEl) { insertLineEl.remove(); insertLineEl = null; }
+    };
+
+    /** Detect if cursor is over an empty expanded toggle block */
+    const findEmptyToggleTarget = (clientX: number, clientY: number): { blockOuter: HTMLElement; toggleBlockId: string } | null => {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (!el) return null;
+
+      const htmlEl = el as HTMLElement;
+      // Must be inside a toggle wrapper (expanded) or the "add block" button
+      const toggleWrapper = htmlEl.closest('.bn-toggle-wrapper');
+      const addBlockBtn = htmlEl.closest('.bn-toggle-add-block-button');
+      const targetEl = toggleWrapper || (addBlockBtn ? addBlockBtn.closest('.bn-block-content') : null);
+      if (!targetEl) return null;
+
+      const blockContent = targetEl.closest('.bn-block-content');
+      if (!blockContent) return null;
+
+      // Must be a toggleable block
+      if (blockContent.getAttribute('data-is-toggleable') !== 'true') return null;
+
+      const blockOuter = blockContent.closest('.bn-block-outer');
+      if (!blockOuter) return null;
+
+      // Must have no children (no block group in DOM)
+      if (blockOuter.querySelector('.bn-block-group')) return null;
+
+      // Must be expanded (data-show-children="true") — only intercept when user can see the empty area
+      const wrapper = blockOuter.querySelector('.bn-toggle-wrapper');
+      if (wrapper?.getAttribute('data-show-children') !== 'true') return null;
+
+      const toggleBlockId = blockOuter.querySelector('[data-id]')?.getAttribute('data-id');
+      if (!toggleBlockId) return null;
+
+      return { blockOuter, toggleBlockId };
+    };
+
+    const positionOverlay = (blockOuter: HTMLElement) => {
+      createOverlay();
+      const blockContent = blockOuter.querySelector('.bn-block-content');
+      if (!blockContent) return;
+
+      const blockRect = blockContent.getBoundingClientRect();
+      // Blue overlay: cover the entire toggle area with 2px inset
+      const inset = 2;
+      overlayEl!.style.left = (blockRect.left + inset) + 'px';
+      overlayEl!.style.top = (blockRect.top + inset) + 'px';
+      overlayEl!.style.width = (blockRect.width - inset * 2) + 'px';
+      overlayEl!.style.height = (blockRect.height - inset * 2) + 'px';
+      overlayEl!.style.display = 'block';
+
+      // Blue insertion line: between the toggle heading and "空的切换区" button
+      // Left edge aligns with toggle content (not the arrow/heading), right edge to block right
+      const inlineContent = blockOuter.querySelector('.bn-inline-content');
+      const wrapper = blockOuter.querySelector('.bn-toggle-wrapper');
+      if (wrapper) {
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const contentLeft = inlineContent ? inlineContent.getBoundingClientRect().left : wrapperRect.left + 24;
+        insertLineEl!.style.left = contentLeft + 'px';
+        insertLineEl!.style.top = wrapperRect.bottom + 'px';
+        insertLineEl!.style.width = (blockRect.right - contentLeft - inset) + 'px';
+        insertLineEl!.style.display = 'block';
+      }
+    };
+
+    const handleToggleDragOver = (e: DragEvent) => {
+      const dragData = getBlockDragData();
+      if (!dragData || dragData.blocks.length === 0) return;
+
+      const target = findEmptyToggleTarget(e.clientX, e.clientY);
+      if (!target) {
+        clearToggleHighlight();
+        return;
+      }
+
+      // Prevent dropping on self
+      if (dragData.blockIds.includes(target.toggleBlockId)) {
+        clearToggleHighlight();
+        return;
+      }
+
+      // Intercept: prevent ProseMirror default handling
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+
+      // Hide ProseMirror's dropcursor
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = 'none'; });
+
+      // Position overlay over the target (re-position every time since layout may change)
+      positionOverlay(target.blockOuter);
+    };
+
+    const handleToggleDrop = (e: DragEvent) => {
+      clearToggleHighlight();
+
+      const dragData = getBlockDragData();
+      if (!dragData || dragData.blocks.length === 0) return;
+
+      const target = findEmptyToggleTarget(e.clientX, e.clientY);
+      if (!target) return;
+
+      // Prevent dropping on self
+      if (dragData.blockIds.includes(target.toggleBlockId)) return;
+
+      // Intercept the drop
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Add dragged blocks as children of the toggle block
+      const children = dragData.blocks.map(b => ({
+        type: b.type,
+        props: b.props,
+        content: b.content,
+        children: b.children,
+      }));
+
+      try {
+        editor.updateBlock(target.toggleBlockId as any, { children } as any);
+        // Mark as handled only after successful update, so handleNativeDragEnd removes originals
+        markDragHandled();
+      } catch (err) {
+        console.error('[PageEditor] Failed to drop blocks into empty toggle:', err);
+        // updateBlock failed — blocks remain at original positions
+      }
+    };
+
+    const handleToggleDragLeave = (e: DragEvent) => {
+      if (!container.contains(e.relatedTarget as Node)) {
+        clearToggleHighlight();
+      }
+    };
+
+    container.addEventListener('dragover', handleToggleDragOver, true);
+    container.addEventListener('drop', handleToggleDrop, true);
+    container.addEventListener('dragleave', handleToggleDragLeave);
+    return () => {
+      container.removeEventListener('dragover', handleToggleDragOver, true);
+      container.removeEventListener('drop', handleToggleDrop, true);
+      container.removeEventListener('dragleave', handleToggleDragLeave);
+      clearToggleHighlight();
+      removeOverlay();
+    };
+  }, [editor, readOnly]);
+
   useEffect(() => {
     if (readOnly) return;
 
