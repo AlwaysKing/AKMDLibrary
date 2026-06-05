@@ -3123,6 +3123,26 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   }, [editor, readOnly]);
 
   const handleChange = useCallback(() => {
+    // Clean up empty column structures after content deletion
+    // When all content blocks inside columns are deleted, remove the column_list skeleton
+    try {
+      const doc = editor.document;
+      const toRemove: any[] = [];
+      for (const block of doc) {
+        if (block.type === 'column_list') {
+          const hasContent = (block.children || []).some(
+            (col: any) => col.children && col.children.length > 0
+          );
+          if (!hasContent) {
+            toRemove.push(block);
+          }
+        }
+      }
+      if (toRemove.length > 0) {
+        editor.removeBlocks(toRemove);
+      }
+    } catch { /* ignore during cleanup */ }
+
     hasChangesRef.current = true;
     onSyncStatusChangeRef.current?.('unsaved');
 
@@ -3638,6 +3658,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       blockOuters.forEach(outer => {
         const blockEl = outer.querySelector('[data-id]');
         if (!blockEl) return;
+        // Skip column_list and column blocks — they are layout containers,
+        // not selectable content blocks. Users should only select content inside them.
+        if (blockEl.querySelector('.column-list-inner') || blockEl.querySelector('.column-block-inner')) return;
         const id = blockEl.getAttribute('data-id')!;
         blockOuterMap.set(id, outer);
         const r = outer.getBoundingClientRect();

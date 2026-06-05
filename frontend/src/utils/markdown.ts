@@ -665,10 +665,15 @@ export function blocksToMarkdown(blocks: any[]): string {
  * Serialize a single block to markdown, handling toggle blocks and children recursively.
  */
 function serializeBlock(block: any): string {
-  // Column list
+  // Column list — skip if all columns are empty (content was deleted)
   if (block.type === 'column_list') {
+    const columns = (block.children || []).filter((col: any) =>
+      col.children && col.children.length > 0
+    );
+    // If no columns have content, omit the entire column_list
+    if (columns.length === 0) return '';
     const ratios = block.props?.columnRatios || '50,50';
-    const childrenMd = (block.children || []).map((col: any) => {
+    const childrenMd = columns.map((col: any) => {
       const ratio = col.props?.widthRatio || 50;
       const colContent = (col.children || []).map((c: any) => serializeBlock(c)).join('\n');
       return `<column ratio="${ratio}">\n${colContent}\n</column>`;
