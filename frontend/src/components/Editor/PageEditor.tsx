@@ -20,6 +20,7 @@ import { Extension } from '@tiptap/core';
 import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
+import { ColumnListBlockSpec, ColumnBlockSpec } from './ColumnListBlock';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
 import { getBlockDragData, markDragHandled } from './blockDragState';
@@ -98,6 +99,8 @@ const schema = BlockNoteSchema.create({
     pageReference: PageReferenceBlockSpec(),
     bookmark: BookmarkBlockSpec(),
     subpage: SubpageBlockSpec(),
+    column_list: ColumnListBlockSpec(),
+    column: ColumnBlockSpec(),
   },
 });
 
@@ -287,6 +290,49 @@ function getCustomSlashMenuItems(editor: any) {
         // Move cursor to next editable block
         const nextBlock = editor.getTextCursorPosition().nextBlock;
         if (nextBlock) editor.setTextCursorPosition(nextBlock, 'end');
+      },
+    },
+    {
+      title: '多列布局',
+      subtext: '创建多列排版布局',
+      key: 'columns',
+      aliases: ['columns', 'column', '多列', '分栏'],
+      group: '高级区块',
+      icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 }}><rect x="1" y="2" width="6.5" height="14" rx="1.5" /><rect x="10.5" y="2" width="6.5" height="14" rx="1.5" /></svg>,
+      onItemClick: () => {
+        const currentBlock = editor.getTextCursorPosition().block;
+        const blockContent = currentBlock.content;
+        const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
+          blockContent[0].type === 'text' && blockContent[0].text === '/';
+        const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
+        const columnListBlock = {
+          type: 'column_list',
+          props: { columnRatios: '50,50' },
+          children: [
+            { type: 'column', props: { widthRatio: 50 }, children: [{ type: 'paragraph' }] },
+            { type: 'column', props: { widthRatio: 50 }, children: [{ type: 'paragraph' }] },
+          ],
+        };
+        if (isSlashOnly || isEmpty) {
+          editor.updateBlock(currentBlock, columnListBlock as any);
+        } else {
+          editor.insertBlocks([columnListBlock as any], currentBlock, 'after');
+        }
+        // Move cursor into first column
+        setTimeout(() => {
+          try {
+            const doc = editor.document;
+            for (const b of doc) {
+              if (b.type === 'column_list' && b.children?.length > 0) {
+                const firstCol = b.children[0];
+                if (firstCol.children?.length > 0) {
+                  editor.setTextCursorPosition(firstCol.children[0].id, 'end');
+                }
+                break;
+              }
+            }
+          } catch {}
+        }, 50);
       },
     },
   ];
@@ -2688,6 +2734,191 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
   }, [editor, readOnly]);
 
+  // Drag-to-create columns: drag a block to the left/right edge of another block
+  useEffect(() => {
+    const container = editorRef.current;
+    if (!container || readOnly) return;
+
+    const EDGE_ZONE = 0.18; // 18% of block width on each side
+    let columnLineEl: HTMLDivElement | null = null;
+
+    const createColumnLine = () => {
+      if (!columnLineEl) {
+        columnLineEl = document.createElement('div');
+        columnLineEl.style.cssText =
+          'position:fixed;z-index:9999;pointer-events:none;width:3px;background:rgba(35,131,226,0.5);border-radius:2px;display:none;';
+        document.body.appendChild(columnLineEl);
+      }
+    };
+
+    const clearColumnHighlight = () => {
+      if (columnLineEl) columnLineEl.style.display = 'none';
+      // Restore ProseMirror dropcursor
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = ''; });
+    };
+
+    const removeColumnLine = () => {
+      if (columnLineEl) { columnLineEl.remove(); columnLineEl = null; }
+    };
+
+    interface ColumnDropTarget {
+      blockId: string;
+      blockOuter: HTMLElement;
+      side: 'left' | 'right';
+    }
+
+    const findColumnDropTarget = (clientX: number, clientY: number): ColumnDropTarget | null => {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (!el) return null;
+
+      const htmlEl = el as HTMLElement;
+      const blockOuter = htmlEl.closest('.bn-block-outer') as HTMLElement;
+      if (!blockOuter) return null;
+
+      // Don't create columns from column or column_list blocks themselves
+      const blockContent = blockOuter.querySelector('[data-content-type]');
+      if (!blockContent) return null;
+      const contentType = blockContent.getAttribute('data-content-type');
+      if (contentType === 'column' || contentType === 'column_list') return null;
+
+      const blockId = blockOuter.querySelector('[data-id]')?.getAttribute('data-id');
+      if (!blockId) return null;
+
+      const rect = blockOuter.getBoundingClientRect();
+      const relX = (clientX - rect.left) / rect.width;
+
+      if (relX < EDGE_ZONE) {
+        return { blockId, blockOuter, side: 'left' };
+      } else if (relX > (1 - EDGE_ZONE)) {
+        return { blockId, blockOuter, side: 'right' };
+      }
+      return null;
+    };
+
+    const handleColumnDragOver = (e: DragEvent) => {
+      const dragData = getBlockDragData();
+      if (!dragData || dragData.blocks.length === 0) {
+        clearColumnHighlight();
+        return;
+      }
+
+      const target = findColumnDropTarget(e.clientX, e.clientY);
+      if (!target) {
+        clearColumnHighlight();
+        return;
+      }
+
+      // Don't drop on self
+      if (dragData.blockIds.includes(target.blockId)) {
+        clearColumnHighlight();
+        return;
+      }
+
+      // Don't allow if either block is already inside a column
+      const isInsideColumn = !!target.blockOuter.closest('[data-content-type="column"]');
+      if (isInsideColumn) {
+        clearColumnHighlight();
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+
+      // Hide ProseMirror's dropcursor
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = 'none'; });
+
+      // Show vertical line indicator
+      createColumnLine();
+      const rect = target.blockOuter.getBoundingClientRect();
+      const lineX = target.side === 'left' ? rect.left - 2 : rect.right + 2;
+      columnLineEl!.style.left = lineX + 'px';
+      columnLineEl!.style.top = rect.top + 'px';
+      columnLineEl!.style.height = rect.height + 'px';
+      columnLineEl!.style.display = 'block';
+    };
+
+    const handleColumnDrop = (e: DragEvent) => {
+      clearColumnHighlight();
+
+      const dragData = getBlockDragData();
+      if (!dragData || dragData.blocks.length === 0) return;
+
+      const target = findColumnDropTarget(e.clientX, e.clientY);
+      if (!target) return;
+
+      if (dragData.blockIds.includes(target.blockId)) return;
+
+      const isInsideColumn = !!target.blockOuter.closest('[data-content-type="column"]');
+      if (isInsideColumn) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Get the dragged block data
+      const draggedBlock = dragData.blocks[0];
+      const draggedBlockId = dragData.blockIds[0];
+
+      // Build the two column children
+      const makeColumnChild = (block: any) => ({
+        type: 'column',
+        props: { widthRatio: 50 },
+        children: [{
+          type: block.type,
+          props: block.props,
+          content: block.content,
+          children: block.children || [],
+        }],
+      });
+
+      const leftChild = target.side === 'left'
+        ? makeColumnChild(draggedBlock)
+        : makeColumnChild(editor.document.find((b: any) => b.id === target.blockId));
+      const rightChild = target.side === 'left'
+        ? makeColumnChild(editor.document.find((b: any) => b.id === target.blockId))
+        : makeColumnChild(draggedBlock);
+
+      try {
+        // Insert the column_list before the target block
+        editor.insertBlocks([{
+          type: 'column_list',
+          props: { columnRatios: '50,50' },
+          children: [leftChild, rightChild],
+        }], target.blockId, 'before');
+
+        // Remove the original blocks
+        editor.removeBlocks([editor.document.find((b: any) => b.id === target.blockId)!]);
+        if (draggedBlockId !== target.blockId) {
+          const draggedBlockInDoc = editor.document.find((b: any) => b.id === draggedBlockId);
+          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+        }
+
+        markDragHandled();
+      } catch (err) {
+        console.error('[PageEditor] Failed to create column layout:', err);
+      }
+    };
+
+    const handleColumnDragLeave = (e: DragEvent) => {
+      if (!container.contains(e.relatedTarget as Node)) {
+        clearColumnHighlight();
+      }
+    };
+
+    container.addEventListener('dragover', handleColumnDragOver, true);
+    container.addEventListener('drop', handleColumnDrop, true);
+    container.addEventListener('dragleave', handleColumnDragLeave);
+    return () => {
+      container.removeEventListener('dragover', handleColumnDragOver, true);
+      container.removeEventListener('drop', handleColumnDrop, true);
+      container.removeEventListener('dragleave', handleColumnDragLeave);
+      clearColumnHighlight();
+      removeColumnLine();
+    };
+  }, [editor, readOnly]);
+
   useEffect(() => {
     if (readOnly) return;
 
@@ -3572,16 +3803,44 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // When drag menu is open, keep side menu visible regardless of mouse position
       if (isDragMenuOpen()) return;
 
+      // If mouse is over the side menu floating element, keep it visible
+      const floatingMenu = container.querySelector('[data-floating-ui-focusable]:has(> .bn-side-menu)') as HTMLElement | null;
+      if (floatingMenu) {
+        const menuRect = floatingMenu.getBoundingClientRect();
+        if (e.clientX >= menuRect.left && e.clientX <= menuRect.right &&
+            e.clientY >= menuRect.top && e.clientY <= menuRect.bottom) {
+          document.body.classList.add('side-menu-visible');
+          return;
+        }
+      }
+
       // Find hovered block by y coordinate
       const blockOuters = container.querySelectorAll('.bn-block-outer');
       let hoveredOuter: HTMLElement | null = null;
+      // Find the content block closest to the mouse x-position.
+      // For blocks inside columns, multiple blocks may match the y-position;
+      // we pick the one whose content center is nearest to the mouse.
+      let bestDist = Infinity;
+      let fallbackOuter: HTMLElement | null = null;
       for (const outer of blockOuters) {
         const r = outer.getBoundingClientRect();
         if (e.clientY >= r.top && e.clientY <= r.bottom) {
-          hoveredOuter = outer as HTMLElement;
-          break;
+          fallbackOuter = outer as HTMLElement;
+          const blockContent = outer.querySelector('[data-id]');
+          if (blockContent) {
+            const cr = blockContent.getBoundingClientRect();
+            if (cr.width > 0 && cr.height > 0) {
+              const centerX = cr.left + cr.width / 2;
+              const dist = Math.abs(e.clientX - centerX);
+              if (dist < bestDist) {
+                bestDist = dist;
+                hoveredOuter = outer as HTMLElement;
+              }
+            }
+          }
         }
       }
+      if (!hoveredOuter) hoveredOuter = fallbackOuter;
 
       if (!hoveredOuter) {
         document.body.classList.remove('side-menu-visible');
@@ -3604,6 +3863,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
 
     document.addEventListener('mousemove', handleSideMenuZone);
+
     return () => document.removeEventListener('mousemove', handleSideMenuZone);
   }, [editor, readOnly]);
 

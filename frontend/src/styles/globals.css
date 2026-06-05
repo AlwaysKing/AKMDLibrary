@@ -516,12 +516,18 @@ h4[contenteditable],
 
 /* Override floating-ui wrapper */
 /* Notion: 图标颜色始终不变，只有按钮背景在 hover 时出现 */
-/* Default hidden — only shown when mouse is within the restricted hover zone (JS adds .side-menu-visible to body) */
+/* Default hidden — only shown when mouse is within the restricted hover zone */
 [data-floating-ui-focusable]:has(> .bn-side-menu) {
   opacity: 0 !important;
   pointer-events: none !important;
-  /* Notion: 侧边菜单出现在 block 左侧，间隙约 14px */
   left: -14px !important;
+  transition: none !important;
+}
+
+body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transition: none !important;
 }
 
 /* Table block: drag handle sits a little farther left so the gap to the table
@@ -537,6 +543,7 @@ h4[contenteditable],
 body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
   opacity: 1 !important;
   pointer-events: auto !important;
+  transition: none !important;
 }
 
 .bn-side-menu {
@@ -2645,4 +2652,195 @@ a.is-internal-link {
 
 .bn-image-lightbox-close:hover {
   background: rgba(255, 255, 255, 0.22);
+}
+
+/* ─── Column List Layout ─────────────────────────────────── */
+
+/* column_list: the parent .bn-block needs position:relative */
+.bn-block:has(.column-list-inner) {
+  position: relative !important;
+}
+
+/* Remove ALL padding on column_list's own .bn-block-outer — no visual layer */
+.bn-block-outer:has(.column-list-inner) {
+  padding: 0 !important;
+}
+
+/* column_list: bn-block-content wrapper takes no visual space */
+.bn-block:has(.column-list-inner) > .react-renderer {
+  position: static !important;
+  overflow: visible !important;
+}
+.bn-block:has(.column-list-inner) > .react-renderer > .bn-block-content[data-content-type="column_list"] {
+  height: 0 !important;
+  overflow: visible !important;
+  position: static !important;
+  padding: 0 !important;
+}
+
+/* column_list: overlay is invisible, handles use fixed positioning */
+.column-list-inner {
+  position: static !important;
+  width: 100% !important;
+  height: 0 !important;
+  overflow: visible !important;
+  pointer-events: none;
+}
+
+/* column_list: blockGroup → flex row */
+.bn-block:has(.column-list-inner) > .bn-block-group {
+  display: flex !important;
+  flex-direction: row !important;
+  margin-left: 0 !important;
+  gap: 52px !important;
+  width: 100% !important;
+  align-items: flex-start !important;
+}
+
+/* Column outers: width controlled by injected CSS with calc() for gap */
+.bn-block:has(.column-list-inner) > .bn-block-group > .bn-block-outer {
+  min-width: 0 !important;
+  padding: 0 !important;
+}
+
+/* Column & column_list block-outers: pointer-events pass-through so BlockNote's
+   SideMenu detection (elementFromPoint) finds the CONTENT block inside, not the
+   invisible container. Column block outers are also pass-through.
+   Content blocks (paragraph, heading, etc.) re-enable pointer-events below. */
+.bn-block-outer:has(.column-list-inner),
+.bn-block-outer:has(> .bn-block > .react-renderer > [data-content-type="column"]) {
+  pointer-events: none !important;
+}
+/* Re-enable pointer events on actual content blocks inside columns (not column outers) */
+.bn-block-outer:has(.column-list-inner) .bn-block-group > .bn-block-outer:not(:has(> .bn-block > .react-renderer > [data-content-type="column"])),
+.bn-block-outer:has(> .bn-block > .react-renderer > [data-content-type="column"]) .bn-block-group > .bn-block-outer:not(:has(> .bn-block > .react-renderer > [data-content-type="column"])) {
+  pointer-events: auto !important;
+}
+
+/* column: the react-renderer and bn-block-content take no space */
+.bn-block:has(.column-list-inner) > .bn-block-group > .bn-block-outer > .bn-block > .react-renderer {
+  height: 0 !important;
+  overflow: visible !important;
+}
+.bn-block:has(.column-list-inner) > .bn-block-group > .bn-block-outer > .bn-block > .react-renderer > [data-content-type="column"] {
+  padding: 0 !important;
+}
+.column-block-inner {
+  display: none !important;
+}
+
+/* column: blockGroup → flex column, no indent, NO padding (column is invisible)
+   Scope by [data-content-type="column"] to ONLY match column blocks, not column_list */
+.bn-block:has(> .react-renderer > [data-content-type="column"]) > .bn-block-group {
+  display: flex !important;
+  flex-direction: column !important;
+  margin-left: 0 !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+/* Hide indent lines everywhere inside column layout */
+.bn-block:has(.column-list-inner) .bn-block-outer::before {
+  display: none !important;
+}
+
+/* ─── Column blocks: side menu ─── */
+/* NEVER show side menus for column_list and column blocks.
+   These are invisible layout containers — only the content blocks inside
+   columns should have side menus (drag handle + add button).
+   Without this, BlockNote shows TWO side menus when hovering near columns. */
+body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-block-type="column"]) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+
+/* Hide resize handles when side menu is active in a column,
+   preventing overlap between drag buttons and resize handle.
+   Detected via JS-set --side-menu-left that includes column shift. */
+.col-layout-resize-handle {
+  /* JS sets a large negative --side-menu-left when in column; default show */
+}
+
+/* ─── Column Block Selection Rules ─── */
+/* BlockNote uses TWO selection mechanisms:
+   a) ProseMirror-selectednode class → adds outline (blue solid 4px)
+   b) Dynamic <style id="block-selection-style"> injection → adds ::after with blue background
+      NOTE: the dynamic style does NOT use !important, so our !important rules always win.
+
+   Column blocks are invisible containers — they should NEVER show individual selection.
+   When a column is selected, the whole layout should show ONE highlight on the block-group. */
+
+/* 1. Hide ProseMirror-selectednode outline on column/column_list */
+.react-renderer.node-column_list.ProseMirror-selectednode > .bn-block-content,
+.react-renderer.node-column.ProseMirror-selectednode > .bn-block-content {
+  outline: none !important;
+}
+.react-renderer.node-column_list.ProseMirror-selectednode > .bn-block-content > *,
+.react-renderer.node-column.ProseMirror-selectednode > .bn-block-content > * {
+  outline: none !important;
+}
+
+/* 2. Hide dynamic ::after on column block-outers (invisible containers).
+      !important wins because BlockNote's dynamic style does NOT use !important. */
+.bn-block:has(.column-list-inner) > .bn-block-group > .bn-block-outer::after {
+  content: none !important;
+  background: none !important;
+}
+
+/* 2b. Also hide ::after on the column_list's own block-outer — it's a container, not content. */
+.bn-block-outer:has(> .bn-block > .react-renderer > [data-content-type="column_list"])::after {
+  content: none !important;
+  background: none !important;
+}
+
+/* 3. Block-group needs position: relative for the ::after highlight to work.
+      The ::after itself is injected via JS into document.head (like column width styles)
+      to avoid ProseMirror's DOM reconciliation stripping classes. */
+.bn-block:has(.column-list-inner) > .bn-block-group {
+  position: relative;
+}
+
+/* Resize handle line — hidden by default, shown on hover or active */
+.col-layout-resize-line {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+  background: rgba(55, 53, 47, 0.16);
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+/* Show resize line on hover or active */
+.col-layout-resize-handle:hover .col-layout-resize-line,
+.col-layout-resize-handle.active .col-layout-resize-line {
+  opacity: 1;
+}
+
+/* Add column button */
+.column-add-button {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  cursor: pointer;
+  color: rgba(55, 53, 47, 0.4);
+  background: rgba(55, 53, 47, 0.06);
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.column-add-button:hover {
+  opacity: 1 !important;
+  color: rgba(55, 53, 47, 0.8);
+  background: rgba(55, 53, 47, 0.12);
 }

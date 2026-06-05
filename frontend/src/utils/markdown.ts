@@ -421,6 +421,56 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Column list: <column-list ratios="50,50"> ... </column-list>
+    const columnListMatch = trimmed.match(/^<column-list(?:\s+ratios="([^"]*)")?\s*>$/);
+    if (columnListMatch) {
+      const ratios = columnListMatch[1] || '50,50';
+      const innerLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== '</column-list>') {
+        innerLines.push(lines[i]);
+        i++;
+      }
+      i++; // Skip closing </column-list>
+
+      // Parse inner content into column blocks
+      const innerContent = innerLines.join('\n');
+      const columnChildren: any[] = [];
+
+      // Split by <column ratio="N"> tags
+      const columnRegex = /<column(?:\s+ratio="(\d+)")?\s*>([\s\S]*?)<\/column>/g;
+      let colMatch;
+      while ((colMatch = columnRegex.exec(innerContent)) !== null) {
+        const ratio = colMatch[1] ? parseInt(colMatch[1]) : 50;
+        const colContent = colMatch[2].trim();
+        const colBlocks = colContent ? markdownToBlocks(colContent) : [{ type: 'paragraph' }];
+        columnChildren.push({
+          type: 'column',
+          props: { widthRatio: ratio },
+          children: colBlocks,
+        });
+      }
+
+      // Fallback: if no <column> tags found, split evenly
+      if (columnChildren.length === 0) {
+        const ratioArr = ratios.split(',').map(Number);
+        for (const r of ratioArr) {
+          columnChildren.push({
+            type: 'column',
+            props: { widthRatio: r || 50 },
+            children: [{ type: 'paragraph' }],
+          });
+        }
+      }
+
+      blocks.push({
+        type: 'column_list',
+        props: { columnRatios: ratios },
+        children: columnChildren,
+      });
+      continue;
+    }
+
     // Paragraph with inline formatting
     blocks.push({
       type: 'paragraph',
@@ -615,6 +665,17 @@ export function blocksToMarkdown(blocks: any[]): string {
  * Serialize a single block to markdown, handling toggle blocks and children recursively.
  */
 function serializeBlock(block: any): string {
+  // Column list
+  if (block.type === 'column_list') {
+    const ratios = block.props?.columnRatios || '50,50';
+    const childrenMd = (block.children || []).map((col: any) => {
+      const ratio = col.props?.widthRatio || 50;
+      const colContent = (col.children || []).map((c: any) => serializeBlock(c)).join('\n');
+      return `<column ratio="${ratio}">\n${colContent}\n</column>`;
+    }).join('\n');
+    return `<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`;
+  }
+
   // Toggle heading
   if (block.type === 'heading' && block.props?.isToggleable) {
     const level = block.props.level || 1;
