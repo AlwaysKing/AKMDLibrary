@@ -206,22 +206,35 @@ function ColumnListComponent({ block, editor }: any) {
 
     const ids = [...styleEl.textContent.matchAll(/data-id="([^"]+)"/g)].map(m => m[1]);
 
-    // Like toggle heading: show group highlight ONLY when there are selected blocks
-    // OUTSIDE the column_list (sibling blocks). If all selection is inside the layout,
-    // show individual highlights on those blocks.
-    let hasColumnSelected = false;
+    // Show group highlight ONLY when there are selected blocks both
+    // INSIDE and OUTSIDE the column_list. If only outside blocks are selected
+    // (normal box selection of root-level blocks), don't highlight the column.
+    // If only inside blocks are selected, show individual highlights.
+    let hasInsideSelected = false;
+    let hasOutsideSelected = false;
     const columnListOuter = blockEl.closest('.bn-block-outer');
     if (columnListOuter) {
+      // Check inside: column_list's descendant block-outers
+      const innerOuters = columnListOuter.querySelectorAll('.bn-block-outer');
+      innerOuters.forEach(inner => {
+        const innerId = inner.getAttribute('data-id') || '';
+        if (ids.includes(innerId)) {
+          hasInsideSelected = true;
+        }
+      });
+
+      // Check outside: siblings of column_list
       const parentGroup = columnListOuter.parentElement;
       if (parentGroup) {
         const siblingOuters = parentGroup.querySelectorAll(':scope > .bn-block-outer');
         siblingOuters.forEach((sibling) => {
           if (sibling !== columnListOuter && ids.includes(sibling.getAttribute('data-id') || '')) {
-            hasColumnSelected = true;
+            hasOutsideSelected = true;
           }
         });
       }
     }
+    const hasColumnSelected = hasInsideSelected && hasOutsideSelected;
 
     // Inject/remove selection style into document.head (avoids ProseMirror DOM reconciliation)
     // Only modify DOM when state actually changes to avoid MutationObserver infinite loop

@@ -4020,6 +4020,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const content = lastDocBlock.content;
     const lastIsEmpty = !content || (Array.isArray(content) && content.length === 0);
 
+    // Layout containers (column_list, column) cannot receive cursor — always insert after
+    const isLayoutBlock = lastDocBlock.type === 'column_list' || lastDocBlock.type === 'column';
+
     // Check if the last block is input-capable (has editable text)
     // Non-input blocks like subpage, bookmark, pageReference can't receive cursor
     const container = editorRef.current;
@@ -4027,7 +4030,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const lastOuter = blockOuters?.[blockOuters.length - 1];
     const lastIsInput = lastOuter ? isInputBlock(lastOuter as HTMLElement) : false;
 
-    if (lastIsEmpty && lastIsInput) {
+    if (!isLayoutBlock && lastIsEmpty && lastIsInput) {
       editor.setTextCursorPosition(lastDocBlock, 'end');
     } else {
       // Last block is non-input (subpage, bookmark, etc.) or has content → insert new paragraph after it
@@ -4065,7 +4068,31 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         return;
       }
       const target = e.target as HTMLElement;
-      if (target.closest('.bn-block-outer, button, a, input, [contenteditable="true"]')) return;
+      // Allow clicks on column_list/column block-outers to pass through
+      // so clicking below column content creates a new root-level paragraph
+      const clickedOuter = target.closest('.bn-block-outer');
+      if (clickedOuter) {
+        const contentType = clickedOuter.querySelector('[data-content-type]');
+        const type = contentType?.getAttribute('data-content-type');
+        if (type === 'column_list' || type === 'column') {
+          // column_list/column outer: check if click is below all content blocks
+          const contentBlocks = clickedOuter.querySelectorAll(':scope .bn-block-outer');
+          let lowestContentBottom = 0;
+          contentBlocks.forEach(b => {
+            const r = b.getBoundingClientRect();
+            if (r.bottom > lowestContentBottom) lowestContentBottom = r.bottom;
+          });
+          if (e.clientY >= lowestContentBottom - 5) {
+            // Click is below all content — treat as "click below" to append paragraph
+            handleClickBelow();
+            return;
+          }
+          return; // Click inside column content area — ignore
+        }
+        // Regular block outer — skip
+        return;
+      }
+      if (target.closest('button, a, input, [contenteditable="true"]')) return;
       if (target.closest('[data-floating-ui-focusable]')) return;
       if (target.closest('.tcm-menu')) return;
 
