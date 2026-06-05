@@ -125,6 +125,42 @@ function ColumnListComponent({ block, editor }: any) {
     }
   }, []);
 
+  // Fix pointer-events on content block outers inside columns.
+  // BlockNote's SideMenuPlugin sets inline pointer-events:none on block-outers at runtime,
+  // which overrides CSS !important in some cases (likely timing-related DOM recreation).
+  // This MutationObserver re-applies the correct value whenever BlockNote changes it.
+  useEffect(() => {
+    const fixPointerEvents = () => {
+      const container = containerRef.current;
+      if (!container || !container.isConnected) return;
+      const blockEl = container.closest('.bn-block');
+      if (!blockEl) return;
+      const blockGroup = blockEl.querySelector(':scope > .bn-block-group');
+      if (!blockGroup) return;
+
+      const columnOuters = blockGroup.querySelectorAll(':scope > .bn-block-outer');
+      columnOuters.forEach(colOuter => {
+        const innerGroup = colOuter.querySelector(':scope > .bn-block > .bn-block-group');
+        if (!innerGroup) return;
+        const contentOuters = innerGroup.querySelectorAll(':scope > .bn-block-outer');
+        contentOuters.forEach(contentOuter => {
+          if ((contentOuter as HTMLElement).style.pointerEvents === 'none') {
+            (contentOuter as HTMLElement).style.pointerEvents = 'auto';
+          }
+        });
+      });
+    };
+
+    // Run immediately
+    fixPointerEvents();
+
+    // Re-run on DOM changes (BlockNote re-renders may re-set inline styles)
+    const observer = new MutationObserver(fixPointerEvents);
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['style'] });
+
+    return () => observer.disconnect();
+  }, [block.id]);
+
   // Position handles on mount, resize, and when column content changes
   useEffect(() => {
     // Initial position after a frame (CSS needs to be applied first)
