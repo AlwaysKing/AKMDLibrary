@@ -119,6 +119,8 @@ function setBlockSelection(blockIds: string[] | null) {
   } else {
     blockSelectionStyleEl.textContent = '';
   }
+  // Notify listeners (e.g. ColumnListBlock) immediately
+  document.dispatchEvent(new CustomEvent('block-selection-change'));
 }
 
 export { setBlockSelection };

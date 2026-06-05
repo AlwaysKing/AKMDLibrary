@@ -2702,10 +2702,14 @@ a.is-internal-link {
   align-items: flex-start !important;
 }
 
-/* Column outers: width controlled by injected CSS with calc() for gap */
+/* Column outers: width controlled by injected CSS with calc() for gap.
+   Vertical padding (12px) matches Notion's column container padding —
+   gives the column a slightly larger boundary than its inner content blocks. */
 .bn-block:has(.column-list-inner) > .bn-block-group > .bn-block-outer {
   min-width: 0 !important;
   padding: 0 !important;
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
 }
 
 /* Column & column_list block-outers: pointer-events pass-through so BlockNote's

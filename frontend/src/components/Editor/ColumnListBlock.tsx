@@ -263,9 +263,14 @@ function ColumnListComponent({ block, editor }: any) {
   }, []);
 
   useEffect(() => {
+    // Primary: listen for direct custom event from setBlockSelection — instant, no delay
+    const onSelectionChange = () => updateSelection();
+    document.addEventListener('block-selection-change', onSelectionChange);
+
+    // Fallback: MutationObserver for cases where custom event isn't dispatched
+    // (e.g. external code modifies block-selection-style directly)
     let lastUpdate = 0;
     const observer = new MutationObserver((mutations) => {
-      // Only react to changes on block-selection-style, not our own col-sel- styles
       const relevant = mutations.some(m => {
         if (m.type === 'childList') {
           return Array.from(m.addedNodes).some(n => (n as Element).id === 'block-selection-style') ||
@@ -280,7 +285,6 @@ function ColumnListComponent({ block, editor }: any) {
         return false;
       });
       if (relevant) {
-        // Debounce to avoid rapid successive calls
         const now = Date.now();
         if (now - lastUpdate > 50) {
           lastUpdate = now;
@@ -289,14 +293,13 @@ function ColumnListComponent({ block, editor }: any) {
       }
     });
     observer.observe(document.head, { childList: true, subtree: true, characterData: true });
+
+    // Initial check
     updateSelection();
 
-    // Periodic re-check ensures class is re-applied after React re-renders
-    const intervalId = setInterval(updateSelection, 500);
-
     return () => {
+      document.removeEventListener('block-selection-change', onSelectionChange);
       observer.disconnect();
-      clearInterval(intervalId);
     };
   }, [block.id, updateSelection]);
 
