@@ -2739,27 +2739,48 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const container = editorRef.current;
     if (!container || readOnly) return;
 
-    const EDGE_ZONE = 0.18; // 18% of block width on each side
+    const EDGE_ZONE_PX = 36; // ~2x Notion drag handle width, for left/right edge detection
     let columnLineEl: HTMLDivElement | null = null;
 
     const createColumnLine = () => {
       if (!columnLineEl) {
         columnLineEl = document.createElement('div');
+        // Base styles only — orientation-specific styles set in handleColumnDragOver
         columnLineEl.style.cssText =
-          'position:fixed;z-index:9999;pointer-events:none;width:3px;background:rgba(35,131,226,0.5);border-radius:2px;display:none;';
+          'position:fixed;z-index:9999;pointer-events:none;display:none;border-radius:2px;';
         document.body.appendChild(columnLineEl);
       }
     };
 
     const clearColumnHighlight = () => {
       if (columnLineEl) columnLineEl.style.display = 'none';
+      // Restore BN's dropcursor visibility so BN can manage it
+      showBNDropCursors();
     };
 
     const removeColumnLine = () => {
       if (columnLineEl) { columnLineEl.remove(); columnLineEl = null; }
     };
 
-    /** Remove BlockNote's DropCursor elements (blue #ddeeff horizontal bars) */
+    /** Hide BlockNote's DropCursor elements (instead of removing, to preserve BN's internal state) */
+    const hideBNDropCursors = () => {
+      container.querySelectorAll(
+        '.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline, ' +
+        '.prosemirror-dropcursor-block-horizontal, .prosemirror-dropcursor-block-vertical-left, ' +
+        '.prosemirror-dropcursor-block-vertical-right, .prosemirror-dropcursor-vertical'
+      ).forEach(el => { (el as HTMLElement).style.display = 'none'; });
+    };
+
+    /** Restore BlockNote's DropCursor elements that were previously hidden */
+    const showBNDropCursors = () => {
+      container.querySelectorAll(
+        '.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline, ' +
+        '.prosemirror-dropcursor-block-horizontal, .prosemirror-dropcursor-block-vertical-left, ' +
+        '.prosemirror-dropcursor-block-vertical-right, .prosemirror-dropcursor-vertical'
+      ).forEach(el => { (el as HTMLElement).style.display = ''; });
+    };
+
+    /** Permanently remove BN dropcursor elements (only for drop/dragend/cleanup) */
     const removeBNDropCursors = () => {
       container.querySelectorAll(
         '.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline, ' +
@@ -2769,11 +2790,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
 
     interface ColumnDropTarget {
-      type: 'create' | 'addColumn';  // create: new column_list, addColumn: add to existing
+      type: 'create' | 'addColumn' | 'insertAround' | 'insertInColumn' | 'moveBlock';
       blockId: string;
       blockOuter: HTMLElement;
       side: 'left' | 'right';
-      columnListId?: string;          // for addColumn: the target column_list block id
+      position?: 'above' | 'below';   // for insertAround / insertInColumn
+      columnListId?: string;           // for addColumn / insertAround
+      columnBlockId?: string;          // for insertInColumn: the column block to insert relative to
+      insertWidth?: number;            // for insertInColumn: width of the indicator line
     }
 
     const findColumnDropTarget = (clientX: number, clientY: number): ColumnDropTarget | null => {
@@ -2782,63 +2806,288 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       const htmlEl = el as HTMLElement;
       const blockOuter = htmlEl.closest('.bn-block-outer') as HTMLElement;
-      if (!blockOuter) return null;
 
-      const blockContent = blockOuter.querySelector('[data-content-type]');
-      if (!blockContent) return null;
-      const contentType = blockContent.getAttribute('data-content-type');
-      const blockId = blockOuter.querySelector('[data-id]')?.getAttribute('data-id');
-      if (!blockId) return null;
+      // ── Phase 1: We hit a .bn-block-outer ──
+      if (blockOuter) {
+        const blockContent = blockOuter.querySelector('[data-content-type]');
+        if (!blockContent) {
+          // No content type — try phase 2 (gap/padding area)
+          return findColumnDropTargetPhase2(clientX, clientY);
+        }
+        const contentType = blockContent.getAttribute('data-content-type');
+        const blockId = blockOuter.querySelector('[data-id]')?.getAttribute('data-id');
+        if (!blockId) return null;
 
-      // Case 1: Dropped on column_list outer → add column to existing column_list
-      if (contentType === 'column_list') {
-        const rect = blockOuter.getBoundingClientRect();
-        const relX = (clientX - rect.left) / rect.width;
-        return {
-          type: 'addColumn',
-          blockId,
-          blockOuter,
-          side: relX < 0.5 ? 'left' : 'right',
-          columnListId: blockId,
-        };
-      }
+        // ── Case 1: Hit column_list outer ──
+        if (contentType === 'column_list') {
+          const rect = blockOuter.getBoundingClientRect();
+          // Check if in left/right edge zone → addColumn
+          if (clientX - rect.left < EDGE_ZONE_PX) {
+            return { type: 'addColumn', blockId, blockOuter, side: 'left', columnListId: blockId };
+          }
+          if (rect.right - clientX < EDGE_ZONE_PX) {
+            return { type: 'addColumn', blockId, blockOuter, side: 'right', columnListId: blockId };
+          }
+          // Middle area of column_list → let BN handle (return null)
+          return null;
+        }
 
-      // Case 2 & 3: Dropped on a column or content block inside a column
-      // Walk up through .bn-block-outer ancestors to find a parent column_list
-      {
-        let ancestor = blockOuter.parentElement;
-        while (ancestor) {
-          const parentOuter = ancestor.closest('.bn-block-outer') as HTMLElement;
-          if (parentOuter && parentOuter !== blockOuter) {
-            const parentCT = parentOuter.querySelector('[data-content-type]')?.getAttribute('data-content-type');
-            if (parentCT === 'column_list') {
-              const colListId = parentOuter.querySelector('[data-id]')?.getAttribute('data-id');
-              if (colListId) {
-                const rect = parentOuter.getBoundingClientRect();
-                const relX = (clientX - rect.left) / rect.width;
-                return {
-                  type: 'addColumn',
-                  blockId: colListId,
-                  blockOuter: parentOuter,
-                  side: relX < 0.5 ? 'left' : 'right',
-                  columnListId: colListId,
-                };
+        // ── Case 2: Hit a column outer (data-content-type="column") ──
+        // This means we're in the column's padding area (24px top/bottom)
+        if (contentType === 'column') {
+          // Find parent column_list
+          const colListOuter = findAncestorColumnListOuter(blockOuter);
+          if (!colListOuter) return null;
+          const colListId = colListOuter.querySelector('[data-id]')?.getAttribute('data-id');
+          if (!colListId) return null;
+
+          // Check if cursor is in the column's top/bottom padding
+          const colRect = blockOuter.getBoundingClientRect();
+          const contentBlocks = blockOuter.querySelectorAll('.bn-block-group > .bn-block-outer');
+          const paddingSize = 12; // matches CSS padding-top/bottom
+
+          // Determine if we're in the top or bottom padding zone
+          const inTopPadding = clientY < colRect.top + paddingSize;
+          const inBottomPadding = clientY > colRect.bottom - paddingSize;
+
+          if (inTopPadding || inBottomPadding) {
+            const pos: 'above' | 'below' = inTopPadding ? 'above' : 'below';
+            // Two-layer split: outer half of padding → insertAround, inner half → insertInColumn
+            // Distance from column edge vs distance from content
+            const distFromEdge = inTopPadding
+              ? clientY - colRect.top
+              : colRect.bottom - clientY;
+            const distFromContent = contentBlocks.length > 0
+              ? (inTopPadding
+                ? contentBlocks[0].getBoundingClientRect().top - clientY
+                : clientY - contentBlocks[contentBlocks.length - 1].getBoundingClientRect().bottom)
+              : paddingSize; // empty column: all padding
+
+            if (distFromEdge <= distFromContent) {
+              // Closer to column edge → insertAround (full-width horizontal line)
+              return {
+                type: 'insertAround', blockId: colListId, blockOuter: colListOuter,
+                side: pos === 'above' ? 'left' : 'right', position: pos, columnListId: colListId,
+              };
+            } else {
+              // Closer to content → insertInColumn (single-column width horizontal line)
+              if (contentBlocks.length > 0) {
+                const refBlock = pos === 'above' ? contentBlocks[0] : contentBlocks[contentBlocks.length - 1];
+                const refBlockId = refBlock.querySelector('[data-id]')?.getAttribute('data-id');
+                if (refBlockId) {
+                  return {
+                    type: 'insertInColumn', blockId: colListId, blockOuter: refBlock as HTMLElement,
+                    side: pos === 'above' ? 'left' : 'right', position: pos,
+                    columnListId: colListId, columnBlockId: refBlockId,
+                    insertWidth: colRect.width,
+                  };
+                }
               }
+              // Empty column or no content blocks found
+              return {
+                type: 'insertInColumn', blockId: colListId, blockOuter,
+                side: pos === 'above' ? 'left' : 'right', position: pos,
+                columnListId: colListId, columnBlockId: blockId,
+                insertWidth: colRect.width,
+              };
             }
           }
-          ancestor = parentOuter?.parentElement || ancestor.parentElement;
+          // Inside column content area but no content block hit → let BN handle
+          return null;
+        }
+
+        // ── Case 3: Hit a content block inside a column ──
+        {
+          const colListOuter = findAncestorColumnListOuter(blockOuter);
+          if (colListOuter) {
+            const colListId = colListOuter.querySelector('[data-id]')?.getAttribute('data-id');
+
+            // Check left/right edge of column_list → addColumn
+            const clRect = colListOuter.getBoundingClientRect();
+            if (clientX - clRect.left < EDGE_ZONE_PX && colListId) {
+              return { type: 'addColumn', blockId: colListId, blockOuter: colListOuter, side: 'left', columnListId: colListId };
+            }
+            if (clRect.right - clientX < EDGE_ZONE_PX && colListId) {
+              return { type: 'addColumn', blockId: colListId, blockOuter: colListOuter, side: 'right', columnListId: colListId };
+            }
+
+            // Determine above/below based on cursor Y relative to the content block
+            const bRect = blockOuter.getBoundingClientRect();
+            const relY = (clientY - bRect.top) / bRect.height;
+            const pos: 'above' | 'below' = relY < 0.5 ? 'above' : 'below';
+
+            // Column-internal insert: move block within the column
+            return {
+              type: 'insertInColumn',
+              blockId: colListId!,
+              blockOuter,
+              side: pos === 'above' ? 'left' : 'right',
+              position: pos,
+              columnListId: colListId,
+              columnBlockId: blockId,
+              insertWidth: bRect.width,
+            };
+          }
+        }
+
+        // ── Case 4: Normal root-level block ──
+        const rect = blockOuter.getBoundingClientRect();
+        if (clientX - rect.left < EDGE_ZONE_PX) {
+          return { type: 'create', blockId, blockOuter, side: 'left' };
+        }
+        if (rect.right - clientX < EDGE_ZONE_PX) {
+          return { type: 'create', blockId, blockOuter, side: 'right' };
+        }
+        // Middle area → let BN handle (don't intercept)
+        return null;
+      }
+
+      // ── Phase 2: No .bn-block-outer hit — check gap/padding of column_list ──
+      return findColumnDropTargetPhase2(clientX, clientY);
+    };
+
+    /** Helper: find the column_list's .bn-block-outer ancestor of a given block */
+    const findAncestorColumnListOuter = (blockOuter: HTMLElement): HTMLElement | null => {
+      let ancestor = blockOuter.parentElement;
+      while (ancestor) {
+        const parentOuter = ancestor.closest('.bn-block-outer') as HTMLElement;
+        if (parentOuter && parentOuter !== blockOuter) {
+          const parentCT = parentOuter.querySelector('[data-content-type]')?.getAttribute('data-content-type');
+          if (parentCT === 'column_list') return parentOuter;
+        }
+        ancestor = parentOuter?.parentElement || ancestor.parentElement;
+      }
+      return null;
+    };
+
+    /** Phase 2: geometric scan when elementFromPoint hits nothing useful (padding/gap zones) */
+    const findColumnDropTargetPhase2 = (clientX: number, clientY: number): ColumnDropTarget | null => {
+      // Use document (not container) because BlockNote may portal content outside container
+      const columnListOuters = document.querySelectorAll(
+        '.bn-block-outer:has(.column-list-inner)'
+      );
+
+      for (const clOuter of columnListOuters) {
+        const colListOuter = clOuter as HTMLElement;
+        const clRect = colListOuter.getBoundingClientRect();
+        const colListId = colListOuter.querySelector('[data-id]')?.getAttribute('data-id');
+        if (!colListId) continue;
+
+        // Check if cursor is within or near the column_list bounds
+        if (clientX < clRect.left - 10 || clientX > clRect.right + 10) continue;
+        if (clientY < clRect.top - 10 || clientY > clRect.bottom + 10) continue;
+
+        // Get the flex row group (direct child)
+        const group = colListOuter.querySelector('.bn-block-group');
+        if (!group) continue;
+        const groupRect = group.getBoundingClientRect();
+
+        // Get column outers inside the group
+        const columnOuters = group.querySelectorAll(':scope > .bn-block-outer');
+        if (columnOuters.length === 0) continue;
+        const columnRects = Array.from(columnOuters).map(
+          el => (el as HTMLElement).getBoundingClientRect()
+        );
+
+        // ── Check if above or below the entire column_list → insertAround ──
+        if (clientY < groupRect.top) {
+          return {
+            type: 'insertAround', blockId: colListId, blockOuter: colListOuter,
+            side: 'left', position: 'above', columnListId: colListId,
+          };
+        }
+        if (clientY > groupRect.bottom) {
+          return {
+            type: 'insertAround', blockId: colListId, blockOuter: colListOuter,
+            side: 'right', position: 'below', columnListId: colListId,
+          };
+        }
+
+        // ── Check gap between columns → addColumn ──
+        for (let i = 0; i < columnRects.length - 1; i++) {
+          if (clientX >= columnRects[i].right && clientX <= columnRects[i + 1].left) {
+            return {
+              type: 'addColumn', blockId: colListId, blockOuter: colListOuter,
+              side: 'right', columnListId: colListId,
+            };
+          }
+        }
+
+        // ── Check left/right edge of column_list → addColumn ──
+        if (clientX < columnRects[0].left && clientX >= clRect.left) {
+          return {
+            type: 'addColumn', blockId: colListId, blockOuter: colListOuter,
+            side: 'left', columnListId: colListId,
+          };
+        }
+        const lastColRect = columnRects[columnRects.length - 1];
+        if (clientX > lastColRect.right && clientX <= clRect.right) {
+          return {
+            type: 'addColumn', blockId: colListId, blockOuter: colListOuter,
+            side: 'right', columnListId: colListId,
+          };
+        }
+
+        // ── Check if inside a column's padding area → two-layer split ──
+        for (let i = 0; i < columnRects.length; i++) {
+          const colRect = columnRects[i];
+          if (clientX >= colRect.left && clientX <= colRect.right) {
+            // Horizontally inside this column
+            const contentBlocks = columnOuters[i].querySelectorAll('.bn-block-group > .bn-block-outer');
+            const paddingSize = 12;
+            if (contentBlocks.length === 0) {
+              // Empty column → split by half
+              const pos: 'above' | 'below' = clientY < colRect.top + colRect.height / 2 ? 'above' : 'below';
+              const distFromEdge = pos === 'above' ? clientY - colRect.top : colRect.bottom - clientY;
+              if (distFromEdge < paddingSize / 2) {
+                // Outer half → insertAround
+                return { type: 'insertAround', blockId: colListId, blockOuter: colListOuter, side: pos === 'above' ? 'left' : 'right', position: pos, columnListId: colListId };
+              }
+              // Inner half → insertInColumn
+              const colBlockId = columnOuters[i].querySelector('[data-id]')?.getAttribute('data-id');
+              if (colBlockId) {
+                return { type: 'insertInColumn', blockId: colListId, blockOuter: columnOuters[i] as HTMLElement, side: pos === 'above' ? 'left' : 'right', position: pos, columnListId: colListId, columnBlockId: colBlockId, insertWidth: colRect.width };
+              }
+              return null;
+            }
+            const firstContentRect = contentBlocks[0].getBoundingClientRect();
+            const lastContentRect = contentBlocks[contentBlocks.length - 1].getBoundingClientRect();
+            if (clientY < firstContentRect.top) {
+              // Above first content block → top padding → two-layer
+              const distFromEdge = clientY - colRect.top;
+              const distFromContent = firstContentRect.top - clientY;
+              const pos = 'above' as const;
+              if (distFromEdge <= distFromContent) {
+                // Closer to edge → insertAround
+                return { type: 'insertAround', blockId: colListId, blockOuter: colListOuter, side: 'left', position: pos, columnListId: colListId };
+              }
+              const firstContentId = contentBlocks[0].querySelector('[data-id]')?.getAttribute('data-id');
+              if (firstContentId) {
+                return { type: 'insertInColumn', blockId: colListId, blockOuter: contentBlocks[0] as HTMLElement, side: 'left', position: pos, columnListId: colListId, columnBlockId: firstContentId, insertWidth: colRect.width };
+              }
+              return null;
+            }
+            if (clientY > lastContentRect.bottom) {
+              // Below last content block → bottom padding → two-layer
+              const distFromEdge = colRect.bottom - clientY;
+              const distFromContent = clientY - lastContentRect.bottom;
+              const pos = 'below' as const;
+              if (distFromEdge <= distFromContent) {
+                // Closer to edge → insertAround
+                return { type: 'insertAround', blockId: colListId, blockOuter: colListOuter, side: 'right', position: pos, columnListId: colListId };
+              }
+              const lastContentId = contentBlocks[contentBlocks.length - 1].querySelector('[data-id]')?.getAttribute('data-id');
+              if (lastContentId) {
+                return { type: 'insertInColumn', blockId: colListId, blockOuter: contentBlocks[contentBlocks.length - 1] as HTMLElement, side: 'right', position: pos, columnListId: colListId, columnBlockId: lastContentId, insertWidth: colRect.width };
+              }
+              return null;
+            }
+            // Inside content area but hit nothing → let BN handle
+            return null;
+          }
         }
       }
 
-      // Case 4: Normal block — create new column_list (original behavior)
-      const rect = blockOuter.getBoundingClientRect();
-      const relX = (clientX - rect.left) / rect.width;
-
-      if (relX < EDGE_ZONE) {
-        return { type: 'create', blockId, blockOuter, side: 'left' };
-      } else if (relX > (1 - EDGE_ZONE)) {
-        return { type: 'create', blockId, blockOuter, side: 'right' };
-      }
       return null;
     };
 
@@ -2871,31 +3120,60 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
 
       e.preventDefault();
-      e.stopPropagation();
+      // Don't stopPropagation — let BN's dropcursor plugin update its internal state
+      // so it can recover when we later return null (normal blocks)
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 
-      // Remove BlockNote's DropCursor elements (they persist because we stopPropagation)
-      removeBNDropCursors();
+      // Hide BN's dropcursor visuals (we show our own indicator)
+      hideBNDropCursors();
 
-      // Show vertical line indicator
+      // Show indicator line
       createColumnLine();
-      const rect = target.blockOuter.getBoundingClientRect();
-      const lineX = target.side === 'left' ? rect.left - 2 : rect.right + 2;
-      columnLineEl!.style.left = lineX + 'px';
-      columnLineEl!.style.top = rect.top + 'px';
-      columnLineEl!.style.height = rect.height + 'px';
-      columnLineEl!.style.display = 'block';
+
+      if (target.type === 'insertAround') {
+        // Horizontal blue line (Notion-style: full-width of column_list, 4px high)
+        const rect = target.blockOuter.getBoundingClientRect();
+        columnLineEl!.style.width = rect.width + 'px';
+        columnLineEl!.style.height = '4px';
+        columnLineEl!.style.background = '#ddeeff';
+        columnLineEl!.style.left = rect.left + 'px';
+        columnLineEl!.style.top = (target.position === 'above' ? rect.top - 2 : rect.bottom + 2) + 'px';
+        columnLineEl!.style.display = 'block';
+      } else if (target.type === 'insertInColumn' || target.type === 'moveBlock') {
+        // Horizontal blue line (single-column or full-width, 4px high) at the block's edge
+        const rect = target.blockOuter.getBoundingClientRect();
+        const lineW = target.insertWidth || rect.width;
+        // Center the line horizontally on the content block
+        const centerX = rect.left + rect.width / 2;
+        columnLineEl!.style.width = lineW + 'px';
+        columnLineEl!.style.height = '4px';
+        columnLineEl!.style.background = '#ddeeff';
+        columnLineEl!.style.left = (centerX - lineW / 2) + 'px';
+        columnLineEl!.style.top = (target.position === 'above' ? rect.top - 2 : rect.bottom + 2) + 'px';
+        columnLineEl!.style.display = 'block';
+      } else {
+        // Vertical blue line (create / addColumn)
+        const rect = target.blockOuter.getBoundingClientRect();
+        columnLineEl!.style.width = '3px';
+        columnLineEl!.style.height = rect.height + 'px';
+        columnLineEl!.style.background = '#ddeeff';
+        columnLineEl!.style.left = (target.side === 'left' ? rect.left - 2 : rect.right + 2) + 'px';
+        columnLineEl!.style.top = rect.top + 'px';
+        columnLineEl!.style.display = 'block';
+      }
     };
 
     const handleColumnDrop = (e: DragEvent) => {
       removeColumnLine();
-      removeBNDropCursors();
 
       const dragData = getBlockDragData();
       if (!dragData || dragData.blocks.length === 0) return;
 
       const target = findColumnDropTarget(e.clientX, e.clientY);
       if (!target) return;
+
+      // Only remove BN dropcursors when we're handling the drop ourselves
+      removeBNDropCursors();
 
       e.preventDefault();
       e.stopPropagation();
@@ -2968,6 +3246,69 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             props: { columnRatios: finalChildren.map((c: any) => c.props.widthRatio).join(',') },
             children: finalChildren,
           } as any);
+
+          // Remove the original dragged block
+          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
+          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+
+          markDragHandled();
+        } else if (target.type === 'insertAround') {
+          // ── Insert around column_list: place block above or below as root-level block ──
+          const columnListBlock = findBlockDeep(editor.document, target.columnListId!);
+          if (!columnListBlock) return;
+
+          // Don't allow dragging from inside the same column_list
+          if (dragData.blockIds.includes(target.columnListId!)) return;
+
+          const placement = target.position === 'above' ? 'before' : 'after';
+          editor.insertBlocks([{
+            type: draggedBlock.type,
+            props: draggedBlock.props,
+            content: draggedBlock.content,
+            children: draggedBlock.children || [],
+          }], columnListBlock, placement);
+
+          // Remove the original dragged block
+          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
+          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+
+          markDragHandled();
+        } else if (target.type === 'insertInColumn') {
+          // ── Insert within a column: move block before/after the target content block ──
+          const targetBlock = findBlockDeep(editor.document, target.columnBlockId!);
+          if (!targetBlock) return;
+
+          // Don't drop on self
+          if (dragData.blockIds.includes(target.columnBlockId!)) return;
+
+          const placement = target.position === 'above' ? 'before' : 'after';
+          editor.insertBlocks([{
+            type: draggedBlock.type,
+            props: draggedBlock.props,
+            content: draggedBlock.content,
+            children: draggedBlock.children || [],
+          }], targetBlock, placement);
+
+          // Remove the original dragged block
+          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
+          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+
+          markDragHandled();
+        } else if (target.type === 'moveBlock') {
+          // ── Move block before/after the target block (normal block-to-block) ──
+          const targetBlock = findBlockDeep(editor.document, target.blockId);
+          if (!targetBlock) return;
+
+          // Don't drop on self
+          if (dragData.blockIds.includes(target.blockId)) return;
+
+          const placement = target.position === 'above' ? 'before' : 'after';
+          editor.insertBlocks([{
+            type: draggedBlock.type,
+            props: draggedBlock.props,
+            content: draggedBlock.content,
+            children: draggedBlock.children || [],
+          }], targetBlock, placement);
 
           // Remove the original dragged block
           const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
