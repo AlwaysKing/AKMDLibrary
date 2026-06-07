@@ -2741,6 +2741,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     const EDGE_ZONE_PX = 36; // ~2x Notion drag handle width, for left/right edge detection
     let columnLineEl: HTMLDivElement | null = null;
+    let lastDragTarget: ColumnDropTarget | null = null;
 
     const createColumnLine = () => {
       if (!columnLineEl) {
@@ -2754,6 +2755,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     const clearColumnHighlight = () => {
       if (columnLineEl) columnLineEl.style.display = 'none';
+      lastDragTarget = null;
       // Restore BN's dropcursor visibility so BN can manage it
       showBNDropCursors();
     };
@@ -3140,7 +3142,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
 
       e.preventDefault();
-      e.stopPropagation(); // Prevent BN's dropcursor from showing simultaneously
+      e.stopPropagation(); // Prevent BN from interfering with our drop target
+      lastDragTarget = target;
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 
       // Hide BN's dropcursor visuals (we show our own indicator)
@@ -3188,7 +3191,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const dragData = getBlockDragData();
       if (!dragData || dragData.blocks.length === 0) return;
 
-      const target = findColumnDropTarget(e.clientX, e.clientY);
+      // Use the last target from dragover (not recalculated at drop time,
+      // because cursor position at drop may differ from the last dragover)
+      const target = lastDragTarget;
+      lastDragTarget = null;
       if (!target) return;
 
       // Only remove BN dropcursors when we're handling the drop ourselves
