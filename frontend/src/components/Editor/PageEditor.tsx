@@ -2756,8 +2756,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const clearColumnHighlight = () => {
       if (columnLineEl) columnLineEl.style.display = 'none';
       lastDragTarget = null;
-      // Restore BN's dropcursor visibility so BN can manage it
-      showBNDropCursors();
+      // Remove (not show) BN's dropcursor elements so BN recreates them fresh.
+      // If we merely unhide them, they may be stale (wrong position/size).
+      // Removing forces BN to recalculate on its next dragover.
+      removeBNDropCursors();
     };
 
     const removeColumnLine = () => {
@@ -2996,7 +2998,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           el => (el as HTMLElement).getBoundingClientRect()
         );
 
-        // ── Check if above or below the entire column_list → insertAround ──
+        // ── Above/below column_list → insertAround (full-width horizontal line) ──
         if (clientY < groupRect.top) {
           return {
             type: 'insertAround', blockId: colListId, blockOuter: colListOuter,
