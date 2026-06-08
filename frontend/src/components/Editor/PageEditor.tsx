@@ -2756,10 +2756,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const clearColumnHighlight = () => {
       if (columnLineEl) columnLineEl.style.display = 'none';
       lastDragTarget = null;
-      // Remove (not show) BN's dropcursor elements so BN recreates them fresh.
-      // If we merely unhide them, they may be stale (wrong position/size).
-      // Removing forces BN to recalculate on its next dragover.
-      removeBNDropCursors();
+      // Restore BN's dropcursor visibility so BN can manage it.
+      showBNDropCursors();
     };
 
     const removeColumnLine = () => {
@@ -3236,15 +3234,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       e.preventDefault();
       e.stopPropagation();
-
-      // Clear ProseMirror's internal dragging state to prevent it from trying
-      // to create a TextSelection at a stale position after our custom drop.
-      // This avoids the "TextSelection endpoint not pointing into a node with
-      // inline content (blockGroup)" warning.
-      const pmView = editor._tiptapEditor?.view;
-      if (pmView) {
-        pmView.dragging = null;
-      }
 
       // Get the dragged block data
       const draggedBlock = dragData.blocks[0];
