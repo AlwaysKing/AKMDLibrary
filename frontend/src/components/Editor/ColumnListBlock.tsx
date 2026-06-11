@@ -30,7 +30,6 @@ function ColumnListComponent({ block, editor }: any) {
   } | null>(null);
 
   const children = block.children || [];
-  const columnCount = children.length;
 
   const childrenRef = useRef(children);
   childrenRef.current = children;
@@ -40,15 +39,9 @@ function ColumnListComponent({ block, editor }: any) {
 
   // Inject CSS rules into document.head (outside ProseMirror's observer scope)
   // This avoids triggering ProseMirror's MutationObserver which causes infinite loops
-  useEffect(() => {
+  const injectColumnCSS = useCallback((ratios: number[]) => {
     const styleId = `col-style-${block.id}`;
-
-    // Remove previous style
     document.getElementById(styleId)?.remove();
-
-    const ratios = children.map((child: any) =>
-      child.props?.widthRatio || Math.round(100 / children.length)
-    );
 
     if (ratios.length === 0) return;
 
@@ -56,7 +49,15 @@ function ColumnListComponent({ block, editor }: any) {
     style.id = styleId;
 
     const gapShare = ratios.length > 1 ? ((ratios.length - 1) * 52) / ratios.length : 0;
-    let css = `.bn-block:has([data-column-list-id="${block.id}"]) > .bn-block-group { display: flex !important; }`;
+    let css = `
+/* Column list outer: take full width, don't shrink */
+.bn-block-outer:has([data-column-list-id="${block.id}"]) {
+  flex-shrink: 0 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+/* Inner flex layout for columns */
+.bn-block:has([data-column-list-id="${block.id}"]) > .bn-block-group { display: flex !important; }`;
 
     ratios.forEach((ratio: number, i: number) => {
       css += `
@@ -68,9 +69,74 @@ function ColumnListComponent({ block, editor }: any) {
 
     style.textContent = css;
     document.head.appendChild(style);
+  }, [block.id]);
 
-    return () => document.getElementById(styleId)?.remove();
-  }, [block.id, ratioKey]);
+  useEffect(() => {
+    // Use columnRatios prop (authoritative source) instead of individual column props
+    const ratiosStr = (block.props as any)?.columnRatios as string | undefined;
+    if (ratiosStr) {
+      const ratios = ratiosStr.split(',').map(Number);
+      if (ratios.length === children.length) {
+        injectColumnCSS(ratios);
+      } else {
+        // Mismatch: fall back to even distribution
+        const evenRatio = Math.round(100 / children.length);
+        const ratios = Array(children.length).fill(evenRatio);
+        ratios[ratios.length - 1] = 100 - evenRatio * (children.length - 1);
+        injectColumnCSS(ratios);
+      }
+    } else {
+      // No columnRatios prop: compute evenly
+      const evenRatio = Math.round(100 / children.length);
+      const ratios = Array(children.length).fill(evenRatio);
+      ratios[ratios.length - 1] = 100 - evenRatio * (children.length - 1);
+      injectColumnCSS(ratios);
+    }
+    return () => document.getElementById(`col-style-${block.id}`)?.remove();
+  }, [block.id, ratioKey, injectColumnCSS]);
+
+  // MutationObserver: re-inject CSS when BN adds/removes column DOM elements
+  // This catches cases where PageEditor's drag handler adds columns via editor.updateBlock
+  // without going through our React addColumn (which calls injectColumnCSS directly).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const blockEl = container.closest('.bn-block');
+    if (!blockEl) return;
+    const blockGroup = blockEl.querySelector(':scope > .bn-block-group');
+    if (!blockGroup) return;
+
+    let lastChildCount = blockGroup.children.length;
+
+    const observer = new MutationObserver(() => {
+      const newCount = blockGroup.children.length;
+      if (newCount !== lastChildCount) {
+        lastChildCount = newCount;
+        // Re-read ratios from column_list's columnRatios prop (authoritative source),
+        // NOT from individual column widthRatio props (which may be stale after addColumn)
+        const liveBlock = editor.getBlock(block.id);
+        if (liveBlock) {
+          const ratiosStr = liveBlock.props?.columnRatios as string | undefined;
+          if (ratiosStr) {
+            const ratios = ratiosStr.split(',').map(Number);
+            if (ratios.length === newCount) {
+              injectColumnCSS(ratios);
+              return;
+            }
+          }
+          // Fallback: compute evenly if columnRatios prop is missing/stale
+          const childCount = liveBlock.children?.length || newCount;
+          const evenRatio = Math.round(100 / childCount);
+          const ratios = Array(childCount).fill(evenRatio);
+          ratios[ratios.length - 1] = 100 - evenRatio * (childCount - 1);
+          injectColumnCSS(ratios);
+        }
+      }
+    });
+
+    observer.observe(blockGroup, { childList: true });
+    return () => observer.disconnect();
+  }, [block.id, editor, injectColumnCSS]);
 
   // Position resize handles and add button via direct DOM manipulation on OUR elements
   const positionHandles = useCallback(() => {
@@ -302,106 +368,140 @@ function ColumnListComponent({ block, editor }: any) {
     };
   }, [block.id, updateSelection]);
 
-  // Add a new column — new column gets 1/(n+1) of width, others scale proportionally
+  // Add a new column — new column gets 1/(n+1) of width, others keep their ratios
+  // IMPORTANT: Do NOT call updateBlock on existing columns — it corrupts their structure.
+  // Only insert the new column and let CSS handle the visual width.
   const addColumn = useCallback(() => {
-    const newCount = columnCount + 1;
+    const liveBlock = editor.getBlock(block.id);
+    if (!liveBlock?.children) return;
+    const liveChildren = liveBlock.children as any[];
+    const liveCount = liveChildren.length;
+
+    const newCount = liveCount + 1;
     if (newCount > MAX_COLUMNS) return;
 
+    // Calculate new ratios: scale existing columns proportionally to make room
     const newColumnWidth = Math.round(100 / newCount);
     const scaleFactor = (100 - newColumnWidth) / 100;
-
-    // Scale existing columns' widths proportionally and build new children array
+    const allRatios: number[] = [];
     let remaining = 100 - newColumnWidth;
-    const scaledChildren = children.map((child: any, i: number) => {
-      const oldRatio = child.props?.widthRatio || Math.round(100 / columnCount);
-      let newRatio: number;
-      if (i < children.length - 1) {
-        newRatio = Math.max(MIN_RATIO, Math.round(oldRatio * scaleFactor));
-        remaining -= newRatio;
+    liveChildren.forEach((child: any, i: number) => {
+      const oldRatio = child.props?.widthRatio || Math.round(100 / liveCount);
+      const scaled = Math.max(MIN_RATIO, Math.round(oldRatio * scaleFactor));
+      if (i < liveChildren.length - 1) {
+        allRatios.push(scaled);
+        remaining -= scaled;
       } else {
-        newRatio = Math.max(MIN_RATIO, remaining);
+        allRatios.push(Math.max(MIN_RATIO, remaining));
       }
-      return {
-        type: 'column',
-        props: { widthRatio: newRatio },
-        children: (child.children || []).map((c: any) => ({
-          type: c.type,
-          props: c.props,
-          content: c.content,
-          children: c.children || [],
-        })),
-      };
     });
+    allRatios.push(newColumnWidth);
 
-    const newColumn = {
+    // Step 1: Inject CSS with new ratios FIRST (so layout is ready before DOM change)
+    injectColumnCSS(allRatios);
+
+    // Step 2: Insert new empty column at the end — do NOT touch existing columns
+    const lastColumn = liveChildren[liveChildren.length - 1];
+    editor.insertBlocks([{
       type: 'column',
       props: { widthRatio: newColumnWidth },
       children: [{ type: 'paragraph' as const }],
-    };
+    }], lastColumn, 'after');
 
-    const finalChildren = [...scaledChildren, newColumn];
-    const newRatios = finalChildren.map((c: any) => c.props.widthRatio).join(',');
-
-    // Atomically replace all children using updateBlock
-    editor.updateBlock(block.id, {
-      type: 'column_list',
-      props: { columnRatios: newRatios },
-      children: finalChildren,
-    } as any);
-  }, [block.id, children, columnCount, editor]);
+    // Step 3: Update column_list props via PM transaction (updateBlock corrupts structure)
+    const pmView = (editor as any).prosemirrorView;
+    if (pmView) {
+      const { state } = pmView;
+      let foundPos = -1, foundNode: any = null;
+      state.doc.descendants((node: any, pos: number) => {
+        if (foundNode) return false;
+        if (node.attrs?.id === block.id) { foundPos = pos; foundNode = node; return false; }
+      });
+      if (foundNode) {
+        pmView.dispatch(state.tr.setNodeMarkup(foundPos, undefined, {
+          ...foundNode.attrs,
+          columnRatios: allRatios.join(','),
+        }));
+      }
+    }
+  }, [block.id, editor, injectColumnCSS]);
 
   // Delete a column — removed column's width is redistributed proportionally to remaining columns
   const deleteColumn = useCallback((colIndex: number) => {
-    if (columnCount <= 1) {
-      // Last column → dissolve column_list, promote content to root level
+    // Always use live BN API — React props (children/columnCount) may be stale
+    const liveBlock = editor.getBlock(block.id);
+    if (!liveBlock || !liveBlock.children) return;
+
+    const liveChildren = liveBlock.children as any[];
+
+    // Remove the specified column
+    if (colIndex < 0 || colIndex >= liveChildren.length) return;
+    const remainingColumns = liveChildren.filter((_: any, i: number) => i !== colIndex);
+
+    // If 0 or 1 column would remain → dissolve column_list entirely
+    if (remainingColumns.length <= 1) {
       const allContent: any[] = [];
-      children.forEach((child: any) => {
-        if (child.children && child.children.length > 0) {
-          allContent.push(...child.children);
+      remainingColumns.forEach((col: any) => {
+        if (col.children && col.children.length > 0) {
+          allContent.push(...col.children.map((c: any) => ({
+            type: c.type,
+            props: c.props,
+            content: c.content,
+            children: c.children || [],
+          })));
         }
       });
-      editor.removeBlocks([block]);
+      // Insert content BEFORE removing column_list (so block.id is still valid)
       if (allContent.length > 0) {
-        editor.insertBlocks(allContent, block.id, 'after');
+        editor.insertBlocks(allContent, liveBlock, 'after');
       }
+      editor.removeBlocks([liveBlock]);
       return;
     }
 
-    // More than 2 columns remaining after deletion → use updateBlock with children
-    const remainingChildren = children.filter((_: any, i: number) => i !== colIndex);
-    const deletedRatio = children[colIndex]?.props?.widthRatio || Math.round(100 / columnCount);
+    // Multiple columns remain → redistribute width and remove target column
+    const liveCount = liveChildren.length;
+    const deletedRatio = liveChildren[colIndex]?.props?.widthRatio || Math.round(100 / liveCount);
     const scaleFactor = 100 / (100 - deletedRatio);
 
+    // Step 1: Calculate new ratios (CSS handles the visual width)
     let widthRemaining = 100;
-    const rebuiltChildren = remainingChildren.map((child: any, i: number) => {
-      const oldRatio = child.props?.widthRatio || Math.round(100 / columnCount);
+    const ratios: number[] = [];
+    remainingColumns.forEach((col: any, i: number) => {
+      const oldRatio = col.props?.widthRatio || Math.round(100 / liveCount);
       let newRatio: number;
-      if (i < remainingChildren.length - 1) {
+      if (i < remainingColumns.length - 1) {
         newRatio = Math.max(MIN_RATIO, Math.round(oldRatio * scaleFactor));
         widthRemaining -= newRatio;
       } else {
         newRatio = Math.max(MIN_RATIO, widthRemaining);
       }
-      return {
-        type: 'column',
-        props: { widthRatio: newRatio },
-        children: (child.children || []).map((c: any) => ({
-          type: c.type,
-          props: c.props,
-          content: c.content,
-          children: c.children || [],
-        })),
-      };
+      ratios.push(newRatio);
     });
 
-    const newRatios = rebuiltChildren.map((c: any) => c.props.widthRatio).join(',');
+    // Step 2: Inject CSS with new ratios BEFORE removing column (so layout is ready)
+    injectColumnCSS(ratios);
 
-    editor.updateBlock(block.id, {
-      type: 'column_list',
-      props: { columnRatios: newRatios },
-      children: rebuiltChildren,
-    } as any);
-  }, [block, children, columnCount, editor]);
+    // Step 3: Remove the target column
+    editor.removeBlocks([liveChildren[colIndex]]);
+
+    // Step 4: Update column_list props via PM transaction (updateBlock corrupts structure)
+    const pmView = (editor as any).prosemirrorView;
+    if (pmView) {
+      const { state } = pmView;
+      let foundPos = -1, foundNode: any = null;
+      state.doc.descendants((node: any, pos: number) => {
+        if (foundNode) return false;
+        if (node.attrs?.id === block.id) { foundPos = pos; foundNode = node; return false; }
+      });
+      if (foundNode) {
+        pmView.dispatch(state.tr.setNodeMarkup(foundPos, undefined, {
+          ...foundNode.attrs,
+          columnRatios: ratios.join(','),
+        }));
+      }
+    }
+  }, [block.id, editor, injectColumnCSS]);
 
   // Resize handler
   const handleResizeStart = useCallback((colIndex: number, e: React.MouseEvent) => {
@@ -457,11 +557,24 @@ function ColumnListComponent({ block, editor }: any) {
 
       const leftChild = childrenRef.current[ci];
       const rightChild = childrenRef.current[ci + 1];
-      if (leftChild) {
-        editor.updateBlock(leftChild.id, { type: 'column', props: { widthRatio: newLeft } } as any);
-      }
-      if (rightChild) {
-        editor.updateBlock(rightChild.id, { type: 'column', props: { widthRatio: newRight } } as any);
+      // Use PM transaction to update column props (updateBlock corrupts structure)
+      const pmView = (editor as any).prosemirrorView;
+      if (pmView) {
+        const { state } = pmView;
+        const updates: Record<string, number> = {};
+        if (leftChild) updates[leftChild.id] = newLeft;
+        if (rightChild) updates[rightChild.id] = newRight;
+        let tr = state.tr;
+        state.doc.descendants((node: any, pos: number) => {
+          const newRatio = updates[node.attrs?.id];
+          if (newRatio !== undefined) {
+            tr = tr.setNodeMarkup(pos, undefined, {
+              ...node.attrs,
+              widthRatio: newRatio,
+            });
+          }
+        });
+        pmView.dispatch(tr);
       }
 
       // Directly update CSS for instant visual feedback (don't wait for React re-render)
@@ -473,7 +586,13 @@ function ColumnListComponent({ block, editor }: any) {
           return r;
         });
         const gs = allRatios.length > 1 ? ((allRatios.length - 1) * 52) / allRatios.length : 0;
-        let css = `.bn-block:has([data-column-list-id="${block.id}"]) > .bn-block-group { display: flex !important; }`;
+        let css = `
+.bn-block-outer:has([data-column-list-id="${block.id}"]) {
+  flex-shrink: 0 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+.bn-block:has([data-column-list-id="${block.id}"]) > .bn-block-group { display: flex !important; }`;
         allRatios.forEach((ratio: number, i: number) => {
           css += `\n.bn-block:has([data-column-list-id="${block.id}"]) > .bn-block-group > .bn-block-outer:nth-child(${i + 1}) { flex: 0 0 calc(${ratio}% - ${gs}px) !important; max-width: calc(${ratio}% - ${gs}px) !important; }`;
         });
@@ -522,52 +641,211 @@ function ColumnListComponent({ block, editor }: any) {
     document.addEventListener('mouseup', handleUp);
   }, [editor]);
 
-  // Backspace on empty last paragraph in a column → delete that column
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
-      const sel = window.getSelection();
-      if (!sel || !sel.isCollapsed) return;
-      const anchor = sel.anchorNode;
-      if (!anchor) return;
+  // ─── Enter key in column: insert new paragraph below cursor ───
+  // BN treats column blocks as atomic (content:"none"), so its default Enter
+  // handler doesn't know about children and corrupts the structure.
+  // We intercept Enter here and manually insert a new block into the column.
+  const handleEnterInColumn = useCallback((e: KeyboardEvent) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
 
-      const element = anchor instanceof Text ? anchor.parentElement : anchor as HTMLElement;
-      if (!element) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.isCollapsed) return;
+    const anchor = sel.anchorNode;
+    if (!anchor) return;
 
-      const columnContent = element.closest('[data-content-type="column"]');
-      if (!columnContent) return;
+    // Use BN API to get current cursor position — this works regardless of DOM structure
+    // Note: We cannot use DOM to detect if cursor is inside a column, because column blocks
+    // have content:"none" and don't render [data-content-type="column"] elements.
+    // Instead, we rely entirely on BN's block API to determine the nesting.
+    let cursorPos;
+    try {
+      cursorPos = editor.getTextCursorPosition();
+    } catch {
+      return;
+    }
+    if (!cursorPos) return;
 
-      const columnBnBlock = columnContent.closest('.bn-block');
-      if (!columnBnBlock) return;
+    const currentBlock = cursorPos.block;
+    const currentBlockId = currentBlock.id;
 
-      const blockGroup = columnBnBlock.querySelector(':scope > .bn-block-group');
-      if (!blockGroup) return;
+    // Check if the current block's parent is a column or column_list
+    // BN's getParentBlock may return column_list directly (since column is atomic with content:"none")
+    const parentBlock = editor.getParentBlock(currentBlockId);
+    if (!parentBlock) return;
 
-      const childOuters = blockGroup.querySelectorAll(':scope > .bn-block-outer');
-      if (childOuters.length !== 1) return;
+    let columnBlockId: string | null = null;
+    let liveColumn: any = null;
 
-      const onlyChild = childOuters[0];
-      const paragraph = onlyChild.querySelector('[data-content-type="paragraph"]');
-      if (!paragraph) return;
-      const inlineContent = paragraph.querySelector('.bn-inline-content');
-      if (!inlineContent) return;
+    if (parentBlock.type === 'column') {
+      // Direct parent is a column block
+      columnBlockId = parentBlock.id;
+      liveColumn = editor.getBlock(columnBlockId);
+    } else if (parentBlock.type === 'column_list') {
+      // Parent is column_list — need to find which column child contains our block
+      const columnList = editor.getBlock(parentBlock.id);
+      if (!columnList?.children) return;
+      for (const col of columnList.children) {
+        const liveCol = editor.getBlock(col.id);
+        if (liveCol?.children) {
+          const found = liveCol.children.find((c: any) => c.id === currentBlockId);
+          if (found) {
+            columnBlockId = col.id;
+            liveColumn = liveCol;
+            break;
+          }
+        }
+      }
+      if (!columnBlockId || !liveColumn) return;
+    } else {
+      return; // Not inside a column
+    }
 
-      const text = inlineContent.textContent || '';
-      if (text.trim() !== '') return;
+    if (!liveColumn.children) return;
 
-      const columnOuter = columnBnBlock.closest('.bn-block-outer');
-      if (!columnOuter) return;
-      const siblings = Array.from(columnOuter.parentElement?.children || []);
-      const colIndex = siblings.indexOf(columnOuter);
+    // Find the index of the current content block in the column's children
+    const blockIndex = liveColumn.children.findIndex((c: any) => c.id === currentBlockId);
+    if (blockIndex < 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Insert a new paragraph after the current block inside the column
+    // Use insertBlocks instead of updateBlock (which corrupts column structure)
+    const currentBlockInColumn = liveColumn.children[blockIndex];
+    editor.insertBlocks([{ type: 'paragraph' as const }], currentBlockInColumn, 'after');
+
+    // Move cursor to the newly inserted paragraph
+    requestAnimationFrame(() => {
+      try {
+        const updatedColumn = editor.getBlock(columnBlockId);
+        if (updatedColumn && updatedColumn.children) {
+          const newBlock = (updatedColumn.children as any[])[blockIndex + 1];
+          if (newBlock) {
+            editor.setTextCursorPosition(newBlock.id, 'start');
+          }
+        }
+      } catch {
+        // ignore cursor errors
+      }
+    });
+  }, [editor]);
+
+  // ─── Backspace/Delete in column: prevent BN default and handle manually ───
+  // Same problem as Enter: BN treats column blocks as atomic (content:"none"),
+  // so its default Backspace handler doesn't know about children.
+  const handleBackspaceInColumn = useCallback((e: KeyboardEvent) => {
+    if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+
+    const sel = window.getSelection();
+    if (!sel || !sel.isCollapsed) return;
+    const anchor = sel.anchorNode;
+    if (!anchor) return;
+
+    // Use BN API to determine cursor position (same approach as Enter handler)
+    let cursorPos;
+    try {
+      cursorPos = editor.getTextCursorPosition();
+    } catch {
+      return;
+    }
+    if (!cursorPos) return;
+
+    const currentBlock = cursorPos.block;
+    const currentBlockId = currentBlock.id;
+
+    // Check if cursor is at the very start of the block (for Backspace) or end (for Delete)
+    // We only intercept when the cursor is at the boundary and the block is empty
+    // For non-empty blocks or mid-content cursor, let BN handle it normally
+    const parentBlock = editor.getParentBlock(currentBlockId);
+    if (!parentBlock) return;
+
+    let columnBlockId: string | null = null;
+    let liveColumn: any = null;
+    let columnListBlock: any = null;
+
+    if (parentBlock.type === 'column') {
+      columnBlockId = parentBlock.id;
+      liveColumn = editor.getBlock(columnBlockId);
+      columnListBlock = editor.getParentBlock(columnBlockId);
+    } else if (parentBlock.type === 'column_list') {
+      columnListBlock = editor.getBlock(parentBlock.id);
+      if (!columnListBlock?.children) return;
+      for (const col of columnListBlock.children) {
+        const liveCol = editor.getBlock(col.id);
+        if (liveCol?.children) {
+          const found = liveCol.children.find((c: any) => c.id === currentBlockId);
+          if (found) {
+            columnBlockId = col.id;
+            liveColumn = liveCol;
+            break;
+          }
+        }
+      }
+      if (!columnBlockId || !liveColumn) return;
+    } else {
+      return;
+    }
+
+    if (!liveColumn.children) return;
+
+    // Only intercept if the current block is an empty paragraph
+    // Check if content is empty
+    const content = currentBlock.content;
+    const isEmpty = !content || (Array.isArray(content) && content.length === 0) ||
+      (Array.isArray(content) && content.every((item: any) =>
+        (typeof item === 'string' && item === '') ||
+        (item.text === '') || (item.type === 'text' && item.text === '')
+      ));
+    if (!isEmpty) return;
+
+    // Find the index of the current block in the column's children
+    const blockIndex = liveColumn.children.findIndex((c: any) => c.id === currentBlockId);
+    if (blockIndex < 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Case 1: Column has only this one empty block → delete the entire column
+    if (liveColumn.children.length <= 1) {
+      // Find the column's index in column_list
+      if (!columnListBlock) columnListBlock = editor.getParentBlock(columnBlockId!);
+      if (!columnListBlock?.children) return;
+      const colIndex = columnListBlock.children.findIndex((c: any) => c.id === columnBlockId);
       if (colIndex < 0) return;
-
-      e.preventDefault();
       deleteColumn(colIndex);
-    };
+      return;
+    }
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [deleteColumn]);
+    // Case 2: Column has multiple blocks → remove just this empty block
+    // Use removeBlocks instead of updateBlock (which corrupts column structure)
+    const targetIndex = blockIndex > 0 ? blockIndex - 1 : 0;
+
+    editor.removeBlocks([liveColumn.children[blockIndex]]);
+
+    // Move cursor to the nearest remaining block
+    requestAnimationFrame(() => {
+      try {
+        const updatedColumn = editor.getBlock(columnBlockId!);
+        if (updatedColumn?.children && updatedColumn.children.length > 0) {
+          const targetBlock = (updatedColumn.children as any[])[Math.min(targetIndex, updatedColumn.children.length - 1)];
+          if (targetBlock) {
+            editor.setTextCursorPosition(targetBlock.id, 'end');
+          }
+        }
+      } catch {
+        // ignore cursor errors
+      }
+    });
+  }, [editor, deleteColumn]);
+
+  useEffect(() => {
+    document.addEventListener('keydown', handleBackspaceInColumn, true);
+    document.addEventListener('keydown', handleEnterInColumn, true);
+    return () => {
+      document.removeEventListener('keydown', handleBackspaceInColumn, true);
+      document.removeEventListener('keydown', handleEnterInColumn, true);
+    };
+  }, [handleBackspaceInColumn, handleEnterInColumn]);
 
   // Attach native mousedown listeners on resize handles (React's event delegation
   // conflicts with ProseMirror's capture-phase handlers, so native listeners are needed)

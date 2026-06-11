@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, type ChangeEvent } from 'reac
 import { createRoot, type Root } from 'react-dom/client';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
 import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow, toggleHeader } from 'prosemirror-tables';
+import { Fragment as PMFragment } from 'prosemirror-model';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
@@ -460,6 +461,62 @@ const NumberedListIndexFix = Extension.create({
         props: {
           decorations(state) {
             return pluginKey.getState(state) ?? DecorationSet.empty;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+/**
+ * Global state for column drag-and-drop.
+ * dragover writes to this, PM plugin's handleDOMEvents.drop reads it.
+ * Necessary because PM's handleDOMEvents runs BEFORE DOM addEventListener handlers,
+ * so our regular drop listener never fires for blocknote/html drags.
+ */
+type ColumnDragTargetInfo = {
+  type: string;
+  columnListId?: string;
+  blockId: string;
+  side: 'left' | 'right';
+  blockOuter: HTMLElement;
+  position?: 'above' | 'below';
+  columnBlockId?: string;
+  insertWidth?: number;
+};
+
+const columnDragState: {
+  target: ColumnDragTargetInfo | null;
+  onDrop: ((target: ColumnDragTargetInfo, pmView: any) => boolean) | null;
+  dragHandled: boolean;
+} = { target: null, onDrop: null, dragHandled: false };
+
+/**
+ * PM plugin that intercepts drop events for column operations.
+ */
+const ColumnDropPlugin = Extension.create({
+  name: 'columnDropInterceptor',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('columnDropInterceptor'),
+        props: {
+          handleDOMEvents: {
+            drop(view: any, event: any) {
+              if (columnDragState.dragHandled) {
+                columnDragState.dragHandled = false;
+                return true;
+              }
+              if (!columnDragState.target) return false;
+              if (!event.dataTransfer?.types?.includes('blocknote/html')) return false;
+              const target = columnDragState.target;
+              columnDragState.target = null;
+              if (columnDragState.onDrop) {
+                const handled = columnDragState.onDrop(target, view);
+                if (handled) { event.preventDefault(); return true; }
+              }
+              return false;
+            },
           },
         },
       }),
@@ -1681,7 +1738,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const result = await uploadApi.upload(file, { pageId, spaceSlug });
       return result.path;
     },
-    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators] },
+    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules
@@ -2820,8 +2877,24 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
         // ── Case 1: Hit column_list outer ──
         if (contentType === 'column_list') {
-          // Inside column_list → let Phase 2 handle gap/edge detection
-          return null;
+          const clRect = blockOuter.getBoundingClientRect();
+          const COL_EDGE_PX = 40;
+          // Left/right edge → addColumn
+          if (clientX <= clRect.left + COL_EDGE_PX) {
+            return { type: 'addColumn', blockId: blockId, blockOuter, side: 'left', columnListId: blockId };
+          }
+          if (clientX >= clRect.right - COL_EDGE_PX) {
+            return { type: 'addColumn', blockId: blockId, blockOuter, side: 'right', columnListId: blockId };
+          }
+          // Top/bottom area → insertAround
+          if (clientY <= clRect.top + 12) {
+            return { type: 'insertAround', blockId, blockOuter, side: 'left', position: 'above', columnListId: blockId };
+          }
+          if (clientY >= clRect.bottom - 12) {
+            return { type: 'insertAround', blockId, blockOuter, side: 'right', position: 'below', columnListId: blockId };
+          }
+          // Middle area → let Phase 2 handle gap detection
+          return findColumnDropTargetPhase2(clientX, clientY);
         }
 
         // ── Case 2: Hit a column outer (data-content-type="column") ──
@@ -2894,7 +2967,42 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (colListOuter) {
             const colListId = colListOuter.querySelector('[data-id]')?.getAttribute('data-id');
 
-            // addColumn is handled by Phase 2 when cursor is outside column_list
+            // Check if cursor is near the LEFT or RIGHT edge of the column_list.
+            // Since elementFromPoint always hits content blocks inside columns,
+            // Phase 2's edge detection never fires. We must detect edges here.
+            const clRect = colListOuter.getBoundingClientRect();
+            const COL_EDGE_PX = 20;
+            if (clientX <= clRect.left + COL_EDGE_PX) {
+              return {
+                type: 'addColumn', blockId: colListId!, blockOuter: colListOuter,
+                side: 'left', columnListId: colListId!,
+              };
+            }
+            if (clientX >= clRect.right - COL_EDGE_PX) {
+              return {
+                type: 'addColumn', blockId: colListId!, blockOuter: colListOuter,
+                side: 'right', columnListId: colListId!,
+              };
+            }
+
+            // Also check if cursor is in the gap between two columns.
+            // The gap is the region between one column's right edge and the next
+            // column's left edge.
+            const group = colListOuter.querySelector('.bn-block-group');
+            if (group) {
+              const columnOuters = group.querySelectorAll(':scope > .bn-block-outer');
+              const columnRects = Array.from(columnOuters).map(
+                el => (el as HTMLElement).getBoundingClientRect()
+              );
+              for (let i = 0; i < columnRects.length - 1; i++) {
+                if (clientX > columnRects[i].right && clientX < columnRects[i + 1].left) {
+                  return {
+                    type: 'addColumn', blockId: colListId!, blockOuter: colListOuter,
+                    side: 'right', columnListId: colListId!,
+                  };
+                }
+              }
+            }
 
             const bRect = blockOuter.getBoundingClientRect();
             const relY = (clientY - bRect.top) / bRect.height;
@@ -2943,6 +3051,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       // ── Phase 2b: Cursor outside any block — check root block edges ──
       // Trigger create when cursor is past a root block's edge.
+      // BUT: if the adjacent sibling is a column_list, convert to addColumn instead.
       {
         const rootBlocks = document.querySelectorAll(
           '.bn-editor > .bn-block-group > .bn-block-outer'
@@ -2952,13 +3061,61 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const bEl = rOuter as HTMLElement;
           const bR = bEl.getBoundingClientRect();
           if (clientY < bR.top || clientY > bR.bottom) continue;
+
+          // Check if this block is a column_list
+          const thisContentType = bEl.querySelector('[data-content-type]')?.getAttribute('data-content-type');
+          const thisBlockId = bEl.querySelector('[data-id]')?.getAttribute('data-id');
+
+          // Helper: check adjacent sibling for column_list
+          const checkAdjacentColumnList = (direction: 'previous' | 'next'): {
+            found: boolean;
+            clId?: string;
+            clOuter?: HTMLElement;
+          } => {
+            const sibling = direction === 'previous'
+              ? bEl.previousElementSibling
+              : bEl.nextElementSibling;
+            if (!sibling) return { found: false };
+            const sibCT = sibling.querySelector('[data-content-type]')?.getAttribute('data-content-type');
+            if (sibCT === 'column_list') {
+              const clId = sibling.querySelector('[data-id]')?.getAttribute('data-id');
+              return { found: true, clId: clId || undefined, clOuter: sibling as HTMLElement };
+            }
+            return { found: false };
+          };
+
           if (clientX < bR.left - EDGE_PX) {
-            const bId = bEl.querySelector('[data-id]')?.getAttribute('data-id');
-            if (bId) return { type: 'create', blockId: bId, blockOuter: bEl, side: 'left' };
+            const bId = thisBlockId;
+            if (!bId) continue;
+            // If this block itself is a column_list, addColumn
+            if (thisContentType === 'column_list') {
+              return { type: 'addColumn', blockId: bId, blockOuter: bEl, side: 'left', columnListId: bId };
+            }
+            // If adjacent sibling (left side → previous sibling) is column_list, addColumn to it
+            // But cursor is to the LEFT of current block, so the column_list would be the previous sibling
+            // Actually cursor is to the LEFT of current block's left edge → no sibling there
+            // This means cursor is in the gutter → create on this block
+            return { type: 'create', blockId: bId, blockOuter: bEl, side: 'left' };
           }
           if (clientX > bR.right + EDGE_PX) {
-            const bId = bEl.querySelector('[data-id]')?.getAttribute('data-id');
-            if (bId) return { type: 'create', blockId: bId, blockOuter: bEl, side: 'right' };
+            const bId = thisBlockId;
+            if (!bId) continue;
+            if (thisContentType === 'column_list') {
+              return { type: 'addColumn', blockId: bId, blockOuter: bEl, side: 'right', columnListId: bId };
+            }
+            return { type: 'create', blockId: bId, blockOuter: bEl, side: 'right' };
+          }
+          // Cursor is within the block's horizontal range but elementFromPoint didn't hit a blockOuter.
+          // This means we're in the block's padding/margin area.
+          // Check if cursor is near the left/right edge of the block.
+          if (thisContentType === 'column_list' && thisBlockId) {
+            const COL_EDGE_PX = 40;
+            if (clientX <= bR.left + COL_EDGE_PX) {
+              return { type: 'addColumn', blockId: thisBlockId, blockOuter: bEl, side: 'left', columnListId: thisBlockId };
+            }
+            if (clientX >= bR.right - COL_EDGE_PX) {
+              return { type: 'addColumn', blockId: thisBlockId, blockOuter: bEl, side: 'right', columnListId: thisBlockId };
+            }
           }
         }
       }
@@ -3151,12 +3308,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const target = findColumnDropTarget(e.clientX, e.clientY);
       if (!target) {
         clearColumnHighlight();
+        // Not a column drop target — let BN handle it
+        columnDragState.target = null;
         return;
       }
 
       // Don't drop on self (for create type)
       if (target.type === 'create' && dragData.blockIds.includes(target.blockId)) {
         clearColumnHighlight();
+        columnDragState.target = null;
         return;
       }
 
@@ -3165,6 +3325,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const isInsideColumn = !!target.blockOuter.closest('[data-content-type="column"]');
         if (isInsideColumn) {
           clearColumnHighlight();
+          columnDragState.target = null;
           return;
         }
       }
@@ -3172,6 +3333,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       e.preventDefault();
       e.stopPropagation(); // Prevent BN from interfering with our drop target
       lastDragTarget = target;
+
+      // Feed target info to the PM plugin so it can intercept the drop
+      if (target.type === 'addColumn' || target.type === 'create' || target.type === 'insertAround'
+          || target.type === 'insertInColumn' || target.type === 'moveBlock') {
+        columnDragState.target = {
+          type: target.type,
+          columnListId: target.columnListId,
+          blockId: target.blockId,
+          side: target.side,
+          blockOuter: target.blockOuter,
+          position: target.position,
+          columnBlockId: target.columnBlockId,
+          insertWidth: target.insertWidth,
+        } as any;
+      } else {
+        columnDragState.target = null;
+      }
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 
       // Hide BN's dropcursor visuals (we show our own indicator)
@@ -3217,61 +3395,42 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
     };
 
-    const handleColumnDrop = (e: DragEvent) => {
+    // ── Column drop logic ──
+    // This runs inside the ProseMirror handleDOMEvents.drop hook (via ColumnDropPlugin),
+    // NOT as a DOM addEventListener. PM's handleDOMEvents runs before DOM listeners,
+    // so our previous DOM-level drop handler never fired for blocknote/html drags.
+    columnDragState.onDrop = (target: ColumnDragTargetInfo, _pmView: any): boolean => {
       removeColumnLine();
 
       const dragData = getBlockDragData();
-      if (!dragData || dragData.blocks.length === 0) return;
+      if (!dragData || dragData.blocks.length === 0) return false;
 
-      // Use the last target from dragover (not recalculated at drop time,
-      // because cursor position at drop may differ from the last dragover)
-      const target = lastDragTarget;
-      lastDragTarget = null;
-      if (!target) return;
-
-      // Only remove BN dropcursors when we're handling the drop ourselves
-      removeBNDropCursors();
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Get the dragged block data
       const draggedBlock = dragData.blocks[0];
       const draggedBlockId = dragData.blockIds[0];
 
       try {
         if (target.type === 'addColumn') {
-          // ── Add column to existing column_list using updateBlock with children ──
+          // ── Add column to existing column_list ──
           const columnListBlock = findBlockDeep(editor.document, target.columnListId!);
-          if (!columnListBlock) return;
+          if (!columnListBlock) return false;
 
           // Don't allow dragging from inside the same column_list
-          if (dragData.blockIds.includes(target.columnListId!)) return;
+          if (dragData.blockIds.includes(target.columnListId!)) return false;
 
           const currentChildren = columnListBlock.children || [];
           const currentCount = currentChildren.length;
-          if (currentCount >= 5) return; // max 5 columns
+          if (currentCount >= 5) return false; // max 5 columns
 
           // Calculate new widths: new column gets 1/(n+1), others scale proportionally
+          // IMPORTANT: Do NOT call updateBlock on existing columns — it corrupts their structure.
           const newCount = currentCount + 1;
           const newColumnWidth = Math.round(100 / newCount);
           const scaleFactor = (100 - newColumnWidth) / 100;
 
-          // Build the new column with the dragged block's content
-          const newColumnData = {
-            type: 'column',
-            props: { widthRatio: newColumnWidth },
-            children: [{
-              type: draggedBlock.type,
-              props: draggedBlock.props,
-              content: draggedBlock.content,
-              children: draggedBlock.children || [],
-            }],
-          };
-
-          // Scale existing columns' widths proportionally
+          // Calculate new ratios (CSS will handle the visual width, we just store the props)
           let remaining = 100 - newColumnWidth;
-          const scaledChildren = currentChildren.map((child: any, i: number) => {
+          const allRatios: number[] = [];
+          currentChildren.forEach((child: any, i: number) => {
             const oldRatio = child.props?.widthRatio || Math.round(100 / currentCount);
             let newRatio: number;
             if (i < currentChildren.length - 1) {
@@ -3280,42 +3439,117 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             } else {
               newRatio = Math.max(15, remaining);
             }
-            return {
-              type: 'column',
-              props: { widthRatio: newRatio },
-              children: (child.children || []).map((c: any) => ({
-                type: c.type,
-                props: c.props,
-                content: c.content,
-                children: c.children || [],
-              })),
-            };
+            allRatios.push(newRatio);
           });
 
-          // Build final children array: new column at start or end
-          const finalChildren = target.side === 'left'
-            ? [newColumnData, ...scaledChildren]
-            : [...scaledChildren, newColumnData];
+          // Use editor.transact() to run a PM transaction through BN's pipeline.
+          // BN's exec() expects a BN command, not a PM callback.
+          // transact() gives us the PM transaction directly.
+          (editor as any).transact((tr: any) => {
+            const colListId = target.columnListId!;
+            const schema = tr.doc.type.schema;
+            const blockContainerType = schema.nodes['blockContainer'];
+            const blockGroupType = schema.nodes['blockGroup'];
+            const paraType = schema.nodes['paragraph'];
+            const columnType = schema.nodes['column'];
+            if (!blockContainerType || !blockGroupType || !paraType || !columnType) {
+              return;
+            }
 
-          // Atomically replace all children using updateBlock
-          editor.updateBlock(columnListBlock, {
-            type: 'column_list',
-            props: { columnRatios: finalChildren.map((c: any) => c.props.widthRatio).join(',') },
-            children: finalChildren,
-          } as any);
+            // Find the column_list's blockContainer by data-id
+            let colListBCPos = -1;
+            let colListBCNode: any = null;
+            tr.doc.descendants((node: any, pos: number) => {
+              if (colListBCNode) return false;
+              if (node.type === blockContainerType && node.attrs.id === colListId) {
+                colListBCPos = pos;
+                colListBCNode = node;
+                return false;
+              }
+            });
+            if (!colListBCNode) {
+              return;
+            }
 
-          // Remove the original dragged block
-          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
-          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+            // Find the blockGroup child (contains the column blockContainers)
+            let colListGroupNode: any = null;
+            let groupNodePos = -1;
+            colListBCNode.content.forEach((child: any, offset: number) => {
+              if (child.type === blockGroupType) {
+                colListGroupNode = child;
+                groupNodePos = colListBCPos + 1 + offset;
+              }
+            });
+            if (!colListGroupNode || groupNodePos < 0) {
+              return;
+            }
+
+            // Build new column:
+            // blockContainer[data-id] > column + blockGroup > blockContainer > paragraph
+            const newColId = crypto.randomUUID?.() || (Date.now().toString(36) + Math.random().toString(36).substring(2));
+            let paraNode;
+            try {
+              const draggedContent = draggedBlock.content;
+              if (draggedContent && Array.isArray(draggedContent) && draggedContent.length > 0) {
+                // Convert BN inline content to PM text nodes directly
+                const textParts: any[] = [];
+                for (const item of draggedContent) {
+                  if (typeof item === 'string') {
+                    textParts.push(schema.text(item));
+                  } else if (item.type === 'text' && item.text) {
+                    // TODO: handle styles (bold, italic, etc.) via marks
+                    textParts.push(schema.text(item.text));
+                  }
+                }
+                if (textParts.length > 0) {
+                  paraNode = paraType.create(null, textParts);
+                }
+              }
+            } catch(e) { /* ignore content conversion errors */ }
+            if (!paraNode) {
+              paraNode = paraType.create();
+            }
+
+            const innerBC = blockContainerType.create({ id: crypto.randomUUID?.() || '' }, paraNode);
+            const innerGroup = blockGroupType.create(null, innerBC);
+            const columnNode = columnType.create({ id: '', widthRatio: newColumnWidth });
+            const newColBC = blockContainerType.create({ id: newColId }, PMFragment.from([columnNode, innerGroup]));
+
+            // Insert into blockGroup at correct position
+            const insertOffset = target.side === 'left' ? 0 : colListGroupNode.content.size;
+            tr.insert(groupNodePos + 1 + insertOffset, newColBC);
+
+            // Update column_list columnRatios attr
+            const columnListNode = colListBCNode.firstChild;
+            const columnListPos = colListBCPos + 1;
+            tr.setNodeMarkup(columnListPos, undefined, {
+              ...columnListNode.attrs,
+              columnRatios: allRatios.join(','),
+            });
+
+            // Also delete the original dragged block within the same transaction
+            let draggedBlockPos = -1;
+            tr.doc.descendants((node: any, pos: number) => {
+              if (draggedBlockPos >= 0) return false;
+              if (node.type === blockContainerType && node.attrs.id === draggedBlockId) {
+                draggedBlockPos = pos;
+                return false;
+              }
+            });
+            if (draggedBlockPos >= 0) {
+              tr.delete(draggedBlockPos, draggedBlockPos + tr.doc.nodeAt(draggedBlockPos)!.nodeSize);
+            }
+
+          });
 
           markDragHandled();
         } else if (target.type === 'insertAround') {
           // ── Insert around column_list: place block above or below as root-level block ──
           const columnListBlock = findBlockDeep(editor.document, target.columnListId!);
-          if (!columnListBlock) return;
+          if (!columnListBlock) return false;
 
           // Don't allow dragging from inside the same column_list
-          if (dragData.blockIds.includes(target.columnListId!)) return;
+          if (dragData.blockIds.includes(target.columnListId!)) return false;
 
           const placement = target.position === 'above' ? 'before' : 'after';
           editor.insertBlocks([{
@@ -3333,10 +3567,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         } else if (target.type === 'insertInColumn') {
           // ── Insert within a column: move block before/after the target content block ──
           const targetBlock = findBlockDeep(editor.document, target.columnBlockId!);
-          if (!targetBlock) return;
+          if (!targetBlock) return false;
 
           // Don't drop on self
-          if (dragData.blockIds.includes(target.columnBlockId!)) return;
+          if (dragData.blockIds.includes(target.columnBlockId!)) return false;
 
           const placement = target.position === 'above' ? 'before' : 'after';
           editor.insertBlocks([{
@@ -3354,10 +3588,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         } else if (target.type === 'moveBlock') {
           // ── Move block before/after the target block (normal block-to-block) ──
           const targetBlock = findBlockDeep(editor.document, target.blockId);
-          if (!targetBlock) return;
+          if (!targetBlock) return false;
 
           // Don't drop on self
-          if (dragData.blockIds.includes(target.blockId)) return;
+          if (dragData.blockIds.includes(target.blockId)) return false;
 
           const placement = target.position === 'above' ? 'before' : 'after';
           editor.insertBlocks([{
@@ -3373,13 +3607,126 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           markDragHandled();
         } else {
-          // ── Create new column_list (original behavior) ──
-          if (dragData.blockIds.includes(target.blockId)) return;
+          // ── Create new column_list — BUT check if adjacent to an existing column_list first ──
+          if (dragData.blockIds.includes(target.blockId)) return false;
 
           const isInsideColumn = !!target.blockOuter.closest('[data-content-type="column"]');
-          if (isInsideColumn) return;
+          if (isInsideColumn) return false;
 
-          // Build the two column children
+          // Check if an adjacent sibling block is a column_list.
+          // If so, we should addColumn to it instead of creating a new column_list.
+          const targetBlockInDoc = findBlockDeep(editor.document, target.blockId);
+          if (targetBlockInDoc) {
+            // Find the parent block group's children to locate siblings
+            const siblingIds = editor.document
+              .filter((b: any) => true) // root-level blocks
+              .map((b: any) => b.id);
+            const targetIdx = siblingIds.indexOf(target.blockId);
+
+            // Check adjacent block
+            const adjacentIdx = target.side === 'left' ? targetIdx - 1 : targetIdx + 1;
+            if (adjacentIdx >= 0 && adjacentIdx < siblingIds.length) {
+              const adjacentBlock = findBlockDeep(editor.document, siblingIds[adjacentIdx]);
+              if (adjacentBlock && adjacentBlock.type === 'column_list') {
+                // Redirect: addColumn to the adjacent column_list instead of creating new
+                // Redirect: addColumn to the adjacent column_list instead of creating new
+                const currentChildren = adjacentBlock.children || [];
+                const newCount = currentChildren.length + 1;
+                const newColumnWidth = Math.round(100 / newCount);
+                const scaleFactor = (100 - newColumnWidth) / 100;
+
+                let remaining = 100 - newColumnWidth;
+                const allRatios: number[] = [];
+                currentChildren.forEach((child: any, i: number) => {
+                  const oldRatio = child.props?.widthRatio || Math.round(100 / currentChildren.length);
+                  let newRatio: number;
+                  if (i < currentChildren.length - 1) {
+                    newRatio = Math.max(15, Math.round(oldRatio * scaleFactor));
+                    remaining -= newRatio;
+                  } else {
+                    newRatio = Math.max(15, remaining);
+                  }
+                  allRatios.push(newRatio);
+                });
+
+                const colListId = adjacentBlock.id;
+                (editor as any).transact((tr: any) => {
+                  const schema = tr.doc.type.schema;
+                  const blockContainerType = schema.nodes['blockContainer'];
+                  const blockGroupType = schema.nodes['blockGroup'];
+                  const paraType = schema.nodes['paragraph'];
+                  const columnType = schema.nodes['column'];
+                  if (!blockContainerType || !blockGroupType || !paraType || !columnType) return;
+
+                  let colListBCPos = -1;
+                  let colListBCNode: any = null;
+                  tr.doc.descendants((node: any, pos: number) => {
+                    if (colListBCNode) return false;
+                    if (node.type === blockContainerType && node.attrs.id === colListId) {
+                      colListBCPos = pos;
+                      colListBCNode = node;
+                      return false;
+                    }
+                  });
+                  if (!colListBCNode) return;
+
+                  let colListGroupNode: any = null;
+                  let groupNodePos = -1;
+                  colListBCNode.content.forEach((child: any, offset: number) => {
+                    if (child.type === blockGroupType) {
+                      colListGroupNode = child;
+                      groupNodePos = colListBCPos + 1 + offset;
+                    }
+                  });
+                  if (!colListGroupNode || groupNodePos < 0) return;
+
+                  const newColId = crypto.randomUUID?.() || Date.now().toString(36);
+                  let paraNode;
+                  try {
+                    const draggedContent = draggedBlock.content;
+                    if (draggedContent && Array.isArray(draggedContent) && draggedContent.length > 0) {
+                      paraNode = paraType.create(null, (editor as any).inlineContentToNodes(draggedContent));
+                    }
+                  } catch(e) { /* ignore content conversion errors */ }
+                  if (!paraNode) paraNode = paraType.create();
+
+                  const innerBC = blockContainerType.create({ id: crypto.randomUUID?.() || '' }, paraNode);
+                  const innerGroup = blockGroupType.create(null, innerBC);
+                  const columnNode = columnType.create({ id: '', widthRatio: newColumnWidth });
+                  const newColBC = blockContainerType.create({ id: newColId }, PMFragment.from([columnNode, innerGroup]));
+
+                  const insertOffset = target.side === 'left' ? 0 : colListGroupNode.content.size;
+                  tr.insert(groupNodePos + 1 + insertOffset, newColBC);
+
+                  const columnListNode = colListBCNode.firstChild;
+                  const columnListPos = colListBCPos + 1;
+                  tr.setNodeMarkup(columnListPos, undefined, {
+                    ...columnListNode.attrs,
+                    columnRatios: allRatios.join(','),
+                  });
+
+                  let draggedBlockPos = -1;
+                  tr.doc.descendants((node: any, pos: number) => {
+                    if (draggedBlockPos >= 0) return false;
+                    if (node.type === blockContainerType && node.attrs.id === draggedBlockId) {
+                      draggedBlockPos = pos;
+                      return false;
+                    }
+                  });
+                  if (draggedBlockPos >= 0) {
+                    tr.delete(draggedBlockPos, draggedBlockPos + tr.doc.nodeAt(draggedBlockPos)!.nodeSize);
+                  }
+                });
+
+                markDragHandled();
+                removeBNDropCursors();
+                lastDragTarget = null;
+                return true;
+              }
+            }
+          }
+
+          // Build the two column children (normal create behavior)
           const makeColumnChild = (block: any) => ({
             type: 'column',
             props: { widthRatio: 50 },
@@ -3414,8 +3761,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           markDragHandled();
         }
+
+        // Remove BN dropcursors after successful column operation
+        removeBNDropCursors();
+        lastDragTarget = null;
+        return true; // Handled — tell PM to stop processing this drop
       } catch (err) {
         console.error('[PageEditor] Failed to create/modify column layout:', err);
+        return false;
       }
     };
 
@@ -3425,17 +3778,19 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
     };
 
-    // Register on document so dragover fires even when cursor is outside the container.
-    document.addEventListener('dragover', handleColumnDragOver, true);
-    document.addEventListener('drop', handleColumnDrop, true);
+    // dragover: registered on window (capture phase) so it fires before BN's handlers.
+    // drop: handled by ColumnDropPlugin (PM handleDOMEvents), NOT via DOM addEventListener,
+    // because PM's handleDOMEvents.drop runs before any DOM addEventListener('drop').
+    window.addEventListener('dragover', handleColumnDragOver, true);
     document.addEventListener('dragleave', handleColumnDragLeave);
-    const handleColumnDragEnd = () => { removeColumnLine(); removeBNDropCursors(); };
+    const handleColumnDragEnd = () => { removeColumnLine(); removeBNDropCursors(); columnDragState.target = null; };
     document.addEventListener('dragend', handleColumnDragEnd);
     return () => {
-      document.removeEventListener('dragover', handleColumnDragOver, true);
-      document.removeEventListener('drop', handleColumnDrop, true);
+      window.removeEventListener('dragover', handleColumnDragOver, true);
       document.removeEventListener('dragleave', handleColumnDragLeave);
       document.removeEventListener('dragend', handleColumnDragEnd);
+      columnDragState.onDrop = null;
+      columnDragState.target = null;
       clearColumnHighlight();
       removeColumnLine();
       removeBNDropCursors();
