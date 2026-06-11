@@ -21,7 +21,7 @@ import { Extension } from '@tiptap/core';
 import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
-import { ColumnListBlockSpec, ColumnBlockSpec } from './ColumnListBlock';
+import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
 import { getBlockDragData, markDragHandled } from './blockDragState';
@@ -1710,6 +1710,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
   // Refs for values read inside callbacks — avoid stale closures
   const hasChangesRef = useRef(false);
+  const isNormalizingColumnsRef = useRef(false);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const identityRef = useRef(pageIdentity);
@@ -4056,25 +4057,93 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   }, [editor, readOnly]);
 
   const handleChange = useCallback(() => {
-    // Clean up empty column structures after content deletion
-    // When all content blocks inside columns are deleted, remove the column_list skeleton
-    try {
-      const doc = editor.document;
-      const toRemove: any[] = [];
-      for (const block of doc) {
-        if (block.type === 'column_list') {
-          const hasContent = (block.children || []).some(
-            (col: any) => col.children && col.children.length > 0
-          );
-          if (!hasContent) {
-            toRemove.push(block);
+    // Normalize column layouts after deletion:
+    // 1. remove empty columns
+    // 2. dissolve column_list when only one non-empty column remains
+    // 3. remove empty column_list skeletons
+    if (!isNormalizingColumnsRef.current) {
+      isNormalizingColumnsRef.current = true;
+      try {
+        const doc = editor.document;
+        for (const block of doc) {
+          if (block.type !== 'column_list') continue;
+
+          const liveBlock = editor.getBlock(block.id);
+          if (!liveBlock) continue;
+          const liveChildren = (liveBlock?.children || []) as any[];
+          if (liveChildren.length === 0) {
+            editor.removeBlocks([liveBlock]);
+            break;
           }
+
+          const nonEmptyColumns = liveChildren.filter(
+            (col: any) => Array.isArray(col.children) && col.children.length > 0
+          );
+
+          if (nonEmptyColumns.length === liveChildren.length) continue;
+
+          if (nonEmptyColumns.length === 0) {
+            editor.removeBlocks([liveBlock]);
+            break;
+          }
+
+          if (nonEmptyColumns.length === 1) {
+            const liftedBlocks = (nonEmptyColumns[0].children || []).map((child: any) => ({
+              type: child.type,
+              props: child.props,
+              content: child.content,
+              children: child.children || [],
+            }));
+            if (liftedBlocks.length > 0) {
+              editor.insertBlocks(liftedBlocks as any, liveBlock, 'after');
+            }
+            editor.removeBlocks([liveBlock]);
+            break;
+          }
+
+          const emptyColumns = liveChildren.filter(
+            (col: any) => !Array.isArray(col.children) || col.children.length === 0
+          );
+          if (emptyColumns.length === 0) continue;
+
+          const emptyColumnIds = new Set(emptyColumns.map((col: any) => col.id));
+          const ratiosFromProps = typeof liveBlock.props?.columnRatios === 'string'
+            ? (liveBlock.props.columnRatios as string).split(',').map(Number)
+            : [];
+          const fallbackRatio = Math.round(100 / liveChildren.length);
+          const sourceRatios = liveChildren.map((col: any, index: number) => {
+            const liveWidthRatio = Number(col.props?.widthRatio);
+            const ratio = ratiosFromProps[index];
+            return Number.isFinite(liveWidthRatio) && liveWidthRatio > 0
+              ? liveWidthRatio
+              : (Number.isFinite(ratio) && ratio > 0 ? ratio : fallbackRatio);
+          });
+          const removedIndices = liveChildren.reduce((indices: number[], col: any, index: number) => {
+            if (emptyColumnIds.has(col.id)) indices.push(index);
+            return indices;
+          }, []);
+          const blockEl = document.querySelector(`[data-column-list-id="${block.id}"]`)?.closest('.bn-block');
+          const blockGroup = blockEl?.querySelector(':scope > .bn-block-group') as HTMLElement | null;
+          const containerWidth = blockGroup?.getBoundingClientRect().width ?? 0;
+          const columnOuters = blockGroup
+            ? Array.from(blockGroup.querySelectorAll(':scope > .bn-block-outer')) as HTMLElement[]
+            : [];
+          const visibleWidths = columnOuters.map((outer) => outer.getBoundingClientRect().width);
+          const normalizedRatios = visibleWidths.length === liveChildren.length
+            ? redistributeColumnRatiosFromWidths(visibleWidths, removedIndices, containerWidth)
+            : redistributeColumnRatios(sourceRatios, removedIndices, containerWidth);
+
+          editor.removeBlocks(emptyColumns);
+
+          updateColumnListRatios(editor, block.id, normalizedRatios);
+          break;
         }
+      } catch {
+        // ignore during cleanup
+      } finally {
+        isNormalizingColumnsRef.current = false;
       }
-      if (toRemove.length > 0) {
-        editor.removeBlocks(toRemove);
-      }
-    } catch { /* ignore during cleanup */ }
+    }
 
     hasChangesRef.current = true;
     onSyncStatusChangeRef.current?.('unsaved');

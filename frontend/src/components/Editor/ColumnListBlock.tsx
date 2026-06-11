@@ -17,6 +17,154 @@ export const ColumnBlockSpec = createReactBlockSpec(
 
 const MIN_RATIO = 15;
 const MAX_COLUMNS = 5;
+export const COLUMN_GAP_PX = 52;
+
+function normalizeRatiosToHundred(rawRatios: number[]) {
+  if (rawRatios.length === 0) return [];
+
+  const safeRatios = rawRatios.map((ratio) => Math.max(0, ratio));
+  const floors = safeRatios.map((ratio) => Math.floor(ratio));
+  let remainder = 100 - floors.reduce((sum, ratio) => sum + ratio, 0);
+
+  const ranked = safeRatios
+    .map((ratio, index) => ({ index, fraction: ratio - Math.floor(ratio) }))
+    .sort((a, b) => b.fraction - a.fraction);
+
+  for (let i = 0; i < ranked.length && remainder > 0; i += 1, remainder -= 1) {
+    floors[ranked[i].index] += 1;
+  }
+
+  if (remainder < 0) {
+    const reverseRanked = [...ranked].reverse();
+    for (let i = 0; i < reverseRanked.length && remainder < 0; i += 1, remainder += 1) {
+      floors[reverseRanked[i].index] -= 1;
+    }
+  }
+
+  return floors;
+}
+
+export function redistributeColumnRatios(
+  ratios: number[],
+  removedIndices: number[],
+  containerWidth: number,
+) {
+  const removedIndexSet = new Set(removedIndices);
+  const remainingRatios = ratios.filter((_, index) => !removedIndexSet.has(index));
+  if (remainingRatios.length <= 1) return remainingRatios;
+
+  const oldCount = ratios.length;
+  const newCount = remainingRatios.length;
+  if (!Number.isFinite(containerWidth) || containerWidth <= 0) {
+    const total = remainingRatios.reduce((sum, ratio) => sum + ratio, 0) || newCount;
+    return normalizeRatiosToHundred(
+      remainingRatios.map((ratio) => (ratio / total) * 100)
+    );
+  }
+
+  const oldGapShare = oldCount > 1 ? ((oldCount - 1) * COLUMN_GAP_PX) / oldCount : 0;
+  const newGapShare = newCount > 1 ? ((newCount - 1) * COLUMN_GAP_PX) / newCount : 0;
+  const remainingVisibleWidths = remainingRatios.map((ratio) =>
+    Math.max(0, (containerWidth * ratio) / 100 - oldGapShare)
+  );
+  const oldVisibleTotal = remainingVisibleWidths.reduce((sum, width) => sum + width, 0);
+  const newVisibleTotal = Math.max(0, containerWidth - (newCount - 1) * COLUMN_GAP_PX);
+
+  if (oldVisibleTotal <= 0 || newVisibleTotal <= 0) {
+    const total = remainingRatios.reduce((sum, ratio) => sum + ratio, 0) || newCount;
+    return normalizeRatiosToHundred(
+      remainingRatios.map((ratio) => (ratio / total) * 100)
+    );
+  }
+
+  const scaledRatios = remainingVisibleWidths.map((width) => {
+    const nextVisibleWidth = (width / oldVisibleTotal) * newVisibleTotal;
+    return ((nextVisibleWidth + newGapShare) / containerWidth) * 100;
+  });
+
+  return normalizeRatiosToHundred(scaledRatios);
+}
+
+export function redistributeColumnRatiosFromWidths(
+  visibleWidths: number[],
+  removedIndices: number[],
+  containerWidth: number,
+) {
+  const removedIndexSet = new Set(removedIndices);
+  const remainingWidths = visibleWidths.filter((_, index) => !removedIndexSet.has(index));
+  const newCount = remainingWidths.length;
+  if (newCount <= 1) return newCount === 1 ? [100] : [];
+
+  const safeContainerWidth = Number.isFinite(containerWidth) ? containerWidth : 0;
+  const newGapShare = newCount > 1 ? ((newCount - 1) * COLUMN_GAP_PX) / newCount : 0;
+  const oldVisibleTotal = remainingWidths.reduce((sum, width) => sum + Math.max(0, width), 0);
+  const newVisibleTotal = Math.max(0, safeContainerWidth - (newCount - 1) * COLUMN_GAP_PX);
+
+  if (safeContainerWidth <= 0 || oldVisibleTotal <= 0 || newVisibleTotal <= 0) {
+    return normalizeRatiosToHundred(Array(newCount).fill(100 / newCount));
+  }
+
+  const scaledRatios = remainingWidths.map((width) => {
+    const nextVisibleWidth = (Math.max(0, width) / oldVisibleTotal) * newVisibleTotal;
+    return ((nextVisibleWidth + newGapShare) / safeContainerWidth) * 100;
+  });
+
+  return normalizeRatiosToHundred(scaledRatios);
+}
+
+export function updateColumnListRatios(editor: any, blockId: string, ratios: number[]) {
+  const pmView = editor?.prosemirrorView;
+  if (!pmView) return false;
+
+  const { state } = pmView;
+  let tr = state.tr;
+  let updated = false;
+
+  state.doc.descendants((node: any, pos: number) => {
+    if (updated) return false;
+    if (node.type?.name !== 'blockContainer' || node.attrs?.id !== blockId) return;
+    const columnListNode = node.firstChild;
+    if (!columnListNode || columnListNode.type?.name !== 'column_list') return false;
+    tr = tr.setNodeMarkup(pos + 1, undefined, {
+      ...columnListNode.attrs,
+      columnRatios: ratios.join(','),
+    });
+    updated = true;
+    return false;
+  });
+
+  if (updated) {
+    pmView.dispatch(tr);
+  }
+  return updated;
+}
+
+export function updateColumnWidthRatios(editor: any, updates: Record<string, number>) {
+  const pmView = editor?.prosemirrorView;
+  if (!pmView) return false;
+
+  const { state } = pmView;
+  let tr = state.tr;
+  let updated = false;
+
+  state.doc.descendants((node: any, pos: number) => {
+    if (node.type?.name !== 'blockContainer') return;
+    const nextRatio = updates[node.attrs?.id];
+    if (nextRatio === undefined) return;
+    const columnNode = node.firstChild;
+    if (!columnNode || columnNode.type?.name !== 'column') return false;
+    tr = tr.setNodeMarkup(pos + 1, undefined, {
+      ...columnNode.attrs,
+      widthRatio: nextRatio,
+    });
+    updated = true;
+  });
+
+  if (updated) {
+    pmView.dispatch(tr);
+  }
+  return updated;
+}
 
 function ColumnListComponent({ block, editor }: any) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,7 +196,7 @@ function ColumnListComponent({ block, editor }: any) {
     const style = document.createElement('style');
     style.id = styleId;
 
-    const gapShare = ratios.length > 1 ? ((ratios.length - 1) * 52) / ratios.length : 0;
+    const gapShare = ratios.length > 1 ? ((ratios.length - 1) * COLUMN_GAP_PX) / ratios.length : 0;
     let css = `
 /* Column list outer: take full width, don't shrink */
 .bn-block-outer:has([data-column-list-id="${block.id}"]) {
@@ -409,21 +557,7 @@ function ColumnListComponent({ block, editor }: any) {
     }], lastColumn, 'after');
 
     // Step 3: Update column_list props via PM transaction (updateBlock corrupts structure)
-    const pmView = (editor as any).prosemirrorView;
-    if (pmView) {
-      const { state } = pmView;
-      let foundPos = -1, foundNode: any = null;
-      state.doc.descendants((node: any, pos: number) => {
-        if (foundNode) return false;
-        if (node.attrs?.id === block.id) { foundPos = pos; foundNode = node; return false; }
-      });
-      if (foundNode) {
-        pmView.dispatch(state.tr.setNodeMarkup(foundPos, undefined, {
-          ...foundNode.attrs,
-          columnRatios: allRatios.join(','),
-        }));
-      }
-    }
+    updateColumnListRatios(editor, block.id, allRatios);
   }, [block.id, editor, injectColumnCSS]);
 
   // Delete a column — removed column's width is redistributed proportionally to remaining columns
@@ -460,24 +594,27 @@ function ColumnListComponent({ block, editor }: any) {
     }
 
     // Multiple columns remain → redistribute width and remove target column
-    const liveCount = liveChildren.length;
-    const deletedRatio = liveChildren[colIndex]?.props?.widthRatio || Math.round(100 / liveCount);
-    const scaleFactor = 100 / (100 - deletedRatio);
-
-    // Step 1: Calculate new ratios (CSS handles the visual width)
-    let widthRemaining = 100;
-    const ratios: number[] = [];
-    remainingColumns.forEach((col: any, i: number) => {
-      const oldRatio = col.props?.widthRatio || Math.round(100 / liveCount);
-      let newRatio: number;
-      if (i < remainingColumns.length - 1) {
-        newRatio = Math.max(MIN_RATIO, Math.round(oldRatio * scaleFactor));
-        widthRemaining -= newRatio;
-      } else {
-        newRatio = Math.max(MIN_RATIO, widthRemaining);
-      }
-      ratios.push(newRatio);
+    const blockEl = containerRef.current?.closest('.bn-block');
+    const blockGroup = blockEl?.querySelector(':scope > .bn-block-group') as HTMLElement | null;
+    const containerWidth = blockGroup?.getBoundingClientRect().width ?? 0;
+    const columnOuters = blockGroup
+      ? Array.from(blockGroup.querySelectorAll(':scope > .bn-block-outer')) as HTMLElement[]
+      : [];
+    const visibleWidths = columnOuters.map((outer) => outer.getBoundingClientRect().width);
+    const fallbackRatio = Math.round(100 / liveChildren.length);
+    const currentRatios = typeof liveBlock.props?.columnRatios === 'string'
+      ? (liveBlock.props.columnRatios as string).split(',').map(Number)
+      : [];
+    const sourceRatios = liveChildren.map((col: any, index: number) => {
+      const liveWidthRatio = Number(col.props?.widthRatio);
+      const ratio = currentRatios[index];
+      return Number.isFinite(liveWidthRatio) && liveWidthRatio > 0
+        ? liveWidthRatio
+        : (Number.isFinite(ratio) && ratio > 0 ? ratio : fallbackRatio);
     });
+    const ratios = visibleWidths.length === liveChildren.length
+      ? redistributeColumnRatiosFromWidths(visibleWidths, [colIndex], containerWidth)
+      : redistributeColumnRatios(sourceRatios, [colIndex], containerWidth);
 
     // Step 2: Inject CSS with new ratios BEFORE removing column (so layout is ready)
     injectColumnCSS(ratios);
@@ -486,21 +623,7 @@ function ColumnListComponent({ block, editor }: any) {
     editor.removeBlocks([liveChildren[colIndex]]);
 
     // Step 4: Update column_list props via PM transaction (updateBlock corrupts structure)
-    const pmView = (editor as any).prosemirrorView;
-    if (pmView) {
-      const { state } = pmView;
-      let foundPos = -1, foundNode: any = null;
-      state.doc.descendants((node: any, pos: number) => {
-        if (foundNode) return false;
-        if (node.attrs?.id === block.id) { foundPos = pos; foundNode = node; return false; }
-      });
-      if (foundNode) {
-        pmView.dispatch(state.tr.setNodeMarkup(foundPos, undefined, {
-          ...foundNode.attrs,
-          columnRatios: ratios.join(','),
-        }));
-      }
-    }
+    updateColumnListRatios(editor, block.id, ratios);
   }, [block.id, editor, injectColumnCSS]);
 
   // Resize handler
@@ -557,34 +680,21 @@ function ColumnListComponent({ block, editor }: any) {
 
       const leftChild = childrenRef.current[ci];
       const rightChild = childrenRef.current[ci + 1];
+      const allRatios = startRatios.map((r: number, idx: number) => {
+        if (idx === ci) return newLeft;
+        if (idx === ci + 1) return newRight;
+        return r;
+      });
       // Use PM transaction to update column props (updateBlock corrupts structure)
-      const pmView = (editor as any).prosemirrorView;
-      if (pmView) {
-        const { state } = pmView;
-        const updates: Record<string, number> = {};
-        if (leftChild) updates[leftChild.id] = newLeft;
-        if (rightChild) updates[rightChild.id] = newRight;
-        let tr = state.tr;
-        state.doc.descendants((node: any, pos: number) => {
-          const newRatio = updates[node.attrs?.id];
-          if (newRatio !== undefined) {
-            tr = tr.setNodeMarkup(pos, undefined, {
-              ...node.attrs,
-              widthRatio: newRatio,
-            });
-          }
-        });
-        pmView.dispatch(tr);
-      }
+      const updates: Record<string, number> = {};
+      if (leftChild) updates[leftChild.id] = newLeft;
+      if (rightChild) updates[rightChild.id] = newRight;
+      updateColumnWidthRatios(editor, updates);
+      updateColumnListRatios(editor, block.id, allRatios);
 
       // Directly update CSS for instant visual feedback (don't wait for React re-render)
       const styleEl = document.getElementById(`col-style-${block.id}`);
       if (styleEl) {
-        const allRatios = startRatios.map((r: number, idx: number) => {
-          if (idx === ci) return newLeft;
-          if (idx === ci + 1) return newRight;
-          return r;
-        });
         const gs = allRatios.length > 1 ? ((allRatios.length - 1) * 52) / allRatios.length : 0;
         let css = `
 .bn-block-outer:has([data-column-list-id="${block.id}"]) {
