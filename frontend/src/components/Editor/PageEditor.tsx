@@ -2857,7 +2857,62 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       insertWidth?: number;            // for insertInColumn: width of the indicator line
     }
 
+    const getRootLevelBoundaryTarget = (clientX: number, clientY: number): ColumnDropTarget | null => {
+      const rootBlocks = Array.from(
+        document.querySelectorAll('.bn-editor > .bn-block-group > .bn-block-outer')
+      ) as HTMLElement[];
+      const BOUNDARY_ZONE_PX = 10;
+
+      for (let i = 0; i < rootBlocks.length - 1; i++) {
+        const upper = rootBlocks[i];
+        const lower = rootBlocks[i + 1];
+        const upperType = upper.querySelector('[data-content-type]')?.getAttribute('data-content-type');
+        const lowerType = lower.querySelector('[data-content-type]')?.getAttribute('data-content-type');
+
+        if (upperType !== 'column_list' && lowerType !== 'column_list') continue;
+        if (upperType === 'column_list' && lowerType === 'column_list') continue;
+
+        const upperRect = upper.getBoundingClientRect();
+        const lowerRect = lower.getBoundingClientRect();
+        const boundaryY = (upperRect.bottom + lowerRect.top) / 2;
+        if (Math.abs(clientY - boundaryY) > BOUNDARY_ZONE_PX) continue;
+
+        const horizontalLeft = Math.min(upperRect.left, lowerRect.left) - 4;
+        const horizontalRight = Math.max(upperRect.right, lowerRect.right) + 4;
+        if (clientX < horizontalLeft || clientX > horizontalRight) continue;
+
+        if (lowerType === 'column_list') {
+          const columnListId = lower.querySelector('[data-id]')?.getAttribute('data-id');
+          if (!columnListId) return null;
+          return {
+            type: 'insertAround',
+            blockId: columnListId,
+            blockOuter: lower,
+            side: 'left',
+            position: 'above',
+            columnListId,
+          };
+        }
+
+        const columnListId = upper.querySelector('[data-id]')?.getAttribute('data-id');
+        if (!columnListId) return null;
+        return {
+          type: 'insertAround',
+          blockId: columnListId,
+          blockOuter: upper,
+          side: 'right',
+          position: 'below',
+          columnListId,
+        };
+      }
+
+      return null;
+    };
+
     const findColumnDropTarget = (clientX: number, clientY: number): ColumnDropTarget | null => {
+      const rootBoundaryTarget = getRootLevelBoundaryTarget(clientX, clientY);
+      if (rootBoundaryTarget) return rootBoundaryTarget;
+
       const el = document.elementFromPoint(clientX, clientY);
       if (!el) return null;
 
