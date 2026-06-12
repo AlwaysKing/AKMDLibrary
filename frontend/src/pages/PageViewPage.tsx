@@ -167,7 +167,17 @@ export default function PageViewPage() {
   }
 
   if (!currentPage) {
-    // Not loading, no error, but no page — page was deleted or doesn't exist
+    // No page and no error yet means the first fetch hasn't resolved.
+    // Keep showing the loading state instead of flashing a false 404.
+    if (!error) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-notion-border border-t-notion-text"></div>
+        </div>
+      );
+    }
+
+    // Not loading, no current page, and fetch already failed.
     return <PageNotFound />;
   }
 

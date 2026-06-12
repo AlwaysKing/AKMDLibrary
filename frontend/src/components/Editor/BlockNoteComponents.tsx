@@ -1051,7 +1051,7 @@ const SLASH_MENU_SHORTCUTS: Record<string, string> = {
 };
 
 // English names shown as light gray text after Chinese title
-const SLASH_MENU_ENGLISH: Record<string, string> = {
+export const SLASH_MENU_ENGLISH: Record<string, string> = {
   heading: 'Heading 1',
   heading_2: 'Heading 2',
   heading_3: 'Heading 3',
@@ -1077,6 +1077,8 @@ const SLASH_MENU_ENGLISH: Record<string, string> = {
   file: 'File',
   emoji: 'Emoji',
   page_break: 'Page Break',
+  subpage: 'Subpage',
+  columns: 'Columns',
 };
 
 const SuggestionMenuItem: React.FC<{

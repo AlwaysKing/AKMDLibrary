@@ -6,12 +6,12 @@ import { Fragment as PMFragment } from 'prosemirror-model';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
-import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems, createCodeBlockSpec } from '@blocknote/core';
+import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
-import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER, ColorListContent, findBlockDeep } from './BlockNoteComponents';
+import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER, ColorListContent, findBlockDeep, SLASH_MENU_ENGLISH } from './BlockNoteComponents';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection, NodeSelection } from '@tiptap/pm/state';
@@ -347,6 +347,25 @@ function getCustomSlashMenuItems(editor: any) {
     return 0; // stable sort preserves intra-group order
   });
   return allItems;
+}
+
+function getSlashMenuEnglish(item: any): string {
+  const english = SLASH_MENU_ENGLISH[item.key];
+  if (english) return english;
+  if (Array.isArray(item.aliases) && item.aliases.length > 0) {
+    return String(item.aliases[0] ?? '');
+  }
+  return '';
+}
+
+function filterSlashMenuItems(items: any[], query: string) {
+  const trimmedQuery = query.trim().toLowerCase();
+  if (!trimmedQuery) return items;
+
+  return items.filter((item) => {
+    const english = getSlashMenuEnglish(item).toLowerCase();
+    return english.includes(trimmedQuery);
+  });
 }
 
 // Mutable ref so the TipTap extension can access the BlockNote editor
@@ -5330,7 +5349,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             {!readOnly && (
               <SuggestionMenuController
                 triggerCharacter="/"
-                getItems={async (query: string) => filterSuggestionItems(getCustomSlashMenuItems(editor), query)}
+                getItems={async (query: string) => filterSlashMenuItems(getCustomSlashMenuItems(editor), query)}
               />
             )}
           </BlockNoteViewRaw>
