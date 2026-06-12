@@ -300,8 +300,27 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
-    // Image
-    // Video: ![caption](url)<!-- video:width&alignment --> (check BEFORE image to avoid mis-match)
+    // Video: <video-block url="..." caption="..." width="..." align="..."></video-block>
+    const videoTagAttrs = matchSelfClosingTag(trimmed, 'video-block');
+    if (videoTagAttrs) {
+      const vProps: Record<string, any> = {
+        url: videoTagAttrs.url || '',
+        caption: videoTagAttrs.caption || '',
+        textAlignment: videoTagAttrs.align || 'center',
+      };
+      if (videoTagAttrs.width) {
+        const width = Number(videoTagAttrs.width);
+        if (Number.isFinite(width) && width > 0) vProps.previewWidth = width;
+      }
+      blocks.push({
+        type: 'video',
+        props: vProps,
+      });
+      i++;
+      continue;
+    }
+
+    // Video legacy: ![caption](url)<!-- video:width&alignment -->
     const videoMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)<!-- video:([^&]*)&([^ ]*) -->/);
     if (videoMatch) {
       const vAlt = videoMatch[1];
@@ -324,16 +343,37 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
-    // Image: ![caption](url) or ![caption](url)<!-- img:width&alignment -->
-    const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)(?:<!-- img:([^&]*)&([^ ]*) -->)?/);
+    // Image: <image-block url="..." caption="..." width="..." align="..."></image-block>
+    const imageTagAttrs = matchSelfClosingTag(trimmed, 'image-block');
+    if (imageTagAttrs) {
+      const props: Record<string, any> = {
+        url: imageTagAttrs.url || '',
+        caption: imageTagAttrs.caption || '',
+        textAlignment: imageTagAttrs.align || 'center',
+      };
+      if (imageTagAttrs.width) {
+        const width = Number(imageTagAttrs.width);
+        if (Number.isFinite(width) && width > 0) props.previewWidth = width;
+      }
+      blocks.push({
+        type: 'image',
+        props,
+      });
+      i++;
+      continue;
+    }
+
+    // Image legacy: ![caption](url), ![caption](url "title"), or ![caption](url)<!-- img:width&alignment -->
+    const imageMatch = line.match(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)(?:<!-- img:([^&]*)&([^ ]*) -->)?/);
     if (imageMatch) {
       const alt = imageMatch[1];
       const src = imageMatch[2];
-      const serializedWidth = imageMatch[3];
-      const serializedAlign = imageMatch[4];
+      const markdownTitle = imageMatch[3];
+      const serializedWidth = imageMatch[4];
+      const serializedAlign = imageMatch[5];
       const props: Record<string, any> = {
         url: src,
-        caption: alt,
+        caption: alt || markdownTitle || '',
         textAlignment: serializedAlign || 'center',
       };
       if (serializedWidth) {
@@ -347,7 +387,23 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
-    // Audio: ![name](url)<!-- audio:caption&showPreview --> (check BEFORE regular image)
+    // Audio: <audio-block url="..." name="..." caption="..." preview="..."></audio-block>
+    const audioTagAttrs = matchSelfClosingTag(trimmed, 'audio-block');
+    if (audioTagAttrs) {
+      blocks.push({
+        type: 'audio',
+        props: {
+          url: audioTagAttrs.url || '',
+          name: audioTagAttrs.name || '',
+          caption: audioTagAttrs.caption || '',
+          showPreview: audioTagAttrs.preview !== 'false',
+        },
+      });
+      i++;
+      continue;
+    }
+
+    // Audio legacy: ![name](url)<!-- audio:caption&showPreview -->
     const audioMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)<!-- audio:([^&]*)&([^ ]*) -->/);
     if (audioMatch) {
       const aName = audioMatch[1];
@@ -367,7 +423,22 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
-    // File: [name](url)<!-- file:caption --> (must check AFTER image/audio patterns)
+    // File: <file-block url="..." name="..." caption="..."></file-block>
+    const fileTagAttrs = matchSelfClosingTag(trimmed, 'file-block');
+    if (fileTagAttrs) {
+      blocks.push({
+        type: 'file',
+        props: {
+          url: fileTagAttrs.url || '',
+          name: fileTagAttrs.name || '',
+          caption: fileTagAttrs.caption || '',
+        },
+      });
+      i++;
+      continue;
+    }
+
+    // File legacy: [name](url)<!-- file:caption --> (must check AFTER image/audio patterns)
     const fileMatch = line.match(/^\[([^\]]*)\]\(([^)]+)\)<!-- file:([^ ]*) -->$/);
     if (fileMatch) {
       const fName = fileMatch[1];
@@ -527,6 +598,38 @@ function extractTagContent(lines: string[], tagName: string): string {
 
   if (startIdx === -1 || endIdx === -1) return '';
   return lines.slice(startIdx + 1, endIdx).join('\n');
+}
+
+function matchSelfClosingTag(line: string, tagName: string): Record<string, string> | null {
+  const match = line.match(new RegExp(`^<${tagName}\\s+([^>]*?)><\\/${tagName}>$`));
+  if (!match) return null;
+  return parseTagAttributes(match[1]);
+}
+
+function parseTagAttributes(attrText: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const attrRegex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)="([^"]*)"/g;
+  let match: RegExpExecArray | null;
+  while ((match = attrRegex.exec(attrText)) !== null) {
+    attrs[match[1]] = unescapeHtmlAttribute(match[2]);
+  }
+  return attrs;
+}
+
+function escapeHtmlAttribute(value: any): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function unescapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 /**
@@ -767,10 +870,13 @@ function serializeRegularBlock(block: any): string {
       const caption = block.props?.caption || '';
       const previewWidth = block.props?.previewWidth;
       const textAlignment = block.props?.textAlignment;
-      const propsSuffix = (previewWidth || textAlignment)
-        ? `<!-- img:${previewWidth || ''}&${textAlignment || ''} -->`
-        : '';
-      return `![${caption}](${url})${propsSuffix}`;
+      const attrs = [
+        `url="${escapeHtmlAttribute(url)}"`,
+        `caption="${escapeHtmlAttribute(caption)}"`,
+      ];
+      if (previewWidth) attrs.push(`width="${escapeHtmlAttribute(previewWidth)}"`);
+      if (textAlignment) attrs.push(`align="${escapeHtmlAttribute(textAlignment)}"`);
+      return `<image-block ${attrs.join(' ')}></image-block>`;
     }
 
     case 'video': {
@@ -778,18 +884,20 @@ function serializeRegularBlock(block: any): string {
       const vCaption = block.props?.caption || '';
       const vPreviewWidth = block.props?.previewWidth;
       const vTextAlignment = block.props?.textAlignment;
-      const vPropsSuffix = (vPreviewWidth || vTextAlignment)
-        ? `<!-- video:${vPreviewWidth || ''}&${vTextAlignment || ''} -->`
-        : '';
-      return `![${vCaption}](${vUrl})${vPropsSuffix}`;
+      const attrs = [
+        `url="${escapeHtmlAttribute(vUrl)}"`,
+        `caption="${escapeHtmlAttribute(vCaption)}"`,
+      ];
+      if (vPreviewWidth) attrs.push(`width="${escapeHtmlAttribute(vPreviewWidth)}"`);
+      if (vTextAlignment) attrs.push(`align="${escapeHtmlAttribute(vTextAlignment)}"`);
+      return `<video-block ${attrs.join(' ')}></video-block>`;
     }
 
     case 'file': {
       const fUrl = block.props?.url || '';
       const fName = block.props?.name || '';
       const fCaption = block.props?.caption || '';
-      // Use link syntax to distinguish from image/video: [name](url)<!-- file:caption -->
-      return `[${fName}](${fUrl})<!-- file:${fCaption} -->`;
+      return `<file-block url="${escapeHtmlAttribute(fUrl)}" name="${escapeHtmlAttribute(fName)}" caption="${escapeHtmlAttribute(fCaption)}"></file-block>`;
     }
 
     case 'audio': {
@@ -797,8 +905,7 @@ function serializeRegularBlock(block: any): string {
       const aName = block.props?.name || '';
       const aCaption = block.props?.caption || '';
       const aShowPreview = block.props?.showPreview !== false;
-      // Use image syntax with audio marker: ![name](url)<!-- audio:caption&showPreview -->
-      return `![${aName}](${aUrl})<!-- audio:${aCaption}&${aShowPreview} -->`;
+      return `<audio-block url="${escapeHtmlAttribute(aUrl)}" name="${escapeHtmlAttribute(aName)}" caption="${escapeHtmlAttribute(aCaption)}" preview="${aShowPreview}"></audio-block>`;
     }
 
     case 'pageReference':

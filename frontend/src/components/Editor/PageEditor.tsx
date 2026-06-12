@@ -110,6 +110,34 @@ const APP_ORIGIN = typeof window !== 'undefined' ? window.location.origin : '';
 const INTERNAL_URL_RE = new RegExp(`^${APP_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/s/([^/]+)/p/([a-f0-9]{32})(?:$|/)`);
 const URL_RE = /^https?:\/\/.+/;
 
+function resolvePageAssetUrl(rawUrl: string | undefined, spaceSlug?: string, pageId?: string): string {
+  const url = String(rawUrl || '').trim();
+  if (!url) return '';
+  if (
+    url.startsWith('/api/') ||
+    url.startsWith('http://') ||
+    url.startsWith('https://') ||
+    url.startsWith('blob:') ||
+    url.startsWith('data:')
+  ) {
+    return url;
+  }
+  if (!spaceSlug || !pageId) return url;
+
+  let assetPath = url;
+  if (assetPath.startsWith('./public/')) {
+    assetPath = assetPath.slice('./public/'.length);
+  } else if (assetPath.startsWith('public/')) {
+    assetPath = assetPath.slice('public/'.length);
+  } else if (assetPath.startsWith('/public/')) {
+    assetPath = assetPath.slice('/public/'.length);
+  } else if (assetPath.startsWith('/')) {
+    return assetPath;
+  }
+
+  return `/api/spaces/${spaceSlug}/pages/${pageId}/assets/${assetPath}`;
+}
+
 function createDefaultInternalPageIcon() {
   const svgNS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNS, 'svg');
@@ -2056,7 +2084,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
   const downloadImageBlock = useCallback((blockId: string) => {
     const block = getBlockById(blockId);
-    const url = (block?.props as any)?.url;
+    const { spaceSlug, pageId } = identityRef.current;
+    const url = resolvePageAssetUrl((block?.props as any)?.url, spaceSlug, pageId);
     if (!url) return;
     const link = document.createElement('a');
     link.href = url;
@@ -2083,7 +2112,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
   const openImageFullscreen = useCallback((blockId: string) => {
     const block = getBlockById(blockId);
-    const url = (block?.props as any)?.url;
+    const { spaceSlug, pageId } = identityRef.current;
+    const url = resolvePageAssetUrl((block?.props as any)?.url, spaceSlug, pageId);
     if (!url) return;
     setImageLightbox({
       url,
@@ -2138,32 +2168,56 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const block = getBlockById(blockId);
         const blockProps = (block?.props as any) || {};
         const currentAlignment = (blockProps.textAlignment || 'center') as 'left' | 'center' | 'right';
+        const resolvedMediaUrl = resolvePageAssetUrl(blockProps.url, identityRef.current.spaceSlug, identityRef.current.pageId);
         const wrapper = blockContent.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
         const mediaWrapper = blockContent.querySelector('.bn-visual-media-wrapper') as HTMLElement | null;
         const imageEl = blockContent.querySelector('.bn-visual-media') as HTMLImageElement | null;
         const videoEl = blockContent.querySelector('.bn-visual-media') as HTMLVideoElement | null;
         if (!wrapper || !mediaWrapper || (!imageEl && !videoEl)) return;
 
+        const currentMediaSrc = imageEl?.getAttribute('src') || videoEl?.getAttribute('src') || '';
+        const mediaSrcChanged = !!resolvedMediaUrl && currentMediaSrc !== resolvedMediaUrl;
+
+        if (imageEl && mediaSrcChanged) {
+          imageEl.setAttribute('src', resolvedMediaUrl);
+        }
+        if (videoEl && mediaSrcChanged) {
+          videoEl.setAttribute('src', resolvedMediaUrl);
+          videoEl.load();
+        }
+
+        if (mediaSrcChanged) {
+          blockContent.removeAttribute('data-media-broken');
+          mediaWrapper.querySelector('.bn-media-broken-placeholder')?.remove();
+        }
+
         // === Broken media detection ===
-        const mediaEl = imageEl || videoEl;
         const isImage = !!imageEl;
         const isBroken = isImage
           ? (imageEl!.complete && imageEl!.naturalWidth === 0 && !!imageEl!.src)
           : (videoEl!.error !== null && !!videoEl!.src); // videoEl.error is null when OK, MediaError when broken
 
-        // Bind one-time error listener to catch async load failures
-        if (!mediaWrapper.dataset.errorBound) {
-          mediaWrapper.dataset.errorBound = 'true';
+        // Keep broken state in sync with later load/error events after src rewriting.
+        if (!mediaWrapper.dataset.mediaStateBound) {
+          mediaWrapper.dataset.mediaStateBound = 'true';
           if (isImage) {
             imageEl!.addEventListener('error', () => {
               mediaWrapper.closest('.bn-block-content')?.setAttribute('data-media-broken', 'true');
               syncImageBlocks();
-            }, { once: true });
+            });
+            imageEl!.addEventListener('load', () => {
+              mediaWrapper.closest('.bn-block-content')?.removeAttribute('data-media-broken');
+              syncImageBlocks();
+            });
           } else if (videoEl) {
             videoEl.addEventListener('error', () => {
               mediaWrapper.closest('.bn-block-content')?.setAttribute('data-media-broken', 'true');
               syncImageBlocks();
-            }, { once: true });
+            });
+            videoEl.addEventListener('loadeddata', () => {
+              mediaWrapper.closest('.bn-block-content')?.removeAttribute('data-media-broken');
+              syncImageBlocks();
+            });
           }
         }
 
@@ -2414,7 +2468,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (!blockId) return;
           const block = findBlockDeep(editor.document, blockId!);
           if (!block) return;
-          const url = (block.props as any)?.url;
+          const { spaceSlug, pageId } = identityRef.current;
+          const url = resolvePageAssetUrl((block.props as any)?.url, spaceSlug, pageId);
           if (url) {
             window.open(url, '_blank', 'noopener,noreferrer');
           }
