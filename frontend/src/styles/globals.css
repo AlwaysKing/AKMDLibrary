@@ -981,6 +981,28 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   color: #9b9a97 !important;
 }
 
+/* Emoji insertion reuses PageIcon's picker; keep BlockNote's grid host invisible. */
+.bn-grid-suggestion-menu.bn-grid-suggestion-menu-proxy {
+  width: 1px !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: visible !important;
+  gap: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.bn-grid-suggestion-menu-trigger {
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 /* Drag Handle Menu Notion Style */
 /* 定位由 JS 动态计算（fixed），这里只负责视觉样式 */
 .bn-drag-handle-menu {

@@ -22,6 +22,7 @@ import { TableHandlesExtension } from '@blocknote/core/extensions';
 import { showToast } from '../Toast';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { setBlockDragData, isDragHandled, clearBlockDragData, getBlockDragData, syncSubpageOrderToBackend } from './blockDragState';
+import PageIcon from './PageIcon';
 
 // ==================== Menu Context ====================
 interface MenuContextValue {
@@ -1136,9 +1137,34 @@ const GridSuggestionMenuRoot: React.FC<{
   children?: ReactNode;
 }> = (props) => {
   const { id, columns, className, children } = props;
+  const editor = useBlockNoteEditor();
+  const items = React.Children.toArray(children).filter(React.isValidElement);
+
+  const handleSelectEmoji = (emoji: string) => {
+    const matchedItem = items.find((child) => (child.props as any).item?.icon === emoji);
+    if (matchedItem) {
+      (matchedItem.props as any).onClick?.();
+      return;
+    }
+
+    editor.insertInlineContent(`${emoji} `);
+  };
+
   return (
-    <div id={id} className={className} style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
-      {children}
+    <div
+      id={id}
+      className={`${className || ''} bn-grid-suggestion-menu-proxy`}
+      style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, 1fr)` }}
+    >
+      <PageIcon
+        icon={null}
+        compact
+        autoOpen
+        emojiOnly
+        triggerClassName="bn-grid-suggestion-menu-trigger"
+        onSelect={handleSelectEmoji}
+      />
+      <div hidden>{children}</div>
     </div>
   );
 };

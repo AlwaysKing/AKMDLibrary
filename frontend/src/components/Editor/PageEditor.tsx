@@ -186,7 +186,7 @@ const customZh = {
     numbered_list: { ...zh.slash_menu.numbered_list, group: '列表' },
     bullet_list: { ...zh.slash_menu.bullet_list, group: '列表' },
     check_list: { ...zh.slash_menu.check_list, group: '列表' },
-    paragraph: { ...zh.slash_menu.paragraph, group: '列表' },
+    paragraph: { ...zh.slash_menu.paragraph, group: '基础区块' },
   },
 };
 
@@ -225,16 +225,17 @@ function NotionToggleHeadingIcon({ level }: { level: number }) {
 }
 
 // Custom slash menu: default items filtered + subpage + toggle heading 4
-// Desired order for 基础区块: heading → heading_2 → heading_3 → heading_4 → toggle_heading → toggle_heading_2 → toggle_heading_3 → toggle_heading_4(custom)
+// Desired order for 基础区块: paragraph → heading → heading_2 → heading_3 → heading_4 → toggle_heading → toggle_heading_2 → toggle_heading_3 → toggle_heading_4(custom)
 const BASE_BLOCK_ORDER: Record<string, number> = {
-  heading: 0,
-  heading_2: 1,
-  heading_3: 2,
-  heading_4: 3,
-  toggle_heading: 4,
-  toggle_heading_2: 5,
-  toggle_heading_3: 6,
-  toggle_heading_4: 7,
+  paragraph: 0,
+  heading: 1,
+  heading_2: 2,
+  heading_3: 3,
+  heading_4: 4,
+  toggle_heading: 5,
+  toggle_heading_2: 6,
+  toggle_heading_3: 7,
+  toggle_heading_4: 8,
 };
 
 function getCustomSlashMenuItems(editor: any) {

@@ -1,0 +1,447 @@
+diff --git a/docs/superpowers/specs/2026-05-08-notion-alignment-and-block-elements-design.md b/docs/superpowers/specs/2026-05-08-notion-alignment-and-block-elements-design.md
+deleted file mode 100644
+index 49832e9..0000000
+--- a/docs/superpowers/specs/2026-05-08-notion-alignment-and-block-elements-design.md
++++ /dev/null
+@@ -1,175 +0,0 @@
+-# Notion 样式对齐 & Block 元素功能设计文档
+-
+-## 概述
+-
+-对 MDLibrary 前端进行两个重大改造：
+-1. **样式全面向 Notion 对齐** — 字体、字号、行高、颜色、间距等
+-2. **Block 元素功能** — 添加按钮、六点拖拽手柄、/菜单、样式组件
+-
+-参考源：`notion-example/docs/notion-snapshots/`
+-
+----
+-
+-## 一、Notion 样式全面对齐
+-
+-### 1.1 编辑器样式（针对 BlockNote）
+-
+-| 属性 | Notion 值 | 当前值 | 改动文件 |
+-|------|-----------|--------|---------|
+-| 编辑器字体大小 | 16px | 15px | globals.css |
+-| 段落行高 | 1.5-1.6 | 1.7 | globals.css |
+-| 文本颜色 | #37352f (light) / #2c2c2b | #37352f | ✅ 正确 |
+-| 粗体字重 | 600 | 600 | ✅ 正确 |
+-| 块间距 | 2px padding | 1px padding | globals.css |
+-| H1 字号 | 1.875em (30px) | 1.875em | ✅ 正确 |
+-| H2 字号 | 1.5em (24px) | 1.5em | ✅ 正确 |
+-| H3 字号 | 1.25em (20px) | 1.25em | ✅ 正确 |
+-
+-### 1.2 BlockNote CSS 变量覆盖
+-
+-BlockNote 使用 CSS 变量控制主题颜色。通过覆盖这些变量实现 Notion 配色：
+-
+-```css
+-.bn-root {
+-  --bn-colors-editor-text: #37352f;
+-  --bn-colors-editor-background: #ffffff;
+-  --bn-colors-menu-text: #37352f;
+-  --bn-colors-menu-background: #ffffff;
+-  --bn-colors-hovered-background: #ebebea;
+-  --bn-colors-selected-background: #2383e2;
+-  --bn-colors-side-menu: #9b9a97;
+-  --bn-colors-border: #e9e9e7;
+-  --bn-colors-shadow: rgba(0, 0, 0, 0.08);
+-  --bn-font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+-  --bn-border-radius: 8px;
+-}
+-```
+-
+-### 1.3 侧边栏样式对齐
+-
+-从 notion-example 快照提取的侧边栏属性：
+-- 背景色: #f7f6f3 (已匹配)
+-- 页面项字体: 14px, weight 500, color #5f5e59
+-- 页面项高度: 30px
+-- 缩进: 逐级增加 20-24px
+-- 嵌套线颜色: rgba(0, 0, 0, 0.1)
+-
+-### 1.4 页面标题样式对齐
+-
+-Notion 页面标题快照值：
+-- 字号: 40px
+-- 行高: 48px (1.2)
+-- 字重: 700
+-- padding: 0 8px
+-- placeholder 文本: #c4c3c0
+-
+-### 1.5 BlockNote 拖拽手柄、添加按钮样式
+-
+-- 六点图标颜色: rgba(0, 0, 0, 0.6) (drag-handle-color)
+-- 添加按钮 (+): #9b9a97, hover 变深
+-- hover 时侧边栏透明出现
+-- svg 六点图标替代默认 Material Design DragIndicator
+-
+-### 1.6 Highlighter/文本颜色
+-
+-Notion 使用高亮色板:
+-- Gray: #9b9a97 / #ebeced
+-- Brown: #64473a / #e9e5e3
+-- Red: #e03e3e / #fbe4e4
+-- Orange: #d9730d / #f6e9d9
+-- Yellow: #dfab01 / #fbf3db
+-- Green: #4d6461 / #ddedea
+-- Blue: #0b6e99 / #ddebf1
+-- Purple: #6940a5 / #eae4f2
+-- Pink: #ad1a72 / #f4dfeb
+-
+-这些与 BlockNote 默认值一致，无需更改。
+-
+----
+-
+-## 二、Block 元素功能
+-
+-### 2.1 侧边菜单（SideMenu）
+-
+-当前已通过 `BlockNoteViewRaw` 启用。需要：
+-
+-1. **添加按钮 (+)**
+-   - 悬停在块左侧时显示
+-   - 点击在当前块上方添加新段落并打开 `/` 菜单
+-   - 使用 `+` 图标（Notion 风格）
+-
+-2. **六点拖拽手柄 ⠿**
+-   - 拖拽移动块
+-   - 点击打开上下文菜单
+-   - 使用六点图标（⠿ SVG）
+-   - 菜单项：删除、复制、转换为类型、颜色选择等
+-
+-3. **侧边菜单行为**
+-   - 默认透明隐藏
+-   - 悬停块时淡入显示
+-   - 颜色: rgba(0, 0, 0, 0.6)
+-
+-### 2.2 / 菜单（Slash Menu）
+-
+-已启用，需要：
+-1. 样式对齐 Notion
+-2. 菜单项分组（基础、媒体、高级等）
+-3. 搜索过滤
+-4. 圆角、阴影、hover 效果
+-
+-### 2.3 格式工具栏（FormattingToolbar）
+-
+-Notion 风格的内联工具栏：
+-- 选中文本时弹出
+-- 选项：Bold(加粗), Italic(斜体), Strikethrough(删除线), Code(代码), Color(颜色)
+-- 圆角、阴影
+-
+-### 2.4 "之前要求的样式组件"
+-
+-从之前的对话和 CSS 快照看，包括：
+-- Cover 图片: 高度 30vh, max-height 280px (已部分实现)
+-- Icon 选择器: emoji 选择已经实现
+-- Page title: 40px bold (已实现)
+-
+----
+-
+-## 三、实现方案
+-
+-### 技术方案
+-
+-**方案 A — 使用 BlockNote 原生组件 + CSS 覆盖 (推荐)** 
+-直接在现有 `BlockNoteViewRaw` 基础上，通过 CSS 变量和额外样式覆盖实现 Notion 风格。优点：改动最小、不破坏现有逻辑。
+-
+-**方案 B — 自定义 SideMenu 组件**
+-创建自定义 React 组件替换 BlockNote 默认的 SideMenu。优点：完全控制 UI。缺点：复杂度高。
+-
+-**推荐方案 A** — 因为所有功能（侧边菜单、拖拽、/菜单）已经在 BlockNote 0.50 中可用，只需调整样式即可。
+-
+-### 修改文件清单
+-
+-| 文件 | 改动内容 |
+-|------|---------|
+-| `frontend/src/styles/globals.css` | 全面更新 BlockNote 主题 CSS 变量和样式覆盖 |
+-| `frontend/src/components/Editor/PageEditor.tsx` | 添加 `sideMenu` 和格式化工具栏支持和主题定制 |
+-| `frontend/tailwind.config.js` | 可能的新颜色变量 |
+-| `frontend/src/components/Layout/Sidebar.tsx` | 侧边栏项 Notion 样式对齐 |
+-| `frontend/src/components/Sidebar/PageTreeItem.tsx` | 页面树项样式对齐 |
+-| `frontend/src/pages/PageViewPage.tsx` | 页面标题样式确认 |
+-
+-### 验收标准
+-
+-1. 编辑器中的块左侧出现 `+` 和六点 `⠿` 按钮
+-2. 六点按钮可拖拽移动块
+-3. 点击六点打开菜单（删除、颜色等）
+-4. `/` 呼出菜单样式接近 Notion
+-5. 整体字体、字号、行高对齐 Notion
+-6. 颜色、选中效果对齐 Notion
+-7. Chrome 浏览器中可对比验证
+-
+----
+-
+-## 四、风险与注意事项
+-
+-1. BlockNote 0.50 的 SideMenu 默认使用 `react-icons/md` 的 `MdDragIndicator`（三条横线），需要替换为六点图标
+-2. 侧边菜单的透明度/悬停行为可能需要 CSS 调整
+-3. 可能需要检查 BlockNote 版本兼容性
+diff --git a/frontend/src/components/Editor/BlockNoteComponents.tsx b/frontend/src/components/Editor/BlockNoteComponents.tsx
+index 563d11f..caf93b7 100644
+--- a/frontend/src/components/Editor/BlockNoteComponents.tsx
++++ b/frontend/src/components/Editor/BlockNoteComponents.tsx
+@@ -22,6 +22,7 @@ import { TableHandlesExtension } from '@blocknote/core/extensions';
+ import { showToast } from '../Toast';
+ import { removeBlocksEnhanced } from './blockHelpers';
+ import { setBlockDragData, isDragHandled, clearBlockDragData, getBlockDragData, syncSubpageOrderToBackend } from './blockDragState';
++import PageIcon from './PageIcon';
+ 
+ // ==================== Menu Context ====================
+ interface MenuContextValue {
+@@ -1136,9 +1137,34 @@ const GridSuggestionMenuRoot: React.FC<{
+   children?: ReactNode;
+ }> = (props) => {
+   const { id, columns, className, children } = props;
++  const editor = useBlockNoteEditor();
++  const items = React.Children.toArray(children).filter(React.isValidElement);
++
++  const handleSelectEmoji = (emoji: string) => {
++    const matchedItem = items.find((child) => (child.props as any).item?.icon === emoji);
++    if (matchedItem) {
++      (matchedItem.props as any).onClick?.();
++      return;
++    }
++
++    editor.insertInlineContent(`${emoji} `);
++  };
++
+   return (
+-    <div id={id} className={className} style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
+-      {children}
++    <div
++      id={id}
++      className={`${className || ''} bn-grid-suggestion-menu-proxy`}
++      style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, 1fr)` }}
++    >
++      <PageIcon
++        icon={null}
++        compact
++        autoOpen
++        emojiOnly
++        triggerClassName="bn-grid-suggestion-menu-trigger"
++        onSelect={handleSelectEmoji}
++      />
++      <div hidden>{children}</div>
+     </div>
+   );
+ };
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index 4f7d903..8e71fb8 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -186,7 +186,7 @@ const customZh = {
+     numbered_list: { ...zh.slash_menu.numbered_list, group: '列表' },
+     bullet_list: { ...zh.slash_menu.bullet_list, group: '列表' },
+     check_list: { ...zh.slash_menu.check_list, group: '列表' },
+-    paragraph: { ...zh.slash_menu.paragraph, group: '列表' },
++    paragraph: { ...zh.slash_menu.paragraph, group: '基础区块' },
+   },
+ };
+ 
+@@ -225,16 +225,17 @@ function NotionToggleHeadingIcon({ level }: { level: number }) {
+ }
+ 
+ // Custom slash menu: default items filtered + subpage + toggle heading 4
+-// Desired order for 基础区块: heading → heading_2 → heading_3 → heading_4 → toggle_heading → toggle_heading_2 → toggle_heading_3 → toggle_heading_4(custom)
++// Desired order for 基础区块: paragraph → heading → heading_2 → heading_3 → heading_4 → toggle_heading → toggle_heading_2 → toggle_heading_3 → toggle_heading_4(custom)
+ const BASE_BLOCK_ORDER: Record<string, number> = {
+-  heading: 0,
+-  heading_2: 1,
+-  heading_3: 2,
+-  heading_4: 3,
+-  toggle_heading: 4,
+-  toggle_heading_2: 5,
+-  toggle_heading_3: 6,
+-  toggle_heading_4: 7,
++  paragraph: 0,
++  heading: 1,
++  heading_2: 2,
++  heading_3: 3,
++  heading_4: 4,
++  toggle_heading: 5,
++  toggle_heading_2: 6,
++  toggle_heading_3: 7,
++  toggle_heading_4: 8,
+ };
+ 
+ function getCustomSlashMenuItems(editor: any) {
+diff --git a/frontend/src/components/Editor/PageIcon.tsx b/frontend/src/components/Editor/PageIcon.tsx
+index eb9c892..96bad3c 100644
+--- a/frontend/src/components/Editor/PageIcon.tsx
++++ b/frontend/src/components/Editor/PageIcon.tsx
+@@ -10,6 +10,9 @@ interface PageIconProps {
+   spaceSlug?: string;
+   pageId?: string;
+   compact?: boolean;
++  autoOpen?: boolean;
++  emojiOnly?: boolean;
++  triggerClassName?: string;
+   onOpenChange?: (open: boolean) => void;
+   onChange?: () => void;
+   /** 自定义选择回调，提供时跳过内部 updateMetadata 逻辑 */
+@@ -43,7 +46,7 @@ const CATEGORY_ICONS = [
+   { key: '符号', icon: '🔴' },
+ ];
+ 
+-export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, onOpenChange, onChange, onSelect }: PageIconProps) {
++export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, autoOpen, emojiOnly, triggerClassName, onOpenChange, onChange, onSelect }: PageIconProps) {
+   const [isOpen, setIsOpen] = useState(false);
+   const [tab, setTab] = useState<'emoji' | 'upload'>('emoji');
+   const [search, setSearch] = useState('');
+@@ -69,6 +72,12 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact,
+ 
+   const pickerRef = useRef<HTMLDivElement>(null);
+ 
++  useEffect(() => {
++    if (autoOpen) {
++      setOpen(true);
++    }
++  }, [autoOpen]);
++
+   // Anchor: the bottom edge of the picker should always sit at triggerRect.top - gap
+   // When content height changes, only the top moves — bottom stays pinned.
+   const updatePopupPosition = useCallback(() => {
+@@ -123,10 +132,10 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact,
+ 
+   // Load icon library when picker opens
+   useEffect(() => {
+-    if (isOpen) {
++    if (isOpen && !emojiOnly) {
+       fetchIconLibrary().then(setCustomIcons).catch(() => {});
+     }
+-  }, [isOpen]);
++  }, [emojiOnly, isOpen]);
+ 
+   const allEmojis = useMemo(() => {
+     return Object.entries(EMOJI_CATEGORIES).map(([category, emojis]) => ({ category, emojis }));
+@@ -320,14 +329,16 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact,
+             >
+               表情符号
+             </button>
+-            <button
+-              onClick={() => setTab('upload')}
+-              className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+-                tab === 'upload' ? 'text-notion-text border-notion-text' : 'text-notion-textSecondary border-transparent hover:text-notion-text'
+-              }`}
+-            >
+-              上传
+-            </button>
++            {!emojiOnly && (
++              <button
++                onClick={() => setTab('upload')}
++                className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
++                  tab === 'upload' ? 'text-notion-text border-notion-text' : 'text-notion-textSecondary border-transparent hover:text-notion-text'
++                }`}
++              >
++                上传
++              </button>
++            )}
+           </div>
+           {icon && (
+             <div className="flex items-center gap-1">
+@@ -396,28 +407,29 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact,
+                 </div>
+               ) : (
+                 <>
+-                  {/* Custom icon library */}
+-                  <div
+-                    ref={(el) => { categoryRefs.current['自定义'] = el; }}
+-                    className="mb-2"
+-                  >
+-                    <p className="text-xs font-medium text-notion-textSecondary mb-1 px-1">自定义</p>
+-                    {customIcons.length > 0 ? (
+-                      <div className="flex flex-wrap gap-[2px]">
+-                        {customIcons.map((item) => (
+-                          <button
+-                            key={item.name}
+-                            onClick={() => handleSelectCustomIcon(item)}
+-                            className="w-8 h-8 hover:bg-notion-hover rounded-md flex items-center justify-center transition-colors overflow-hidden"
+-                          >
+-                            <img src={item.url} alt="" className="w-6 h-6 object-contain" />
+-                          </button>
+-                        ))}
+-                      </div>
+-                    ) : (
+-                      <p className="text-xs text-notion-textSecondary px-1 py-1">暂无自定义图标，上传时可添加到图标库</p>
+-                    )}
+-                  </div>
++                  {!emojiOnly && (
++                    <div
++                      ref={(el) => { categoryRefs.current['自定义'] = el; }}
++                      className="mb-2"
++                    >
++                      <p className="text-xs font-medium text-notion-textSecondary mb-1 px-1">自定义</p>
++                      {customIcons.length > 0 ? (
++                        <div className="flex flex-wrap gap-[2px]">
++                          {customIcons.map((item) => (
++                            <button
++                              key={item.name}
++                              onClick={() => handleSelectCustomIcon(item)}
++                              className="w-8 h-8 hover:bg-notion-hover rounded-md flex items-center justify-center transition-colors overflow-hidden"
++                            >
++                              <img src={item.url} alt="" className="w-6 h-6 object-contain" />
++                            </button>
++                          ))}
++                        </div>
++                      ) : (
++                        <p className="text-xs text-notion-textSecondary px-1 py-1">暂无自定义图标，上传时可添加到图标库</p>
++                      )}
++                    </div>
++                  )}
+ 
+                   {/* Emoji categories */}
+                   {allEmojis.map(({ category, emojis }) => (
+@@ -446,7 +458,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact,
+ 
+             {/* Bottom category icons — scroll anchors */}
+             <div className="border-t border-notion-border px-2 py-1.5 flex items-center gap-0.5">
+-              {CATEGORY_ICONS.map(({ key, icon: catIcon }) => (
++              {CATEGORY_ICONS.filter(({ key }) => !emojiOnly || key !== '自定义').map(({ key, icon: catIcon }) => (
+                 <button
+                   key={key}
+                   onClick={() => scrollToCategory(key)}
+@@ -561,7 +573,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact,
+           ref={triggerRef as React.Ref<HTMLButtonElement>}
+           onMouseDown={(e) => e.preventDefault()}
+           onClick={() => setOpen(true)}
+-          className="flex items-center justify-center w-7 h-7 rounded border border-transparent hover:border-notion-border transition-colors"
++          className={`flex items-center justify-center w-7 h-7 rounded border border-transparent hover:border-notion-border transition-colors${triggerClassName ? ` ${triggerClassName}` : ''}`}
+         >
+           {icon ? (
+             isIconUrl ? (
+diff --git a/frontend/src/styles/globals.css b/frontend/src/styles/globals.css
+index e1295dd..c99fc10 100644
+--- a/frontend/src/styles/globals.css
++++ b/frontend/src/styles/globals.css
+@@ -981,6 +981,28 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
+   color: #9b9a97 !important;
+ }
+ 
++/* Emoji insertion reuses PageIcon's picker; keep BlockNote's grid host invisible. */
++.bn-grid-suggestion-menu.bn-grid-suggestion-menu-proxy {
++  width: 1px !important;
++  max-width: none !important;
++  max-height: none !important;
++  overflow: visible !important;
++  gap: 0 !important;
++  padding: 0 !important;
++  border-radius: 0 !important;
++  background: transparent !important;
++  box-shadow: none !important;
++}
++
++.bn-grid-suggestion-menu-trigger {
++  width: 1px !important;
++  height: 1px !important;
++  padding: 0 !important;
++  border: 0 !important;
++  opacity: 0 !important;
++  pointer-events: none !important;
++}
++
+ /* Drag Handle Menu Notion Style */
+ /* 定位由 JS 动态计算（fixed），这里只负责视觉样式 */
+ .bn-drag-handle-menu {

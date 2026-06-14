@@ -10,6 +10,9 @@ interface PageIconProps {
   spaceSlug?: string;
   pageId?: string;
   compact?: boolean;
+  autoOpen?: boolean;
+  emojiOnly?: boolean;
+  triggerClassName?: string;
   onOpenChange?: (open: boolean) => void;
   onChange?: () => void;
   /** 自定义选择回调，提供时跳过内部 updateMetadata 逻辑 */
@@ -43,7 +46,7 @@ const CATEGORY_ICONS = [
   { key: '符号', icon: '🔴' },
 ];
 
-export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, onOpenChange, onChange, onSelect }: PageIconProps) {
+export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, autoOpen, emojiOnly, triggerClassName, onOpenChange, onChange, onSelect }: PageIconProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [tab, setTab] = useState<'emoji' | 'upload'>('emoji');
   const [search, setSearch] = useState('');
@@ -68,6 +71,12 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   };
 
   const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (autoOpen) {
+      setOpen(true);
+    }
+  }, [autoOpen]);
 
   // Anchor: the bottom edge of the picker should always sit at triggerRect.top - gap
   // When content height changes, only the top moves — bottom stays pinned.
@@ -123,10 +132,10 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
 
   // Load icon library when picker opens
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !emojiOnly) {
       fetchIconLibrary().then(setCustomIcons).catch(() => {});
     }
-  }, [isOpen]);
+  }, [emojiOnly, isOpen]);
 
   const allEmojis = useMemo(() => {
     return Object.entries(EMOJI_CATEGORIES).map(([category, emojis]) => ({ category, emojis }));
@@ -320,14 +329,16 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
             >
               表情符号
             </button>
-            <button
-              onClick={() => setTab('upload')}
-              className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
-                tab === 'upload' ? 'text-notion-text border-notion-text' : 'text-notion-textSecondary border-transparent hover:text-notion-text'
-              }`}
-            >
-              上传
-            </button>
+            {!emojiOnly && (
+              <button
+                onClick={() => setTab('upload')}
+                className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+                  tab === 'upload' ? 'text-notion-text border-notion-text' : 'text-notion-textSecondary border-transparent hover:text-notion-text'
+                }`}
+              >
+                上传
+              </button>
+            )}
           </div>
           {icon && (
             <div className="flex items-center gap-1">
@@ -396,28 +407,29 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
                 </div>
               ) : (
                 <>
-                  {/* Custom icon library */}
-                  <div
-                    ref={(el) => { categoryRefs.current['自定义'] = el; }}
-                    className="mb-2"
-                  >
-                    <p className="text-xs font-medium text-notion-textSecondary mb-1 px-1">自定义</p>
-                    {customIcons.length > 0 ? (
-                      <div className="flex flex-wrap gap-[2px]">
-                        {customIcons.map((item) => (
-                          <button
-                            key={item.name}
-                            onClick={() => handleSelectCustomIcon(item)}
-                            className="w-8 h-8 hover:bg-notion-hover rounded-md flex items-center justify-center transition-colors overflow-hidden"
-                          >
-                            <img src={item.url} alt="" className="w-6 h-6 object-contain" />
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-notion-textSecondary px-1 py-1">暂无自定义图标，上传时可添加到图标库</p>
-                    )}
-                  </div>
+                  {!emojiOnly && (
+                    <div
+                      ref={(el) => { categoryRefs.current['自定义'] = el; }}
+                      className="mb-2"
+                    >
+                      <p className="text-xs font-medium text-notion-textSecondary mb-1 px-1">自定义</p>
+                      {customIcons.length > 0 ? (
+                        <div className="flex flex-wrap gap-[2px]">
+                          {customIcons.map((item) => (
+                            <button
+                              key={item.name}
+                              onClick={() => handleSelectCustomIcon(item)}
+                              className="w-8 h-8 hover:bg-notion-hover rounded-md flex items-center justify-center transition-colors overflow-hidden"
+                            >
+                              <img src={item.url} alt="" className="w-6 h-6 object-contain" />
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-notion-textSecondary px-1 py-1">暂无自定义图标，上传时可添加到图标库</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Emoji categories */}
                   {allEmojis.map(({ category, emojis }) => (
@@ -446,7 +458,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
 
             {/* Bottom category icons — scroll anchors */}
             <div className="border-t border-notion-border px-2 py-1.5 flex items-center gap-0.5">
-              {CATEGORY_ICONS.map(({ key, icon: catIcon }) => (
+              {CATEGORY_ICONS.filter(({ key }) => !emojiOnly || key !== '自定义').map(({ key, icon: catIcon }) => (
                 <button
                   key={key}
                   onClick={() => scrollToCategory(key)}
@@ -561,7 +573,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
           ref={triggerRef as React.Ref<HTMLButtonElement>}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setOpen(true)}
-          className="flex items-center justify-center w-7 h-7 rounded border border-transparent hover:border-notion-border transition-colors"
+          className={`flex items-center justify-center w-7 h-7 rounded border border-transparent hover:border-notion-border transition-colors${triggerClassName ? ` ${triggerClassName}` : ''}`}
         >
           {icon ? (
             isIconUrl ? (
