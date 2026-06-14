@@ -1184,12 +1184,177 @@ const FormRoot: React.FC<{ children?: ReactNode }> = (props) => {
   return <div>{props.children}</div>;
 };
 
+const FilePanelRoot: React.FC<{
+  className?: string;
+  tabs: { name: string; tabPanel: ReactNode }[];
+  openTab: string;
+  setOpenTab: (name: string) => void;
+  defaultOpenTab: string;
+  loading: boolean;
+}> = (props) => {
+  const { className, tabs, openTab, setOpenTab, loading } = props;
+  const activeTab = tabs.find((tab) => tab.name === openTab) || tabs[0];
+  const getTabLabel = (name: string) => name === '嵌入' ? '链接' : name;
+
+  return (
+    <div
+      className={className}
+      onPointerDownCapture={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      {tabs.length > 1 && (
+        <div className="bn-file-panel-tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab.name}
+              type="button"
+              className={`bn-file-panel-tab${tab.name === activeTab?.name ? ' is-active' : ''}`}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onClick={() => setOpenTab(tab.name)}
+            >
+              {getTabLabel(tab.name)}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="bn-file-panel-body" data-loading={loading || undefined}>
+        {activeTab?.tabPanel}
+      </div>
+    </div>
+  );
+};
+
+const FilePanelButton: React.FC<{
+  className?: string;
+  onClick?: () => void;
+  label?: string;
+  children?: ReactNode;
+  [key: string]: any;
+}> = (props) => {
+  const { className, onClick, label, children, ...rest } = props;
+
+  return (
+    <button
+      type="button"
+      className={className}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={onClick}
+      aria-label={label}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
+};
+
+const FilePanelInput: React.FC<{
+  className?: string;
+  accept: string;
+  value: File | null;
+  placeholder: string;
+  onChange: (payload: File | null) => void;
+  [key: string]: any;
+}> = forwardRef((props, ref) => {
+  const { className, accept, placeholder, onChange, value: _value, ...rest } = props;
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedName, setSelectedName] = useState('');
+
+  return (
+    <div className="bn-file-input-shell">
+      <input
+        ref={(node) => {
+          inputRef.current = node;
+          if (typeof ref === 'function') ref(node);
+          else if (ref) (ref as any).current = node;
+        }}
+        type="file"
+        className="bn-file-input-native"
+        accept={accept}
+        onChange={(event) => {
+          const file = event.target.files?.[0] || null;
+          setSelectedName(file?.name || '');
+          onChange(file);
+        }}
+        {...rest}
+      />
+      <div className="bn-file-input-stack">
+        <button
+          type="button"
+          className={className}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={() => inputRef.current?.click()}
+        >
+          {placeholder || '上传文件'}
+        </button>
+        {selectedName && (
+          <span className="bn-file-input-name">{selectedName}</span>
+        )}
+      </div>
+    </div>
+  );
+}) as any;
+
+const FilePanelTabPanel: React.FC<{
+  className?: string;
+  children?: ReactNode;
+}> = (props) => {
+  const { className, children } = props;
+  return (
+    <div
+      className={className}
+      onPointerDownCapture={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
 const FormTextInput: React.FC<{
   className?: string;
-  name: string;
+  name?: string;
   label?: string;
   variant?: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   rightSection?: ReactNode;
   autoFocus?: boolean;
   placeholder?: string;
@@ -1201,6 +1366,7 @@ const FormTextInput: React.FC<{
   autoComplete?: string;
   ['aria-activedescendant']?: string;
   ref?: React.Ref<HTMLInputElement>;
+  [key: string]: any;
 }> = forwardRef((props, ref) => {
   const {
     className,
@@ -1213,6 +1379,7 @@ const FormTextInput: React.FC<{
     onChange,
     onSubmit,
     autoComplete,
+    ...rest
   } = props;
   return (
     <input
@@ -1223,13 +1390,35 @@ const FormTextInput: React.FC<{
       autoFocus={autoFocus}
       disabled={disabled}
       value={value}
+      onPointerDownCapture={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        const input = e.currentTarget;
+        input.focus();
+        const end = input.value.length;
+        try {
+          input.setSelectionRange(end, end);
+        } catch {}
+      }}
       onKeyDown={(e) => {
+        e.stopPropagation();
         onKeyDown(e);
         if (e.key === 'Enter') onSubmit?.();
       }}
-      onChange={onChange}
+      onChange={(e) => {
+        e.stopPropagation();
+        onChange(e);
+      }}
       autoComplete={autoComplete}
       aria-activedescendant={props['aria-activedescendant']}
+      {...rest}
     />
   );
 });
@@ -2013,10 +2202,10 @@ export const blockNoteComponents = {
     Select: ToolbarSelect,
   },
   FilePanel: {
-    Root: ({ children }: any) => <div>{children}</div>,
-    Button: ToolbarButton,
-    FileInput: forwardRef((props: any, ref) => <input ref={ref} type="file" {...props} />) as any,
-    TabPanel: ({ children }: any) => <div>{children}</div>,
+    Root: FilePanelRoot,
+    Button: FilePanelButton,
+    FileInput: FilePanelInput,
+    TabPanel: FilePanelTabPanel,
     TextInput: FormTextInput,
   },
   GridSuggestionMenu: {

@@ -2069,6 +2069,167 @@ th.visual-cell-selected::after {
   height: 16px;
 }
 
+.bn-file-panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(55, 53, 47, 0.08);
+}
+
+.bn-file-panel-tab {
+  border: none;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.55);
+  height: 44px;
+  padding: 0 10px;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.bn-file-panel-tab.is-active {
+  background: transparent;
+  border-bottom-color: #2c2c2b;
+  color: #2c2c2b;
+}
+
+.bn-file-panel-body {
+  padding: 12px;
+}
+
+.bn-panel {
+  width: 540px;
+  max-width: calc(100vw - 24px);
+  max-height: 420px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: rgba(15, 15, 15, 0.04) 0 8px 20px, rgba(15, 15, 15, 0.03) 0 1px 3px;
+  border: 1px solid rgba(55, 53, 47, 0.08);
+  overflow: hidden;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+.bn-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bn-text-input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 12px;
+  font-size: 14px;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  color: #2c2c2b;
+}
+
+.bn-text-input::placeholder,
+.bn-file-input-name {
+  color: rgba(55, 53, 47, 0.5);
+}
+
+.bn-file-input-name {
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bn-text-input:focus {
+  border-color: rgba(35, 131, 226, 0.55);
+  box-shadow: rgba(35, 131, 226, 0.12) 0 0 0 3px;
+}
+
+.bn-file-input-shell {
+  width: 100%;
+  display: block;
+}
+
+.bn-file-input-stack {
+  display: block;
+  width: 100%;
+}
+
+.bn-file-input-native {
+  display: none;
+}
+
+.bn-tab-panel .bn-file-input,
+.bn-tab-panel .bn-button {
+  height: 34px;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  color: #2c2c2b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.bn-tab-panel .bn-file-input {
+  width: 100%;
+  flex: 1 1 100%;
+}
+
+.bn-tab-panel .bn-file-input:hover,
+.bn-tab-panel .bn-button:hover,
+.bn-file-panel-tab:hover {
+  color: #2c2c2b;
+}
+
+.bn-tab-panel .bn-file-input:hover {
+  background: #f3f2f1;
+}
+
+.bn-editor [data-file-block] .bn-add-file-button {
+  background: #faf9f8 !important;
+}
+
+.bn-editor[contenteditable="true"] [data-file-block] .bn-add-file-button:hover {
+  background: #f3f2f1 !important;
+}
+
+.bn-tab-panel .bn-button {
+  width: 100%;
+  align-self: stretch;
+  background: #2e86de;
+  color: #fff;
+  border-color: #2e86de;
+}
+
+.bn-tab-panel .bn-button:hover {
+  background: #2478cc;
+  border-color: #2478cc;
+  color: #fff;
+}
+
+.bn-error-text {
+  color: #cf5148;
+  font-size: 12px;
+}
+
 .bn-image-align-menu {
   position: absolute;
   top: 36px;

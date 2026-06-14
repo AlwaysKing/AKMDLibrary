@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, type ChangeEvent } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
+import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, FilePanelController, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
 import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow, toggleHeader } from 'prosemirror-tables';
 import { Fragment as PMFragment } from 'prosemirror-model';
 import CustomLinkToolbar from './CustomLinkToolbar';
@@ -5399,6 +5399,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             {/* Link preview card — hover card for mentions */}
             {!readOnly && (
               <LinkPreviewCard />
+            )}
+            {!readOnly && (
+              <FilePanelController />
             )}
             {/* Custom slash menu with subpage support */}
             {!readOnly && (
