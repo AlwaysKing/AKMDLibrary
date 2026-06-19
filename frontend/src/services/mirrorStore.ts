@@ -5,7 +5,7 @@
  * 镜像数据持久化在 IndexedDB 中，关闭浏览器也不丢失。
  */
 
-const DB_NAME = 'mdlibrary';
+const DB_NAME = 'akmdlibrary';
 const DB_VERSION = 3;
 const STORE_NAME = 'page_mirrors';
 

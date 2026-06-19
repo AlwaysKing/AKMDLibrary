@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/alwaysking/mdlibrary/internal/middleware"
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/alwaysking/akmdlibrary/internal/middleware"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/service"
 )
 
 type PreferenceHandler struct {

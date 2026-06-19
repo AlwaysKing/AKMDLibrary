@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alwaysking/mdlibrary/internal/middleware"
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/alwaysking/akmdlibrary/internal/middleware"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/service"
 	"github.com/go-chi/chi/v5"
 )
 

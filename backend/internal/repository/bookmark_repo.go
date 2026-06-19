@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/model"
 )
 
 type BookmarkRepository struct {

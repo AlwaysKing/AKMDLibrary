@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/repository"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/repository"
 )
 
 type PreferenceService struct {

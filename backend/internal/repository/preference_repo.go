@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/model"
 )
 
 type PreferenceRepository struct {

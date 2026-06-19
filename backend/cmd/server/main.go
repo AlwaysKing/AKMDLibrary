@@ -11,10 +11,10 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
-	"github.com/alwaysking/mdlibrary/internal/handler"
-	"github.com/alwaysking/mdlibrary/internal/middleware"
-	"github.com/alwaysking/mdlibrary/internal/repository"
-	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/alwaysking/akmdlibrary/internal/handler"
+	"github.com/alwaysking/akmdlibrary/internal/middleware"
+	"github.com/alwaysking/akmdlibrary/internal/repository"
+	"github.com/alwaysking/akmdlibrary/internal/service"
 )
 
 func main() {

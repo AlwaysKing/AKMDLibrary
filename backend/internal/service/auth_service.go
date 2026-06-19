@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/repository"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/repository"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )

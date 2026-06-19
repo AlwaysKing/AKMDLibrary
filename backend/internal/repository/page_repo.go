@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/model"
 )
 
 type PageRepository struct {

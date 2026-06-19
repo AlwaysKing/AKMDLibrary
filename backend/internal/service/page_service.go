@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/repository"
-	"github.com/alwaysking/mdlibrary/pkg/filesystem"
-	"github.com/alwaysking/mdlibrary/pkg/frontmatter"
-	"github.com/alwaysking/mdlibrary/pkg/uuidutil"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/repository"
+	"github.com/alwaysking/akmdlibrary/pkg/filesystem"
+	"github.com/alwaysking/akmdlibrary/pkg/frontmatter"
+	"github.com/alwaysking/akmdlibrary/pkg/uuidutil"
 )
 
 type PageService struct {

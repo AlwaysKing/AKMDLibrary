@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/repository"
-	"github.com/alwaysking/mdlibrary/pkg/filesystem"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/repository"
+	"github.com/alwaysking/akmdlibrary/pkg/filesystem"
 )
 
 type SpaceService struct {

@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/pkg/frontmatter"
-	"github.com/alwaysking/mdlibrary/pkg/uuidutil"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/pkg/frontmatter"
+	"github.com/alwaysking/akmdlibrary/pkg/uuidutil"
 )
 
 type Scanner struct {

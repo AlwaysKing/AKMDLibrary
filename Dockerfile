@@ -17,7 +17,7 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o mdlibrary ./cmd/server
+RUN CGO_ENABLED=1 GOOS=linux go build -o akmdlibrary ./cmd/server
 
 # Stage 3: Runtime
 FROM alpine:3.20
@@ -26,7 +26,7 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-COPY --from=backend-builder /app/mdlibrary /app/mdlibrary
+COPY --from=backend-builder /app/akmdlibrary /app/akmdlibrary
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
 # Create data and docs directories
@@ -42,4 +42,4 @@ EXPOSE 8080
 
 VOLUME ["/app/docs", "/app/data"]
 
-CMD ["/app/mdlibrary"]
+CMD ["/app/akmdlibrary"]

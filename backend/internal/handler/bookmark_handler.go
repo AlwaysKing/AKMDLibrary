@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/alwaysking/mdlibrary/internal/service"
+	"github.com/alwaysking/akmdlibrary/internal/service"
 )
 
 type BookmarkHandler struct {

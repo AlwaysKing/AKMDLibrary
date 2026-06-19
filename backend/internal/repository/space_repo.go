@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/model"
 )
 
 type SpaceRepository struct {

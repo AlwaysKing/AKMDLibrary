@@ -1,4 +1,4 @@
-module github.com/alwaysking/mdlibrary
+module github.com/alwaysking/akmdlibrary
 
 go 1.25.5
 

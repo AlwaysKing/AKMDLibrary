@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alwaysking/mdlibrary/internal/model"
-	"github.com/alwaysking/mdlibrary/internal/repository"
+	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/alwaysking/akmdlibrary/internal/repository"
 )
 
 type BookmarkService struct {
