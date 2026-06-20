@@ -170,9 +170,9 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
 
   const handleSelectCustomIcon = async (item: IconLibraryItem) => {
     try {
-      const assetPath = await useIconFromLibrary(item.name, pageId, spaceSlug);
+      const assetPath = await useIconFromLibrary(item.name, pageId!, spaceSlug!);
       const iconUrl = `/api/spaces/${spaceSlug}/pages/${pageId}/assets/${assetPath}`;
-      await updateMetadata(spaceSlug, pageId, { icon: iconUrl });
+      await updateMetadata(spaceSlug!, pageId!, { icon: iconUrl });
       onChange?.();
     } catch (e) {
       console.error('Failed to use icon from library:', e);
@@ -209,8 +209,8 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('page_id', pageId);
-      formData.append('space_slug', spaceSlug);
+      formData.append('page_id', pageId!);
+      formData.append('space_slug', spaceSlug!);
       if (addToLibrary) {
         formData.append('add_to_library', 'true');
         const name = iconName.trim() || pendingFile!.name.replace(/\.[^.]+$/, '');
@@ -234,7 +234,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
 
       const data = await uploadPromise;
       // 后端 /api/upload 已返回完整 URL（/api/spaces/.../assets/{uuid}/file），不要重复拼接
-      await updateMetadata(spaceSlug, pageId, { icon: data.path });
+      await updateMetadata(spaceSlug!, pageId!, { icon: data.path });
       onChange?.();
       setOpen(false);
     } catch (error) {
@@ -306,7 +306,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   const isIconUrl = icon?.startsWith('/') || icon?.startsWith('http');
 
   const handleToggleLarge = async () => {
-    await updateMetadata(spaceSlug, pageId, { icon_large: !iconLarge });
+    await updateMetadata(spaceSlug!, pageId!, { icon_large: !iconLarge });
   };
 
   // Display size: large when toggle is on and icon is an image

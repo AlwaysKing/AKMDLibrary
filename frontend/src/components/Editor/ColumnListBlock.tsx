@@ -969,7 +969,7 @@ function ColumnListComponent({ block, editor }: any) {
       const fn = (e: Event) => {
         e.preventDefault();
         e.stopPropagation();
-        handleResizeStart(i, e as MouseEvent);
+        handleResizeStart(i, e as unknown as React.MouseEvent);
       };
       handle.addEventListener('mousedown', fn, true);
       listeners.push({ el: handle, fn });

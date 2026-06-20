@@ -127,7 +127,7 @@ export default function MoveToDialog({ pageId, pageTree, onClose, onMove, positi
     function findAndCollect(pages: Page[], targetId: string): boolean {
       for (const p of pages) {
         if (p.id === targetId) {
-          ids.add(...collectDescendantIds(p));
+          for (const id of collectDescendantIds(p)) ids.add(id);
           return true;
         }
         if (p.children && findAndCollect(p.children, targetId)) return true;

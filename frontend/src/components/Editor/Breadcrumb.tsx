@@ -250,7 +250,6 @@ function findPagePath(pages: Page[], targetId: string, path: Page[] = []): Page[
 type ActiveItem = 'space' | number | null;
 
 export default function Breadcrumb({ pageTitle, spaceSlug, actions }: BreadcrumbProps) {
-  const navigate = useNavigate();
   const { currentSpace, pageTree, spaces } = useSpaceStore();
   const { sidebarCollapsed, toggleSidebar } = useOutletContext<{ sidebarCollapsed: boolean; toggleSidebar: () => void }>();
   const { pageId } = useParams<{ pageId: string }>();

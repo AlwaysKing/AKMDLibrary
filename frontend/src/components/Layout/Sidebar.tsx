@@ -13,7 +13,7 @@ interface SidebarProps {
   onToggle: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export default function Sidebar({ onToggle }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuthStore();

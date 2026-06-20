@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { pagesApi, TrashedItem } from '../api/pages';
 import { useSpaceStore } from '../stores/spaceStore';
 import { RotateCcw, Trash2 } from 'lucide-react';
 
 export default function TrashPage() {
   const { spaceSlug } = useParams<{ spaceSlug: string }>();
-  const navigate = useNavigate();
   const [items, setItems] = useState<TrashedItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 

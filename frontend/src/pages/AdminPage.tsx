@@ -93,7 +93,7 @@ export default function AdminPage() {
   const userDropdownsRef = useRef<HTMLDivElement>(null);
 
   // ---- 个人设置状态 ----
-  const [profileForm, setProfileForm] = useState({ display_name: '', avatar_url: '' });
+  const [, setProfileForm] = useState({ display_name: '', avatar_url: '' });
   const [passwordForm, setPasswordForm] = useState({ old_password: '', new_password: '', confirm_password: '' });
   const [profileMsg, setProfileMsg] = useState('');
   const [passwordMsg, setPasswordMsg] = useState('');
@@ -404,7 +404,7 @@ export default function AdminPage() {
       closeUserPanel();
       return;
     }
-    setUserFormData({ username: user.username, password: '', display_name: user.display_name, role: user.role });
+    setUserFormData({ username: user.username, password: '', display_name: user.display_name, role: user.role, avatar_url: user.avatar_url || '' });
     setUserPanelId(user.id);
     setShowUserRoleDropdown(false);
     setIsAddingUserSpace(false);
@@ -442,38 +442,6 @@ export default function AdminPage() {
       }
     } catch (err: any) {
       setError(err.message);
-    }
-  };
-
-  // 角色即时保存
-  const handleImmediateRoleChange = async (role: string) => {
-    if (typeof userPanelId !== 'number') return;
-    setUserFormData({ ...userFormData, role });
-    setShowUserRoleDropdown(false);
-    try {
-      const updated = await usersApi.update(userPanelId, { role: role as 'admin' | 'user' });
-      setUsers(prev => prev.map(u => u.id === userPanelId ? updated : u));
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  // 仅保存显示名
-  const handleSaveDisplayNameOnly = async () => {
-    if (typeof userPanelId !== 'number' || !userFormData.display_name.trim()) return;
-    try {
-      const updated = await usersApi.update(userPanelId, { display_name: userFormData.display_name });
-      setUsers(prev => prev.map(u => u.id === userPanelId ? updated : u));
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  // 还原显示名
-  const handleRevertDisplayName = () => {
-    const originalUser = users.find(u => u.id === userPanelId);
-    if (originalUser) {
-      setUserFormData({ ...userFormData, display_name: originalUser.display_name });
     }
   };
 
@@ -684,8 +652,6 @@ export default function AdminPage() {
   // ---- 用户内联面板 ----
   const renderUserPanel = (isEditing: boolean) => {
     const availableSpaces = allSpacesForUser.filter(s => !userSpaces.some(us => us.space.slug === s.slug));
-    const originalUser = isEditing && typeof userPanelId === 'number' ? users.find(u => u.id === userPanelId) : null;
-    const displayNameChanged = originalUser ? userFormData.display_name !== originalUser.display_name : false;
 
     return (
     <form onSubmit={handleSaveUserPanel} className="p-6">
@@ -1289,7 +1255,7 @@ export default function AdminPage() {
                           icon={space.icon || null}
                           onSelect={async (value) => {
                             try {
-                              const updated = await spacesApi.update(space.slug, { icon: value, name: space.name, description: space.description || '' });
+                              await spacesApi.update(space.slug, { icon: value, name: space.name, description: space.description || '' });
                               fetchSpaces();
                             } catch (err) {
                               console.error('Failed to update icon:', err);
@@ -1601,25 +1567,6 @@ export default function AdminPage() {
         )}
       </>
     );
-  };
-
-  const handleSaveDisplayName = async () => {
-    if (!editingDisplayName.trim()) return;
-    try {
-      await useAuthStore.getState().updateProfile({ display_name: editingDisplayName });
-      setIsEditingDisplayName(false);
-    } catch (err: any) {
-      setProfileMsg(err.message || '保存失败');
-    }
-  };
-
-  const handleSelectAvatar = async (emoji: string) => {
-    setShowAvatarPicker(false);
-    try {
-      await useAuthStore.getState().updateProfile({ avatar_url: emoji });
-    } catch (err: any) {
-      setProfileMsg(err.message || '保存失败');
-    }
   };
 
   const handleChangePassword = async () => {

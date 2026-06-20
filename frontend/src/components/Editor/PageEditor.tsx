@@ -502,7 +502,7 @@ const NumberedListIndexFix = Extension.create({
           init(_, state) {
             return buildNumberedIndexDecorations(state.doc);
           },
-          apply(tr, oldValue, oldState, newState) {
+          apply(tr, oldValue, _oldState, newState) {
             // If the document didn't change, keep existing decorations
             if (!tr.docChanged) return oldValue;
             // Rebuild for the new document state
@@ -636,7 +636,6 @@ const InternalLinkBadge = Extension.create({
   name: 'internalLinkBadge',
 
   addProseMirrorPlugins() {
-    const editor = this.editor;
     const spaceSlug = () => {
       try {
         const m = window.location.pathname.match(/^\/s\/([^/]+)/);
@@ -651,7 +650,7 @@ const InternalLinkBadge = Extension.create({
           init(_, state) {
             return buildInternalLinkDecorations(state.doc, spaceSlug(), _badgeEditorView);
           },
-          apply(tr, oldValue, oldState, newState) {
+          apply(tr, oldValue, _oldState, newState) {
             // Only rebuild when doc changed or async mention meta arrived
             if (!tr.docChanged && !tr.getMeta('mentionMetaReady')) return oldValue;
             return buildInternalLinkDecorations(newState.doc, spaceSlug(), _badgeEditorView);
@@ -787,7 +786,7 @@ const TableCellHighlight = Extension.create({
           // primary = the cell that shows the notch (last-selected / $headCell)
           // all = all highlighted cells
           init() { return null as { primary: number; all: number[] } | null; },
-          apply(tr, _value, _oldState, newState) {
+          apply(_tr, _value, _oldState, newState) {
             const sel = newState.selection as any;
 
             // CellSelection (multi-cell drag): highlight ALL selected cells
@@ -1550,7 +1549,7 @@ const TableHeaderIndicators = Extension.create({
   },
 });
 
-function buildInternalLinkDecorations(doc: any, spaceSlug: string, editorView?: any): DecorationSet {
+function buildInternalLinkDecorations(doc: any, spaceSlug: string, _editorView?: any): DecorationSet {
   const decorations: Decoration[] = [];
   const schema = doc.type.schema;
   const linkMarkType = schema.marks.link;
@@ -1912,7 +1911,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
 
     const handleSubpageReordered = (e: Event) => {
-      const { parentId, movedPageId, afterId } = (e as CustomEvent).detail;
+      const { parentId: _parentId, movedPageId, afterId } = (e as CustomEvent).detail;
 
       // Find the moved page's subpage block in the editor
       const movedBlock = editor.document.find(
@@ -2301,7 +2300,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const isSelected = !captionFocused && !captionOpen && !alignMenuOpen && (blockContent.classList.contains('ProseMirror-selectednode') || selectedIds.has(blockId));
         wrapper.classList.add('bn-image-shell');
         mediaWrapper.classList.add('bn-image-media-shell');
-        imageEl.classList.add('bn-image-media');
+        imageEl?.classList.add('bn-image-media');
         wrapper.classList.toggle('is-selected', isSelected);
 
         if (!wrapper.dataset.selectionBound) {
@@ -2786,7 +2785,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // Must be a toggleable block (has toggle wrapper and is expanded)
       if (!blockContent.querySelector('.bn-toggle-wrapper')) return null;
 
-      const blockOuter = blockContent.closest('.bn-block-outer');
+      const blockOuter = blockContent.closest('.bn-block-outer') as HTMLElement | null;
       if (!blockOuter) return null;
 
       // Must have no children (no block group in DOM)
@@ -2916,7 +2915,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const container = editorRef.current;
     if (!container || readOnly) return;
 
-    const EDGE_ZONE_PX = 36; // ~2x Notion drag handle width, for left/right edge detection
     let columnLineEl: HTMLDivElement | null = null;
     let lastDragTarget: ColumnDropTarget | null = null;
 
@@ -3206,7 +3204,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
               blockOuter,
               side: pos === 'above' ? 'left' : 'right',
               position: pos,
-              columnListId: colListId,
+              columnListId: colListId!,
               columnBlockId: blockId,
               insertWidth: bRect.width,
             };
@@ -3240,24 +3238,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           // Check if this block is a column_list
           const thisContentType = bEl.querySelector('[data-content-type]')?.getAttribute('data-content-type');
           const thisBlockId = bEl.querySelector('[data-id]')?.getAttribute('data-id');
-
-          // Helper: check adjacent sibling for column_list
-          const checkAdjacentColumnList = (direction: 'previous' | 'next'): {
-            found: boolean;
-            clId?: string;
-            clOuter?: HTMLElement;
-          } => {
-            const sibling = direction === 'previous'
-              ? bEl.previousElementSibling
-              : bEl.nextElementSibling;
-            if (!sibling) return { found: false };
-            const sibCT = sibling.querySelector('[data-content-type]')?.getAttribute('data-content-type');
-            if (sibCT === 'column_list') {
-              const clId = sibling.querySelector('[data-id]')?.getAttribute('data-id');
-              return { found: true, clId: clId || undefined, clOuter: sibling as HTMLElement };
-            }
-            return { found: false };
-          };
 
           if (clientX < bR.left - EDGE_PX) {
             const bId = thisBlockId;
@@ -3728,7 +3708,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           const placement = target.position === 'above' ? 'before' : 'after';
           editor.insertBlocks([{
-            type: draggedBlock.type,
+            type: draggedBlock.type as any,
             props: draggedBlock.props,
             content: draggedBlock.content,
             children: draggedBlock.children || [],
@@ -3749,7 +3729,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           const placement = target.position === 'above' ? 'before' : 'after';
           editor.insertBlocks([{
-            type: draggedBlock.type,
+            type: draggedBlock.type as any,
             props: draggedBlock.props,
             content: draggedBlock.content,
             children: draggedBlock.children || [],
@@ -3770,7 +3750,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           const placement = target.position === 'above' ? 'before' : 'after';
           editor.insertBlocks([{
-            type: draggedBlock.type,
+            type: draggedBlock.type as any,
             props: draggedBlock.props,
             content: draggedBlock.content,
             children: draggedBlock.children || [],
@@ -3794,7 +3774,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (targetBlockInDoc) {
             // Find the parent block group's children to locate siblings
             const siblingIds = editor.document
-              .filter((b: any) => true) // root-level blocks
+              .filter(() => true) // root-level blocks
               .map((b: any) => b.id);
             const targetIdx = siblingIds.indexOf(target.blockId);
 
@@ -3922,10 +3902,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           // Insert the column_list before the target block
           editor.insertBlocks([{
-            type: 'column_list',
-            props: { columnRatios: '50,50' },
+            type: 'column_list' as any,
+            props: { columnRatios: '50,50' } as any,
             children: [leftChild, rightChild],
-          }], target.blockId, 'before');
+          } as any], target.blockId, 'before');
 
           // Remove the original blocks
           editor.removeBlocks([findBlockDeep(editor.document, target.blockId)!]);
@@ -4226,8 +4206,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (emptyColumns.length === 0) continue;
 
           const emptyColumnIds = new Set(emptyColumns.map((col: any) => col.id));
-          const ratiosFromProps = typeof liveBlock.props?.columnRatios === 'string'
-            ? (liveBlock.props.columnRatios as string).split(',').map(Number)
+          const liveProps = liveBlock.props as any;
+          const ratiosFromProps = typeof liveProps?.columnRatios === 'string'
+            ? (liveProps.columnRatios as string).split(',').map(Number)
             : [];
           const fallbackRatio = Math.round(100 / liveChildren.length);
           const sourceRatios = liveChildren.map((col: any, index: number) => {
@@ -4425,7 +4406,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const MENTION_PREFIX_LOCAL = '​​';
       let found = false;
 
-      pmView.state.doc.descendants((node, pos) => {
+      pmView.state.doc.descendants((node: any, pos: number) => {
         if (found) return false;
         if (!node.isText || !node.marks) return;
         const link = node.marks.find((m: any) => m.type === linkMark && m.attrs.href === url);
@@ -4434,7 +4415,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           // Find the block containing this mention
           const $pos = pmView.state.doc.resolve(pos);
           const blockNode = $pos.parent;
-          const blockStart = $pos.start() - 1; // pos before block content
           const blockFrom = $pos.before(1);
 
           // Check if block only contains this mention
@@ -4503,7 +4483,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const container = editorRef.current;
     if (!container || readOnly) return;
 
-    let selectedIds: string[] = [];
     let isDragging = false;
     let dragOccurred = false;
     let startX = 0;
@@ -4511,7 +4490,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     let selectionRect: HTMLDivElement | null = null;
 
     function updateSelection(ids: string[]) {
-      selectedIds = ids;
       setBlockSelection(ids.length > 0 ? ids : null);
     }
 
@@ -4542,7 +4520,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const pmState = pmView.state;
           const { from, to } = pmState.selection;
           const $from = pmState.doc.resolve(from);
-          const $to = pmState.doc.resolve(to);
 
           // Find the block content range: the blockContainer node that wraps this block
           // Walk up from $from to find the blockContainer
@@ -5169,7 +5146,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const container = editorRef.current;
     if (!container) return;
 
-    const scrollArea = container.closest('.overflow-y-auto');
+    const scrollArea = container.closest('.overflow-y-auto') as HTMLElement | null;
     if (!scrollArea) return;
 
     // Track whether mousedown started on a contenteditable element (e.g. title h1).
@@ -5422,7 +5399,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       <ComponentsContext.Provider value={blockNoteComponents as any}>
         <div>
           <BlockNoteViewRaw
-            editor={editor}
+            editor={editor as any}
             editable={!readOnly}
             onChange={handleChange}
             theme="light"

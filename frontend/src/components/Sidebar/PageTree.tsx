@@ -91,8 +91,8 @@ const closestRowCenter: CollisionDetection = (args) => {
     // redirect to the first visible child instead — this makes "after parent"
     // behave like "before first child", matching Notion behavior.
     if (relativeY > height * 0.75) {
-      const allRows = sortableEl.querySelectorAll('[data-page-row]');
-      if (allRows.length > 1) {
+      const allRows = sortableEl?.querySelectorAll('[data-page-row]');
+      if (allRows && allRows.length > 1) {
         // This is an expanded parent with visible children
         const firstChildRow = allRows[1] as HTMLElement;
         const childSortable = firstChildRow.closest('[data-sortable-id]');
@@ -169,18 +169,6 @@ function DragGhost({ page, level, expandedPageIds }: { page: Page; level: number
       ))}
     </div>
   );
-}
-
-// Find the level (depth) of a page in the tree
-function findPageLevel(pages: Page[], pageId: string, level: number = 0): number | null {
-  for (const p of pages) {
-    if (p.id === pageId) return level;
-    if (p.children) {
-      const result = findPageLevel(p.children, pageId, level + 1);
-      if (result !== null) return result;
-    }
-  }
-  return null;
 }
 
 export default function PageTree() {

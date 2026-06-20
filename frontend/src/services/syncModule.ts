@@ -13,7 +13,6 @@
 import {
   getAllPendingMirrors,
   deleteMirrors,
-  deleteMirror,
   initMirrorDB,
 } from './mirrorStore';
 import type { PageMirror } from './mirrorStore';

@@ -431,8 +431,8 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
 
   const isGradient = coverUrl?.startsWith('linear-gradient');
   const coverBgStyle = isGradient
-    ? { background: coverUrl }
-    : { backgroundImage: `url(${coverUrl})`, backgroundPosition: `center ${coverOffset}%` };
+    ? { background: coverUrl ?? '' }
+    : { backgroundImage: `url(${coverUrl ?? ''})`, backgroundPosition: `center ${coverOffset}%` };
 
   // 只在用户配置了 Unsplash API key 时才显示 Unsplash tab
   const hasUnsplashKey = usePreferenceStore(s => !!s.preferences.has_unsplash_key);

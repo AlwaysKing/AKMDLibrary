@@ -10,17 +10,6 @@ export interface PageMeta {
   title: string;
 }
 
-function findPageInTree(tree: Page[], pageId: string): Page | null {
-  for (const page of tree) {
-    if (page.id === pageId) return page;
-    if (page.children) {
-      const found = findPageInTree(page.children, pageId);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
 class PageMetaCache {
   private cache = new Map<string, PageMeta>();
   private pending = new Map<string, Promise<PageMeta | null>>();

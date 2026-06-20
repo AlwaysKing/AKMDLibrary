@@ -13,7 +13,6 @@ import React, {
   useEffect,
   useLayoutEffect,
   useMemo,
-  ComponentType,
   ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -1316,14 +1315,14 @@ const FilePanelButton: React.FC<{
   );
 };
 
-const FilePanelInput: React.FC<{
+const FilePanelInput = forwardRef<HTMLInputElement, {
   className?: string;
   accept: string;
   value: File | null;
   placeholder: string;
   onChange: (payload: File | null) => void;
   [key: string]: any;
-}> = forwardRef((props, ref) => {
+}>((props, ref) => {
   const { className, accept, placeholder, onChange, value: _value, ...rest } = props;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [selectedName, setSelectedName] = useState('');
@@ -1395,7 +1394,7 @@ const FilePanelTabPanel: React.FC<{
   );
 };
 
-const FormTextInput: React.FC<{
+const FormTextInput = forwardRef<HTMLInputElement, {
   className?: string;
   name?: string;
   label?: string;
@@ -1411,9 +1410,8 @@ const FormTextInput: React.FC<{
   onSubmit?: () => void;
   autoComplete?: string;
   ['aria-activedescendant']?: string;
-  ref?: React.Ref<HTMLInputElement>;
   [key: string]: any;
-}> = forwardRef((props, ref) => {
+}>((props, ref) => {
   const {
     className,
     name,

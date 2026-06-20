@@ -308,9 +308,9 @@ export default function TableCellMenu({
       const row = cell.closest('tr') as HTMLTableRowElement | null;
       const tableEl = cell.closest('[data-content-type="table"]');
       const allRows = tableEl ? Array.from(tableEl.querySelectorAll('tr')) as HTMLTableRowElement[] : [];
-      const rowIndex = Array.from(allRows).indexOf(row);
+      const rowIndex = row ? Array.from(allRows).indexOf(row) : -1;
       const cells = row ? Array.from(row.querySelectorAll('td, th')) as HTMLTableCellElement[] : [];
-      const cellIndex = cells.indexOf(cell);
+      const cellIndex = cells.indexOf(cell as HTMLTableCellElement);
       return { tableId, rowIndex, cellIndex };
     }).filter(c => c.rowIndex >= 0 && c.cellIndex >= 0);
   }, [editorContainer]);
@@ -327,7 +327,7 @@ export default function TableCellMenu({
     const row = activeCell.closest('tr') as HTMLTableRowElement | null;
     const tableEl = activeCell.closest('[data-content-type="table"]');
     const allRows = tableEl ? Array.from(tableEl.querySelectorAll('tr')) as HTMLTableRowElement[] : [];
-    const rowIndex = Array.from(allRows).indexOf(row);
+    const rowIndex = row ? Array.from(allRows).indexOf(row) : -1;
     const cells = row ? Array.from(row.querySelectorAll('td, th')) as HTMLTableCellElement[] : [];
     const cellIndex = cells.indexOf(activeCell);
 

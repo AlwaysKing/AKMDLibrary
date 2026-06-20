@@ -65,7 +65,7 @@ export default function TableColumnActions({
         const activeRow = activeCell.closest('tr');
         if (activeRow) {
           const rowCells = activeRow.querySelectorAll('td');
-          const activeIdx = Array.from(rowCells).indexOf(activeCell);
+          const activeIdx = Array.from(rowCells).indexOf(activeCell as HTMLTableCellElement);
           if (activeIdx >= 0 && activeIdx < colCount - 1) {
             newActiveCol = colKey(tableId, activeIdx);
           } else if (activeIdx === colCount - 1) {
