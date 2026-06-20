@@ -9,6 +9,8 @@ interface SpacePreference {
 interface UserPreferences {
   last_active_space_slug?: string | null;
   space_preferences: Record<string, SpacePreference>;
+  // 后端只返回布尔，key 本身不暴露给前端
+  has_unsplash_key?: boolean;
 }
 
 interface PreferenceState {
@@ -20,6 +22,7 @@ interface PreferenceState {
   setExpandedPageIds: (spaceSlug: string, ids: string[]) => void;
   getExpandedPageIds: (spaceSlug: string) => string[];
   getLastViewedPageId: (spaceSlug: string) => string | null | undefined;
+  setUnsplashKey: (key: string) => Promise<boolean>;
 }
 
 // Debounced save: accumulate changes and send one request
@@ -101,5 +104,18 @@ export const usePreferenceStore = create<PreferenceState>((set, get) => ({
 
   getLastViewedPageId: (spaceSlug: string) => {
     return get().preferences.space_preferences[spaceSlug]?.last_viewed_page_id;
+  },
+
+  setUnsplashKey: async (key: string) => {
+    try {
+      await apiClient.put('/user/preferences', { unsplash_api_key: key });
+      set((state) => ({
+        preferences: { ...state.preferences, has_unsplash_key: key !== '' },
+      }));
+      return true;
+    } catch (err) {
+      console.error('Failed to save unsplash api key:', err);
+      return false;
+    }
   },
 }));

@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -122,6 +123,13 @@ func (db *DB) migrate() error {
 	for _, schema := range schemas {
 		if _, err := db.Exec(schema); err != nil {
 			return fmt.Errorf("failed to execute schema: %w", err)
+		}
+	}
+
+	// Incremental migrations: SQLite 不支持 ADD COLUMN IF NOT EXISTS，所以尝试执行并忽略 "duplicate column" 错误
+	if _, err := db.Exec(`ALTER TABLE user_global_preferences ADD COLUMN unsplash_api_key TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("failed to migrate user_global_preferences: %w", err)
 		}
 	}
 

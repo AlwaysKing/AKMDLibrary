@@ -30,5 +30,17 @@ func (s *PreferenceService) Update(userID int, req *model.UpdatePreferencesReque
 		}
 	}
 
+	// Unsplash key：非 nil 才更新（nil 表示前端没传这个字段，不动；空串会清空）
+	if req.UnsplashAPIKey != nil {
+		if err := s.prefRepo.SetUnsplashKey(userID, *req.UnsplashAPIKey); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// GetUnsplashKey 暴露给 Unsplash 代理 handler 使用
+func (s *PreferenceService) GetUnsplashKey(userID int) (string, error) {
+	return s.prefRepo.GetUnsplashKey(userID)
 }

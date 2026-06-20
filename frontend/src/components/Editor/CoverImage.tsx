@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Image as ImageIcon, Check, Upload, Grid3X3, Search, Download, User } from 'lucide-react';
 import { usePageStore } from '../../stores/pageStore';
+import { usePreferenceStore } from '../../stores/preferenceStore';
 import { fetchCoverLibrary, checkCoverName, useCoverFromLibrary, CoverLibraryItem } from '../../api/covers';
+import apiClient from '../../api/client';
 
 // 图库分类数据（参考 Notion 封面图库分类）
+// 图片内置在 frontend/public/covers/，避免运行时依赖 Unsplash CDN
 const GALLERY_CATEGORIES = [
   {
     id: 'gradient',
@@ -26,87 +29,34 @@ const GALLERY_CATEGORIES = [
   {
     id: 'nature',
     label: '自然',
-    items: [
-      'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1433086966358-54859d0ed716?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1518173946687-a4c23ae3e658?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=1200&h=400&fit=crop',
-    ],
+    items: Array.from({ length: 10 }, (_, i) => `/covers/nature/nature-${String(i + 1).padStart(2, '0')}.jpg`),
   },
   {
     id: 'architecture',
     label: '建筑',
-    items: [
-      'https://images.unsplash.com/photo-1486325212027-8081e485255e?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1448630360428-65456885c650?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1511818966892-d7d671e672a2?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1487958449943-2429e8be8625?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1518005020951-eccb494ad742?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1479839672679-a46483c0e7c8?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1449844908441-8829872d2607?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1513475382585-d06e58bcb0e0?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1444723121867-7a241cacace9?w=1200&h=400&fit=crop',
-    ],
+    items: Array.from({ length: 10 }, (_, i) => `/covers/architecture/architecture-${String(i + 1).padStart(2, '0')}.jpg`),
   },
   {
     id: 'space',
     label: '太空',
-    items: [
-      'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1454789548928-9efd52dc4021?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1464802686167-b939a6910658?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1516849841032-87cbac4d88f9?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1543722530-d2c3201371e7?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1483728642387-6c3bdd6c93e5?w=1200&h=400&fit=crop',
-    ],
+    items: Array.from({ length: 10 }, (_, i) => `/covers/space/space-${String(i + 1).padStart(2, '0')}.jpg`),
   },
   {
     id: 'art',
     label: '艺术',
-    items: [
-      'https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1578301978693-85fa9c0320b9?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1544967082-d9d25d867d66?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1549887534-1541e9326642?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1578926288207-a90a5366759d?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1460661419201-fd4cecdf8a8b?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-15419610177-4ff36fa9d699?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1577720643272-265f09367456?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=1200&h=400&fit=crop&q=80',
-    ],
+    items: Array.from({ length: 10 }, (_, i) => `/covers/art/art-${String(i + 1).padStart(2, '0')}.jpg`),
   },
   {
     id: 'abstract',
     label: '抽象',
-    items: [
-      'https://images.unsplash.com/photo-1550859492-d5da9d8e45f3?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1557672172-298e090bd0f1?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1567095761054-7a02e69e5571?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1557682250-33bd709cbe85?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1578830993534-04f0c9a4e229?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1558591710-4b4a1ae0f04d?w=1200&h=400&fit=crop',
-      'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=1200&h=400&fit=crop',
-    ],
+    items: Array.from({ length: 8 }, (_, i) => `/covers/abstract/abstract-${String(i + 1).padStart(2, '0')}.jpg`),
   },
 ];
 
-// 缩略图映射（使用 Unsplash 的 thumb 参数）
+// 缩略图映射：渐变返回 null（用 CSS 渲染），其他用原图（浏览器缩放）
 const getThumbUrl = (url: string) => {
   if (url.startsWith('linear-gradient')) return null;
-  return url.replace('w=1200&h=400', 'w=200&h=100');
+  return url;
 };
 
 interface CoverImageProps {
@@ -147,7 +97,15 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
   const [unsplashQuery, setUnsplashQuery] = useState('');
   const [unsplashResults, setUnsplashResults] = useState<Array<{ id: string; url: string; thumb: string; author: string }>>([]);
   const [unsplashLoading, setUnsplashLoading] = useState(false);
+  const [unsplashLoadingMore, setUnsplashLoadingMore] = useState(false);
+  const [unsplashHasMore, setUnsplashHasMore] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  // 请求序列号：query 改变时 ++，旧请求回来时如果 seq 不匹配就丢弃结果（防 race condition）
+  const unsplashSeqRef = useRef(0);
+  // 当前 query 和 page 用 ref 跟踪，避免闭包陈旧
+  const unsplashQueryRef = useRef('');
+  const unsplashPageRef = useRef(1);
+  const unsplashTotalRef = useRef(0);
 
   // Cover library state
   const [coverLibrary, setCoverLibrary] = useState<CoverLibraryItem[]>([]);
@@ -219,8 +177,8 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
       });
 
       const data = await uploadPromise;
-      const newCoverUrl = `/api/spaces/${spaceSlug}/pages/${pageId}/assets/${data.path}`;
-      await updateMetadata(spaceSlug, pageId, { cover_url: newCoverUrl });
+      // 后端 /api/upload 已返回完整 URL（/api/spaces/.../assets/{uuid}/file），不要重复拼接
+      await updateMetadata(spaceSlug, pageId, { cover_url: data.path });
       setShowPicker(false);
     } catch (error) {
       console.error('Failed to upload cover:', error);
@@ -283,7 +241,29 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
   };
 
   const handleSelectPreset = async (preset: string) => {
-    await updateMetadata(spaceSlug, pageId, { cover_url: preset });
+    if (preset.startsWith('linear-gradient')) {
+      // 渐变是 CSS 字符串，直接存（无需复制）
+      await updateMetadata(spaceSlug, pageId, { cover_url: preset });
+      setShowPicker(false);
+    } else {
+      // 本地图片：fetch blob → 走上传流程（后端自动复制到 page 的 public/{uuid}/）
+      try {
+        const res = await fetch(preset);
+        const blob = await res.blob();
+        const filename = preset.split('/').pop() || 'cover.jpg';
+        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+        await handleFileUpload(file);
+      } catch (e) {
+        console.error('Failed to apply preset cover:', e);
+      }
+    }
+  };
+
+  // 「添加封面」按钮：从所有内置项里随机抽一个（12 渐变 + 48 图片 = 60 个）
+  const handleAddRandomCover = () => {
+    const allItems = GALLERY_CATEGORIES.flatMap(c => c.items);
+    const pick = allItems[Math.floor(Math.random() * allItems.length)];
+    handleSelectPreset(pick);
   };
 
   const handleSelectUnsplash = async (url: string) => {
@@ -296,39 +276,81 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
     setIsHovered(false);
   };
 
-  // Unsplash search
+  // Unsplash search：走后端代理（key 保存在 DB，不在前端暴露）
+  // 新搜索：重置 page=1，覆盖结果
   const searchUnsplash = useCallback(async (query: string) => {
-    if (!query.trim()) {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      unsplashSeqRef.current++;
+      unsplashQueryRef.current = '';
       setUnsplashResults([]);
+      setUnsplashHasMore(false);
       return;
     }
+    // 新 query → 序列号 +1，旧请求回来时 seq 不匹配会被丢弃
+    const seq = ++unsplashSeqRef.current;
+    unsplashQueryRef.current = trimmed;
+    unsplashPageRef.current = 1;
     setUnsplashLoading(true);
     try {
-      const response = await fetch(
-        `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=12&orientation=landscape`,
-        {
-          headers: {
-            Authorization: 'Client-ID ' + 'YOUR_UNSPLASH_ACCESS_KEY',
-          },
-        }
-      );
-      if (!response.ok) throw new Error('Unsplash search failed');
-      const data = await response.json();
-      setUnsplashResults(
-        data.results.map((photo: any) => ({
-          id: photo.id,
-          url: photo.urls.raw + '&w=1200&h=400&fit=crop',
-          thumb: photo.urls.thumb,
-          author: photo.user.name,
-        }))
-      );
+      const res = await apiClient.get('/unsplash/search', {
+        params: { q: trimmed, per_page: 12, page: 1 },
+      });
+      if (seq !== unsplashSeqRef.current) return;  // 请求过期，丢弃
+      const data = res.data as { total?: number; total_pages?: number; results?: Array<{ id: string; urls: { raw: string; thumb: string }; user: { name: string } }> };
+      unsplashTotalRef.current = data.total ?? 0;
+      const items = (data.results || []).map((photo) => ({
+        id: photo.id,
+        url: photo.urls.raw + '&w=1200&h=400&fit=crop',
+        thumb: photo.urls.thumb,
+        author: photo.user.name,
+      }));
+      setUnsplashResults(items);
+      setUnsplashHasMore((data.total_pages ?? 1) > 1 && items.length > 0);
     } catch (error) {
       console.error('Unsplash search error:', error);
-      setUnsplashResults([]);
+      if (seq === unsplashSeqRef.current) {
+        setUnsplashResults([]);
+        setUnsplashHasMore(false);
+      }
     } finally {
-      setUnsplashLoading(false);
+      if (seq === unsplashSeqRef.current) setUnsplashLoading(false);
     }
   }, []);
+
+  // 加载下一页：append 结果
+  const loadMoreUnsplash = useCallback(async () => {
+    const query = unsplashQueryRef.current;
+    if (!query || unsplashLoadingMore || !unsplashHasMore) return;
+    const nextPage = unsplashPageRef.current + 1;
+    // 加载更多不 ++seq（因为不算新 query），但用 loading 状态防止并发
+    setUnsplashLoadingMore(true);
+    try {
+      const res = await apiClient.get('/unsplash/search', {
+        params: { q: query, per_page: 12, page: nextPage },
+      });
+      // 如果用户在此期间又搜索了新 query，丢弃这次结果
+      if (query !== unsplashQueryRef.current) return;
+      const data = res.data as { total_pages?: number; results?: Array<{ id: string; urls: { raw: string; thumb: string }; user: { name: string } }> };
+      const items = (data.results || []).map((photo) => ({
+        id: photo.id,
+        url: photo.urls.raw + '&w=1200&h=400&fit=crop',
+        thumb: photo.urls.thumb,
+        author: photo.user.name,
+      }));
+      unsplashPageRef.current = nextPage;
+      setUnsplashResults(prev => {
+        // 去重：避免同一张图被加两次（理论上不会，但保险起见）
+        const existingIds = new Set(prev.map(p => p.id));
+        return [...prev, ...items.filter(p => !existingIds.has(p.id))];
+      });
+      setUnsplashHasMore((data.total_pages ?? nextPage) > nextPage);
+    } catch (error) {
+      console.error('Unsplash load more error:', error);
+    } finally {
+      setUnsplashLoadingMore(false);
+    }
+  }, [unsplashLoadingMore, unsplashHasMore]);
 
   const handleUnsplashQueryChange = (value: string) => {
     setUnsplashQuery(value);
@@ -412,17 +434,25 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
     ? { background: coverUrl }
     : { backgroundImage: `url(${coverUrl})`, backgroundPosition: `center ${coverOffset}%` };
 
+  // 只在用户配置了 Unsplash API key 时才显示 Unsplash tab
+  const hasUnsplashKey = usePreferenceStore(s => !!s.preferences.has_unsplash_key);
+  const tabsList = [
+    { key: 'gallery' as const, label: '图库', Icon: Grid3X3 },
+    { key: 'upload' as const, label: '上传', Icon: Upload },
+    { key: 'link' as const, label: '链接', Icon: ImageIcon },
+    ...(hasUnsplashKey ? [{ key: 'unsplash' as const, label: 'Unsplash', Icon: Search }] : []),
+  ];
+
   if (!coverUrl) {
     return (
       <div className="relative group">
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={handleAddRandomCover}
           className="flex items-center gap-1 px-2 py-0.5 text-sm text-notion-textSecondary hover:bg-notion-hover rounded transition-colors"
         >
           <ImageIcon className="w-4 h-4" />
           添加封面
         </button>
-        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleInputChange} />
       </div>
     );
   }
@@ -488,12 +518,7 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
           {/* Tabs */}
           <div className="flex items-center border-b border-gray-100">
             <div className="flex">
-              {([
-                { key: 'gallery' as const, label: '图库', Icon: Grid3X3 },
-                { key: 'upload' as const, label: '上传', Icon: Upload },
-                { key: 'link' as const, label: '链接', Icon: ImageIcon },
-                { key: 'unsplash' as const, label: 'Unsplash', Icon: Search },
-              ] as const).map(({ key, label, Icon }) => (
+              {tabsList.map(({ key, label, Icon }) => (
                 <button
                   key={key}
                   onClick={() => setPickerTab(key)}
@@ -519,7 +544,17 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
           </div>
 
           {/* Tab content */}
-          <div className="max-h-[300px] overflow-y-auto">
+          <div
+            className="max-h-[300px] overflow-y-auto"
+            onScroll={(e) => {
+              if (pickerTab !== 'unsplash') return;
+              const el = e.currentTarget;
+              // 距离底部 < 80px 就触发加载
+              if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+                loadMoreUnsplash();
+              }
+            }}
+          >
             {pickerTab === 'gallery' && (
               <>
                 {/* Category tabs */}
@@ -726,20 +761,30 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
                   </div>
                 )}
                 {!unsplashLoading && unsplashResults.length > 0 && (
-                  <div className="grid grid-cols-3 gap-2">
-                    {unsplashResults.map((photo) => (
-                      <button
-                        key={photo.id}
-                        onClick={() => handleSelectUnsplash(photo.url)}
-                        className="group/img relative h-16 rounded overflow-hidden hover:ring-2 hover:ring-blue-400 transition-all"
-                      >
-                        <img src={photo.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
-                        <span className="absolute bottom-0 inset-x-0 px-1 py-0.5 text-[10px] text-white bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity truncate">
-                          {photo.author}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      {unsplashResults.map((photo) => (
+                        <button
+                          key={photo.id}
+                          onClick={() => handleSelectUnsplash(photo.url)}
+                          className="group/img relative h-16 rounded overflow-hidden hover:ring-2 hover:ring-blue-400 transition-all"
+                        >
+                          <img src={photo.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
+                          <span className="absolute bottom-0 inset-x-0 px-1 py-0.5 text-[10px] text-white bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity truncate">
+                            {photo.author}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    {unsplashLoadingMore && (
+                      <div className="flex items-center justify-center py-3">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" />
+                      </div>
+                    )}
+                    {!unsplashLoadingMore && !unsplashHasMore && (
+                      <p className="text-center text-xs text-gray-400 py-3">没有更多了</p>
+                    )}
+                  </>
                 )}
                 {!unsplashLoading && unsplashQuery && unsplashResults.length === 0 && (
                   <p className="text-center text-sm text-gray-400 py-4">未找到相关图片</p>

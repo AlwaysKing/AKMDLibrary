@@ -233,8 +233,8 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
       });
 
       const data = await uploadPromise;
-      const iconUrl = `/api/spaces/${spaceSlug}/pages/${pageId}/assets/${data.path}`;
-      await updateMetadata(spaceSlug, pageId, { icon: iconUrl });
+      // 后端 /api/upload 已返回完整 URL（/api/spaces/.../assets/{uuid}/file），不要重复拼接
+      await updateMetadata(spaceSlug, pageId, { icon: data.path });
       onChange?.();
       setOpen(false);
     } catch (error) {

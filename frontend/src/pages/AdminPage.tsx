@@ -9,6 +9,8 @@ import { fetchCoverLibrary, uploadToCoverLibrary, deleteCover, renameCover, Cove
 import { siteSettingsApi, SiteSettings } from '../api/siteSettings';
 import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen } from 'lucide-react';
 import PageIcon from '../components/Editor/PageIcon';
+import { usePreferenceStore } from '../stores/preferenceStore';
+import apiClient from '../api/client';
 
 interface EditingUser {
   id: number;
@@ -99,6 +101,12 @@ export default function AdminPage() {
   const [isEditingDisplayName, setIsEditingDisplayName] = useState(false);
   const [editingDisplayName, setEditingDisplayName] = useState('');
   const avatarPickerRef = useRef<HTMLDivElement>(null);
+
+  // ---- Unsplash API Key 配置 ----
+  const [unsplashKeyInput, setUnsplashKeyInput] = useState('');
+  const [unsplashKeyConfigured, setUnsplashKeyConfigured] = useState(false);
+  const [unsplashMsg, setUnsplashMsg] = useState('');
+  const [unsplashTesting, setUnsplashTesting] = useState(false);
 
   // ---- 空间管理状态 ----
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -197,6 +205,19 @@ export default function AdminPage() {
   // ---- 数据获取 ----
   useEffect(() => {
     if (activeTab === 'users') fetchUsers();
+  }, [activeTab]);
+
+  // 个人设置：加载 Unsplash API key 配置状态
+  useEffect(() => {
+    if (activeTab !== 'profile') return;
+    (async () => {
+      try {
+        const res = await apiClient.get<{ configured: boolean }>('/unsplash/status');
+        setUnsplashKeyConfigured(res.data.configured);
+      } catch (err) {
+        console.error('Failed to fetch unsplash status:', err);
+      }
+    })();
   }, [activeTab]);
 
   useEffect(() => {
@@ -1616,6 +1637,65 @@ export default function AdminPage() {
     }
   };
 
+  // 保存 Unsplash API key（走后端代理，key 不离开服务器）
+  const handleSaveUnsplashKey = async () => {
+    const key = unsplashKeyInput.trim();
+    if (!key) {
+      setUnsplashMsg('请先输入 API Key');
+      return;
+    }
+    const ok = await usePreferenceStore.getState().setUnsplashKey(key);
+    if (ok) {
+      setUnsplashKeyConfigured(true);
+      setUnsplashKeyInput('');
+      setUnsplashMsg('保存成功');
+      setTimeout(() => setUnsplashMsg(''), 2000);
+    } else {
+      setUnsplashMsg('保存失败，请重试');
+    }
+  };
+
+  // 清除已保存的 Unsplash API key
+  const handleClearUnsplashKey = async () => {
+    const ok = await usePreferenceStore.getState().setUnsplashKey('');
+    if (ok) {
+      setUnsplashKeyConfigured(false);
+      setUnsplashKeyInput('');
+      setUnsplashMsg('已清除');
+      setTimeout(() => setUnsplashMsg(''), 2000);
+    } else {
+      setUnsplashMsg('清除失败，请重试');
+    }
+  };
+
+  // 测试当前输入的 key（直接走后端代理，先临时保存再调搜索）
+  const handleTestUnsplashKey = async () => {
+    const key = unsplashKeyInput.trim();
+    if (!key) {
+      setUnsplashMsg('请先输入 API Key');
+      return;
+    }
+    setUnsplashTesting(true);
+    setUnsplashMsg('测试中...');
+    try {
+      // 先临时保存再测，因为后端从 DB 取 key
+      await usePreferenceStore.getState().setUnsplashKey(key);
+      const res = await apiClient.get<{ total?: number }>('/unsplash/search', { params: { q: 'test', per_page: 1 } });
+      if (typeof res.data.total === 'number') {
+        setUnsplashKeyConfigured(true);
+        setUnsplashMsg(`测试成功，Unsplash 共找到 ${res.data.total} 张图`);
+        setTimeout(() => setUnsplashMsg(''), 3000);
+      } else {
+        setUnsplashMsg('测试成功，响应格式异常但 key 可用');
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || '测试失败';
+      setUnsplashMsg(`测试失败：${msg}`);
+    } finally {
+      setUnsplashTesting(false);
+    }
+  };
+
   // ---- 站点设置视图 ----
   const renderSiteSettings = () => {
     const DEFAULT_FAVICON = '/vite.svg';
@@ -1842,6 +1922,76 @@ export default function AdminPage() {
             ))}
           </div>
           {passwordMsg && <div className={`text-sm mt-3 ${passwordMsg.includes('成功') ? 'text-green-600' : 'text-red-600'}`}>{passwordMsg}</div>}
+        </div>
+
+        {/* 第三方集成：Unsplash */}
+        <div className="bg-white rounded-lg border border-notion-border p-6 mt-6">
+          <h3 className="text-sm font-medium text-notion-text mb-1">第三方集成</h3>
+          <p className="text-xs text-notion-textSecondary mb-4">
+            配置 Unsplash API Key 后，封面选择器会显示 Unsplash tab，可直接搜索在线图片。
+            Key 只保存在后端，不会出现在前端或请求 URL 中。
+          </p>
+          <div className="space-y-0">
+            {row('状态', (
+              <span className={`text-sm ${unsplashKeyConfigured ? 'text-green-600' : 'text-notion-textSecondary'}`}>
+                {unsplashKeyConfigured ? '已配置' : '未配置'}
+              </span>
+            ))}
+            {row('API Key', (
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={unsplashKeyInput}
+                  onChange={(e) => setUnsplashKeyInput(e.target.value)}
+                  placeholder={unsplashKeyConfigured ? '••••••••（输入新值覆盖）' : '粘贴 Unsplash Access Key'}
+                  className="w-80 px-2 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-300"
+                />
+                <button
+                  type="button"
+                  onClick={handleTestUnsplashKey}
+                  disabled={!unsplashKeyInput.trim() || unsplashTesting}
+                  className="text-xs text-notion-textSecondary hover:text-notion-text border border-notion-border rounded px-2 py-1 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="用当前输入的 key 发一次测试请求"
+                >
+                  {unsplashTesting ? '测试中...' : '测试'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveUnsplashKey}
+                  disabled={!unsplashKeyInput.trim()}
+                  className="text-xs text-white bg-notion-text hover:bg-notion-text/90 rounded px-2 py-1 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="保存"
+                >
+                  保存
+                </button>
+                {unsplashKeyConfigured && (
+                  <button
+                    type="button"
+                    onClick={handleClearUnsplashKey}
+                    className="text-xs text-notion-textSecondary hover:text-red-500 transition-colors"
+                    title="清除已保存的 key"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+            ))}
+            {row('申请地址', (
+              <a
+                href="https://unsplash.com/oauth/applications/new"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-500 hover:underline"
+              >
+                https://unsplash.com/oauth/applications/new
+              </a>
+            ))}
+          </div>
+          {unsplashMsg && (
+            <div className={`text-sm mt-3 ${unsplashMsg.includes('失败') || unsplashMsg.includes('请先') ? 'text-red-600' : 'text-green-600'}`}>
+              {unsplashMsg}
+            </div>
+          )}
         </div>
       </>
     );

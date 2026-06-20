@@ -23,16 +23,18 @@ func (r *PreferenceRepository) GetByUserID(userID int) (*model.UserPreferences, 
 
 	// Get global preferences
 	var lastSpace sql.NullString
+	var unsplashKey sql.NullString
 	err := r.db.QueryRow(
-		"SELECT last_active_space_slug FROM user_global_preferences WHERE user_id = ?",
+		"SELECT last_active_space_slug, unsplash_api_key FROM user_global_preferences WHERE user_id = ?",
 		userID,
-	).Scan(&lastSpace)
+	).Scan(&lastSpace, &unsplashKey)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get global preferences: %w", err)
 	}
 	if lastSpace.Valid {
 		prefs.LastActiveSpaceSlug = &lastSpace.String
 	}
+	prefs.HasUnsplashKey = unsplashKey.Valid && unsplashKey.String != ""
 
 	// Get space preferences
 	rows, err := r.db.Query(
@@ -77,6 +79,37 @@ func (r *PreferenceRepository) UpsertGlobalPref(userID int, lastActiveSpaceSlug 
 		return fmt.Errorf("failed to upsert global preference: %w", err)
 	}
 	return nil
+}
+
+// SetUnsplashKey 写入用户的 Unsplash API key。空字符串会清空已有 key。
+func (r *PreferenceRepository) SetUnsplashKey(userID int, key string) error {
+	_, err := r.db.Exec(`
+		INSERT INTO user_global_preferences (user_id, unsplash_api_key, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id) DO UPDATE SET
+			unsplash_api_key = excluded.unsplash_api_key,
+			updated_at = CURRENT_TIMESTAMP
+	`, userID, key)
+	if err != nil {
+		return fmt.Errorf("failed to set unsplash api key: %w", err)
+	}
+	return nil
+}
+
+// GetUnsplashKey 读取用户的 Unsplash API key，返回空串表示未配置。
+func (r *PreferenceRepository) GetUnsplashKey(userID int) (string, error) {
+	var key sql.NullString
+	err := r.db.QueryRow(
+		"SELECT unsplash_api_key FROM user_global_preferences WHERE user_id = ?",
+		userID,
+	).Scan(&key)
+	if err != nil && err != sql.ErrNoRows {
+		return "", fmt.Errorf("failed to get unsplash api key: %w", err)
+	}
+	if !key.Valid {
+		return "", nil
+	}
+	return key.String, nil
 }
 
 func (r *PreferenceRepository) UpsertSpacePref(userID int, spaceSlug string, lastViewedPageID *string, expandedPageIDs *[]string) error {

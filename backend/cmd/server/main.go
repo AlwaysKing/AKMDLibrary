@@ -89,6 +89,7 @@ func main() {
 	prefHandler := handler.NewPreferenceHandler(prefService)
 	siteSettingHandler := handler.NewSiteSettingHandler(siteSettingService, siteDir)
 	bookmarkHandler := handler.NewBookmarkHandler(bookmarkService)
+	unsplashHandler := handler.NewUnsplashHandler(prefService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -157,6 +158,10 @@ func main() {
 
 		// Bookmark
 		r.Get("/api/bookmark/meta", bookmarkHandler.GetMeta)
+
+		// Unsplash 代理（按用户偏好里的 key 转发，前端不接触 key）
+		r.Get("/api/unsplash/status", unsplashHandler.Status)
+		r.Get("/api/unsplash/search", unsplashHandler.Search)
 
 		// Users (admin only)
 		r.Group(func(r chi.Router) {
