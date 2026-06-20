@@ -43,7 +43,8 @@ docs/screenshots/.uuid-migrated
 userdata/
 
 # 临时备份 patch 和运行日志（不入库）
-patches/
+# 用 /patches/ 锚定根目录，避免误伤 frontend/patches/（构建时 postinstall 需要它）
+/patches/
 *-run.log
 backend/*.log
 frontend/*.log

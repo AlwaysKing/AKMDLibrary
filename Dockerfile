@@ -6,6 +6,9 @@ RUN apk add --no-cache bash
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
+# postinstall 会跑 bash scripts/apply-patches.sh，必须先把 scripts/ 一起 COPY 进来，
+# 否则 npm install 时找不到脚本会报 code 127
+COPY frontend/scripts/ ./scripts/
 RUN npm install
 COPY frontend/ ./
 RUN npm run build
