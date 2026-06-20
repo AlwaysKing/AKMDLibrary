@@ -1,15 +1,24 @@
+# 服务器部署配置：从 GHCR 拉取预构建镜像
+#
+# 首次部署：
+#   1. 创建 .env 文件并设置 JWT_SECRET
+#        echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+#   2. docker compose pull
+#   3. docker compose up -d
+#
+# 更新到最新版本：
+#   docker compose pull && docker compose up -d
+
 services:
   akmdlibrary:
-    build: .
+    image: ghcr.io/alwaysking/akmdlibrary:latest
+    pull_policy: always
+    container_name: akmdlibrary
     ports:
       - "8080:8080"
     volumes:
       - ./docs:/app/docs
       - ./data:/app/data
     environment:
-      - PORT=8080
-      - DOCS_DIR=/app/docs
-      - DATA_DIR=/app/data
-      - FRONTEND_DIST=/app/frontend/dist
-      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-me}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 必须在 .env 文件中设置}
     restart: unless-stopped

@@ -1,6 +1,8 @@
 *.db
 *.exe
 *.png
+# 例外：README 截图需要进 git
+!docs/screenshots/*.png
 .DS_Store
 .chrome-debug-profile/
 .claude/
@@ -17,8 +19,11 @@ backend/mdlibrary-server
 backend/server
 current-state
 data/
+userdata/
 dist/
-docs/
+# 运行时文档库（用户数据），但保留 README 截图
+docs/*
+!docs/screenshots/
 drag-test-1
 drag-test-handle
 frontend/.next/
@@ -32,3 +37,7 @@ notion导出/
 page-loaded
 test-*.cjs
 tmp/
+
+# 后端运行时标记文件
+docs/screenshots/.uuid-migrated
+userdata/

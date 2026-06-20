@@ -9,6 +9,6 @@ data
 test-*.cjs
 test-*.png
 test-results
-mdlibrary
+akmdlibrary
 docs/DESIGN.md
 docs/PLAN.md

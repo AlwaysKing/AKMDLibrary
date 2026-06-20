@@ -27,15 +27,12 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=backend-builder /app/akmdlibrary /app/akmdlibrary
-COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+COPY --from=frontend-builder /app/frontend/dist /app/html
 
 # Create data and docs directories
 RUN mkdir -p /app/docs /app/data
 
-ENV PORT=8080
-ENV DOCS_DIR=/app/docs
-ENV DATA_DIR=/app/data
-ENV FRONTEND_DIST=/app/frontend/dist
+# JWT_SECRET: 生产环境请通过 -e / docker-compose 覆盖
 ENV JWT_SECRET=change-me-in-production
 
 EXPOSE 8080

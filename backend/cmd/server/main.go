@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/joho/godotenv"
 
 	"github.com/alwaysking/akmdlibrary/internal/handler"
 	"github.com/alwaysking/akmdlibrary/internal/middleware"
@@ -18,11 +19,20 @@ import (
 )
 
 func main() {
+	// 加载项目根的 .env 文件（调试时使用），没文件不报错
+	// godotenv.Load 任一文件失败会提前返回，所以手动按优先级找第一个存在的
+	for _, f := range []string{".env", "../.env", "../../.env"} {
+		if _, err := os.Stat(f); err == nil {
+			_ = godotenv.Load(f)
+			break
+		}
+	}
+
 	port := getEnv("PORT", "8080")
-	docsDir := getEnv("DOCS_DIR", filepath.Join("..", "docs"))
-	dataDir := getEnv("DATA_DIR", filepath.Join("..", "data"))
+	docsDir := getEnv("DOCS_DIR", "/app/docs")
+	dataDir := getEnv("DATA_DIR", "/app/data")
 	jwtSecret := getEnv("JWT_SECRET", "dev-secret-change-me")
-	frontendDist := getEnv("FRONTEND_DIST", filepath.Join("..", "frontend", "dist"))
+	frontendDist := getEnv("FRONTEND_DIST", "/app/html")
 
 	// Ensure directories exist
 	os.MkdirAll(docsDir, 0755)
