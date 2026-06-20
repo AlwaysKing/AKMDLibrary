@@ -93,6 +93,58 @@ docker compose down             # 停止服务
 
 数据持久化在 `./docs`（文档库）和 `./data`（数据库）两个目录，备份这两个目录即可。
 
+### 本地编译镜像
+
+适用于内网部署、自定义修改、或不想依赖 GHCR 预构建镜像的场景。
+
+**方式一：直接构建并运行（最简单）**
+
+```bash
+# 1. 在项目根目录构建镜像（多阶段构建会自动编译前后端）
+docker build -t akmdlibrary:local .
+
+# 2. 生成 JWT 密钥
+echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+
+# 3. 运行容器
+docker run -d \
+  --name akmdlibrary \
+  -p 8080:8080 \
+  -v ./docs:/app/docs \
+  -v ./data:/app/data \
+  --env-file .env \
+  --restart unless-stopped \
+  akmdlibrary:local
+```
+
+**方式二：用 docker compose 本地构建**
+
+把以下内容保存为 `docker-compose.local.yml`：
+
+```yaml
+services:
+  akmdlibrary:
+    build: .
+    image: akmdlibrary:local
+    container_name: akmdlibrary
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docs:/app/docs
+      - ./data:/app/data
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 必须在 .env 文件中设置}
+    restart: unless-stopped
+```
+
+然后：
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+> 本地构建的镜像不会自动更新，修改代码后需要重新跑上面的命令重建。
+
 ## ⚙️ 环境变量
 
 所有路径和行为都通过环境变量控制，Docker 镜像默认值已配置好，**只有 `JWT_SECRET` 必须显式设置**。
