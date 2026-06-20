@@ -41,3 +41,9 @@ tmp/
 # 后端运行时标记文件
 docs/screenshots/.uuid-migrated
 userdata/
+
+# 临时备份 patch 和运行日志（不入库）
+patches/
+*-run.log
+backend/*.log
+frontend/*.log
