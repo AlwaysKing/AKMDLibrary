@@ -6,7 +6,7 @@ import { Fragment as PMFragment } from 'prosemirror-model';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
-import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
+import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec, blockToNode } from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
@@ -22,6 +22,7 @@ import { setClipboardData, getClipboardData, addPendingRestore, removePendingRes
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
+import { MarkBlockSpec } from './MarkBlock';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
 import { FindReplaceExtension } from './FindReplaceExtension';
@@ -95,13 +96,14 @@ const CodeBlockSpecWithHighlight = createCodeBlockSpec({
   },
 });
 
-// Custom schema: default blocks + pageReference + bookmark
+// Custom schema: default blocks + pageReference + bookmark + mark
 const schema = BlockNoteSchema.create({
   blockSpecs: {
     ...defaultBlockSpecs,
     codeBlock: CodeBlockSpecWithHighlight as any,
     pageReference: PageReferenceBlockSpec(),
     bookmark: BookmarkBlockSpec(),
+    mark: MarkBlockSpec(),
     subpage: SubpageBlockSpec(),
     column_list: ColumnListBlockSpec(),
     column: ColumnBlockSpec(),
@@ -302,6 +304,29 @@ function getCustomSlashMenuItems(editor: any) {
       },
     },
     {
+      title: '强调',
+      subtext: '带颜色边条和背景的强调块',
+      key: 'mark',
+      aliases: ['mark', '强调'],
+      group: '高级区块',
+      icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', overflow: 'visible' }}><rect x="3.25" y="3.25" width="11.5" height="11.5" rx="2.25" stroke="currentColor" strokeWidth="1.25" /><path d="M6 4.75v8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /><path d="M8.75 7h3.25" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" /><path d="M8.75 10h2.75" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" /></svg>,
+      onItemClick: () => {
+        const currentBlock = editor.getTextCursorPosition().block;
+        if (currentBlock.content === undefined) return;
+        const blockContent = currentBlock.content;
+        const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
+          blockContent[0].type === 'text' && blockContent[0].text === '/';
+        const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
+        if (isSlashOnly || isEmpty) {
+          editor.updateBlock(currentBlock, { type: 'mark', props: { color: 'blue' } });
+        } else {
+          editor.insertBlocks([{ type: 'mark', props: { color: 'blue' } }], currentBlock, 'after');
+        }
+        const nextBlock = editor.getTextCursorPosition().nextBlock;
+        if (nextBlock) editor.setTextCursorPosition(nextBlock, 'end');
+      },
+    },
+    {
       title: '子页面',
       subtext: '创建并链接到子页面',
       key: 'subpage',
@@ -406,8 +431,8 @@ const bnEditorRef: { current: any } = { current: null };
 /**
  * BlockNote built-in input rules vs our slash menu shortcuts:
  *   ✅ # → heading, `` ``` `` → code, --- → divider, -/+/* → bullet,
- *      [] → check, 1. → numbered, > → toggle list
- *   ❌ #> → toggle heading, "" → quote, || → table
+ *      [] → check, 1. → numbered
+ *   ❌ #> → toggle heading, > → quote, || → table
  *
  * This TipTap extension fills the gaps by intercepting space/enter
  * after these patterns and converting the current paragraph.
@@ -446,10 +471,10 @@ const CustomInputRules = Extension.create({
               return true;
             }
 
-            // --- Quote: "" (straight quotes) or "“”" (smart quotes) ---
-            if ((textBefore === '""' || textBefore === '“”' || textBefore === '„“') && event.key === ' ') {
+            // --- Quote: > ---
+            if (textBefore === '>' && event.key === ' ') {
               event.preventDefault();
-              const tr = view.state.tr.deleteRange(from - 2, from);
+              const tr = view.state.tr.deleteRange(from - 1, from);
               view.dispatch(tr);
               bnEditorRef.current.updateBlock(block, { type: 'quote' });
               return true;
@@ -2975,6 +3000,49 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       insertWidth?: number;            // for insertInColumn: width of the indicator line
     }
 
+    const cloneDraggedBlocks = (blocks: Array<{ type: string; props: Record<string, any>; content: any; children: any }>) => (
+      blocks.map((block) => JSON.parse(JSON.stringify({
+        type: block.type,
+        props: block.props,
+        content: block.content,
+        children: block.children || [],
+      })))
+    );
+
+    const removeDraggedBlocksFromEditor = (blockIds: string[]) => {
+      const existingBlocks = blockIds
+        .map((id) => findBlockDeep(editor.document, id))
+        .filter(Boolean);
+      if (existingBlocks.length > 0) {
+        editor.removeBlocks(existingBlocks as any);
+      }
+    };
+
+    const getTargetVisualKey = (target: ColumnDropTarget | null): string | null => {
+      if (!target) return null;
+
+      const rect = target.blockOuter.getBoundingClientRect();
+      if (target.type === 'insertAround') {
+        const y = Math.round(target.position === 'above' ? rect.top : rect.bottom);
+        return `h:around:${target.columnListId}:${y}:${Math.round(rect.left)}:${Math.round(rect.width)}`;
+      }
+      if (target.type === 'insertInColumn' || target.type === 'moveBlock') {
+        const lineW = Math.round(target.insertWidth || rect.width);
+        const centerX = Math.round(rect.left + rect.width / 2);
+        const y = Math.round(target.position === 'above' ? rect.top : rect.bottom);
+        return `h:column:${target.columnListId}:${y}:${centerX}:${lineW}`;
+      }
+
+      return `v:${target.type}:${target.blockId}:${target.side}`;
+    };
+
+    const stabilizeColumnDropTarget = (target: ColumnDropTarget | null): ColumnDropTarget | null => {
+      if (!target || !lastDragTarget) return target;
+      const nextKey = getTargetVisualKey(target);
+      const prevKey = getTargetVisualKey(lastDragTarget);
+      return nextKey && prevKey && nextKey === prevKey ? lastDragTarget : target;
+    };
+
     const getRootLevelBoundaryTarget = (clientX: number, clientY: number): ColumnDropTarget | null => {
       const rootBlocks = Array.from(
         document.querySelectorAll('.bn-editor > .bn-block-group > .bn-block-outer')
@@ -3460,7 +3528,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         return;
       }
 
-      const target = findColumnDropTarget(e.clientX, e.clientY);
+      const target = stabilizeColumnDropTarget(findColumnDropTarget(e.clientX, e.clientY));
       if (!target) {
         clearColumnHighlight();
         // Not a column drop target — let BN handle it
@@ -3560,8 +3628,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const dragData = getBlockDragData();
       if (!dragData || dragData.blocks.length === 0) return false;
 
-      const draggedBlock = dragData.blocks[0];
-      const draggedBlockId = dragData.blockIds[0];
+      const draggedBlocks = cloneDraggedBlocks(dragData.blocks);
+      const draggedBlockIds = [...dragData.blockIds];
+      const draggedBlockId = draggedBlockIds[0];
 
       try {
         if (target.type === 'addColumn') {
@@ -3605,9 +3674,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             const schema = tr.doc.type.schema;
             const blockContainerType = schema.nodes['blockContainer'];
             const blockGroupType = schema.nodes['blockGroup'];
-            const paraType = schema.nodes['paragraph'];
             const columnType = schema.nodes['column'];
-            if (!blockContainerType || !blockGroupType || !paraType || !columnType) {
+            if (!blockContainerType || !blockGroupType || !columnType) {
               return;
             }
 
@@ -3642,31 +3710,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             // Build new column:
             // blockContainer[data-id] > column + blockGroup > blockContainer > paragraph
             const newColId = crypto.randomUUID?.() || (Date.now().toString(36) + Math.random().toString(36).substring(2));
-            let paraNode;
-            try {
-              const draggedContent = draggedBlock.content;
-              if (draggedContent && Array.isArray(draggedContent) && draggedContent.length > 0) {
-                // Convert BN inline content to PM text nodes directly
-                const textParts: any[] = [];
-                for (const item of draggedContent) {
-                  if (typeof item === 'string') {
-                    textParts.push(schema.text(item));
-                  } else if (item.type === 'text' && item.text) {
-                    // TODO: handle styles (bold, italic, etc.) via marks
-                    textParts.push(schema.text(item.text));
-                  }
-                }
-                if (textParts.length > 0) {
-                  paraNode = paraType.create(null, textParts);
-                }
-              }
-            } catch(e) { /* ignore content conversion errors */ }
-            if (!paraNode) {
-              paraNode = paraType.create();
-            }
-
-            const innerBC = blockContainerType.create({ id: crypto.randomUUID?.() || '' }, paraNode);
-            const innerGroup = blockGroupType.create(null, innerBC);
+            const childNodes = draggedBlocks.map((block) =>
+              blockToNode(block as any, schema, (editor as any).schema.styleSchema),
+            );
+            const innerGroup = blockGroupType.create(null, childNodes);
             const columnNode = columnType.create({ id: '', widthRatio: newColumnWidth });
             const newColBC = blockContainerType.create({ id: newColId }, PMFragment.from([columnNode, innerGroup]));
 
@@ -3683,17 +3730,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             });
 
             // Also delete the original dragged block within the same transaction
-            let draggedBlockPos = -1;
+            const draggedPositions: Array<{ pos: number; size: number }> = [];
             tr.doc.descendants((node: any, pos: number) => {
-              if (draggedBlockPos >= 0) return false;
-              if (node.type === blockContainerType && node.attrs.id === draggedBlockId) {
-                draggedBlockPos = pos;
-                return false;
+              if (node.type === blockContainerType && draggedBlockIds.includes(node.attrs.id)) {
+                draggedPositions.push({ pos, size: node.nodeSize });
               }
             });
-            if (draggedBlockPos >= 0) {
-              tr.delete(draggedBlockPos, draggedBlockPos + tr.doc.nodeAt(draggedBlockPos)!.nodeSize);
-            }
+            draggedPositions
+              .sort((a, b) => b.pos - a.pos)
+              .forEach(({ pos, size }) => tr.delete(pos, pos + size));
 
           });
 
@@ -3707,16 +3752,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (dragData.blockIds.includes(target.columnListId!)) return false;
 
           const placement = target.position === 'above' ? 'before' : 'after';
-          editor.insertBlocks([{
-            type: draggedBlock.type as any,
-            props: draggedBlock.props,
-            content: draggedBlock.content,
-            children: draggedBlock.children || [],
-          }], columnListBlock, placement);
+          editor.insertBlocks(draggedBlocks as any, columnListBlock, placement);
 
-          // Remove the original dragged block
-          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
-          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+          removeDraggedBlocksFromEditor(draggedBlockIds);
 
           markDragHandled();
         } else if (target.type === 'insertInColumn') {
@@ -3728,16 +3766,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (dragData.blockIds.includes(target.columnBlockId!)) return false;
 
           const placement = target.position === 'above' ? 'before' : 'after';
-          editor.insertBlocks([{
-            type: draggedBlock.type as any,
-            props: draggedBlock.props,
-            content: draggedBlock.content,
-            children: draggedBlock.children || [],
-          }], targetBlock, placement);
+          editor.insertBlocks(draggedBlocks as any, targetBlock, placement);
 
-          // Remove the original dragged block
-          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
-          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+          removeDraggedBlocksFromEditor(draggedBlockIds);
 
           markDragHandled();
         } else if (target.type === 'moveBlock') {
@@ -3749,16 +3780,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           if (dragData.blockIds.includes(target.blockId)) return false;
 
           const placement = target.position === 'above' ? 'before' : 'after';
-          editor.insertBlocks([{
-            type: draggedBlock.type as any,
-            props: draggedBlock.props,
-            content: draggedBlock.content,
-            children: draggedBlock.children || [],
-          }], targetBlock, placement);
+          editor.insertBlocks(draggedBlocks as any, targetBlock, placement);
 
-          // Remove the original dragged block
-          const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
-          if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+          removeDraggedBlocksFromEditor(draggedBlockIds);
 
           markDragHandled();
         } else {
@@ -3809,9 +3833,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
                   const schema = tr.doc.type.schema;
                   const blockContainerType = schema.nodes['blockContainer'];
                   const blockGroupType = schema.nodes['blockGroup'];
-                  const paraType = schema.nodes['paragraph'];
                   const columnType = schema.nodes['column'];
-                  if (!blockContainerType || !blockGroupType || !paraType || !columnType) return;
+                  if (!blockContainerType || !blockGroupType || !columnType) return;
 
                   let colListBCPos = -1;
                   let colListBCNode: any = null;
@@ -3836,17 +3859,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
                   if (!colListGroupNode || groupNodePos < 0) return;
 
                   const newColId = crypto.randomUUID?.() || Date.now().toString(36);
-                  let paraNode;
-                  try {
-                    const draggedContent = draggedBlock.content;
-                    if (draggedContent && Array.isArray(draggedContent) && draggedContent.length > 0) {
-                      paraNode = paraType.create(null, (editor as any).inlineContentToNodes(draggedContent));
-                    }
-                  } catch(e) { /* ignore content conversion errors */ }
-                  if (!paraNode) paraNode = paraType.create();
-
-                  const innerBC = blockContainerType.create({ id: crypto.randomUUID?.() || '' }, paraNode);
-                  const innerGroup = blockGroupType.create(null, innerBC);
+                  const childNodes = draggedBlocks.map((block) =>
+                    blockToNode(block as any, schema, (editor as any).schema.styleSchema),
+                  );
+                  const innerGroup = blockGroupType.create(null, childNodes);
                   const columnNode = columnType.create({ id: '', widthRatio: newColumnWidth });
                   const newColBC = blockContainerType.create({ id: newColId }, PMFragment.from([columnNode, innerGroup]));
 
@@ -3860,17 +3876,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
                     columnRatios: allRatios.join(','),
                   });
 
-                  let draggedBlockPos = -1;
+                  const draggedPositions: Array<{ pos: number; size: number }> = [];
                   tr.doc.descendants((node: any, pos: number) => {
-                    if (draggedBlockPos >= 0) return false;
-                    if (node.type === blockContainerType && node.attrs.id === draggedBlockId) {
-                      draggedBlockPos = pos;
-                      return false;
+                    if (node.type === blockContainerType && draggedBlockIds.includes(node.attrs.id)) {
+                      draggedPositions.push({ pos, size: node.nodeSize });
                     }
                   });
-                  if (draggedBlockPos >= 0) {
-                    tr.delete(draggedBlockPos, draggedBlockPos + tr.doc.nodeAt(draggedBlockPos)!.nodeSize);
-                  }
+                  draggedPositions
+                    .sort((a, b) => b.pos - a.pos)
+                    .forEach(({ pos, size }) => tr.delete(pos, pos + size));
                 });
 
                 markDragHandled();
@@ -3885,20 +3899,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const makeColumnChild = (block: any) => ({
             type: 'column',
             props: { widthRatio: 50 },
-            children: [{
-              type: block.type,
-              props: block.props,
-              content: block.content,
-              children: block.children || [],
-            }],
+            children: Array.isArray(block) ? block : [block],
           });
 
           const leftChild = target.side === 'left'
-            ? makeColumnChild(draggedBlock)
+            ? makeColumnChild(draggedBlocks)
             : makeColumnChild(findBlockDeep(editor.document, target.blockId));
           const rightChild = target.side === 'left'
             ? makeColumnChild(findBlockDeep(editor.document, target.blockId))
-            : makeColumnChild(draggedBlock);
+            : makeColumnChild(draggedBlocks);
 
           // Insert the column_list before the target block
           editor.insertBlocks([{
@@ -3910,8 +3919,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           // Remove the original blocks
           editor.removeBlocks([findBlockDeep(editor.document, target.blockId)!]);
           if (draggedBlockId !== target.blockId) {
-            const draggedBlockInDoc = findBlockDeep(editor.document, draggedBlockId);
-            if (draggedBlockInDoc) editor.removeBlocks([draggedBlockInDoc]);
+            removeDraggedBlocksFromEditor(draggedBlockIds);
           }
 
           markDragHandled();

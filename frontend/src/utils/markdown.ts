@@ -199,6 +199,42 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Mark block: <mark color="blue"> ... </mark>
+    const markLineMatch = trimmed.match(/^<mark(?:\s+([^>]*))?>([\s\S]*)<\/mark>$/);
+    if (markLineMatch) {
+      const attrs = parseTagAttributes(markLineMatch[1] || '');
+      blocks.push({
+        type: 'mark',
+        props: {
+          color: attrs.color || 'default',
+        },
+        content: parseInlineFormatting(markLineMatch[2].trim()),
+      });
+      i++;
+      continue;
+    }
+
+    const markOpenMatch = trimmed.match(/^<mark(?:\s+([^>]*))?>$/);
+    if (markOpenMatch) {
+      const attrs = parseTagAttributes(markOpenMatch[1] || '');
+      const innerLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== '</mark>') {
+        innerLines.push(lines[i]);
+        i++;
+      }
+      i++; // Skip closing </mark>
+
+      blocks.push({
+        type: 'mark',
+        props: {
+          color: attrs.color || 'default',
+        },
+        content: parseInlineFormatting(innerLines.join('\n').trim()),
+      });
+      continue;
+    }
+
     // Code block
     if (trimmed.startsWith('```')) {
       const rawLang = trimmed.slice(3).trim();
@@ -860,6 +896,15 @@ function serializeRegularBlock(block: any): string {
     case 'quote': {
       const quoteText = getFormattedText(block.content);
       return `> ${quoteText}`;
+    }
+
+    case 'mark': {
+      const markText = getFormattedText(block.content);
+      const color = block.props?.color || 'default';
+      if (color && color !== 'default') {
+        return `<mark color="${escapeHtmlAttribute(color)}">${markText}</mark>`;
+      }
+      return `<mark>${markText}</mark>`;
     }
 
     case 'divider':

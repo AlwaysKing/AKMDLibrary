@@ -281,7 +281,39 @@ h4[contenteditable],
 }
 .bn-editor [data-content-type="quote"] {
   border-left: 3px solid currentColor !important;
+  border-radius: 4px;
   padding-left: 14px !important;
+}
+
+/* Mark blocks — colored emphasis with left accent bar and soft background */
+.bn-editor [data-content-type="mark"] {
+  padding-left: 0 !important;
+  width: 100% !important;
+}
+
+.bn-editor .mark-block {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  border-left: 3px solid rgba(55, 53, 47, 0.35);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(55, 53, 47, 0.06);
+  padding: 10px 14px;
+}
+
+.bn-editor .mark-block .mark-block-content-wrap {
+  display: block;
+  width: 100%;
+}
+
+.bn-editor .mark-block .mark-block-content {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 24px;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 /* Callout blocks — Notion: bg #f9f8f7, border-radius 10px, padding 12px */

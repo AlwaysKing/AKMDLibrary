@@ -1057,11 +1057,12 @@ const SLASH_MENU_SHORTCUTS: Record<string, string> = {
   bullet_list: '-',
   numbered_list: '1.',
   check_list: '[]',
-  toggle_list: '>',
-  quote: '""',
+  toggle_list: '',
+  quote: '>',
   code_block: '```',
   divider: '---',
   table: '||',
+  mark: '',
   image: '',
   video: '',
   audio: '',
@@ -1088,6 +1089,7 @@ export const SLASH_MENU_ENGLISH: Record<string, string> = {
   check_list: 'To-do List',
   toggle_list: 'Toggle',
   quote: 'Quote',
+  mark: 'Mark',
   code_block: 'Code',
   divider: 'Divider',
   table: 'Table',
@@ -1602,6 +1604,7 @@ const TURN_INTO_OPTIONS: TurnIntoOption[] = [
   { type: 'heading', label: '折叠标题 1', props: { level: 1, isToggleable: true }, iconPath: 'M7.085 5.4a.577.577 0 1 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm11.506 3.225a.55.55 0 0 1 .064.32l.003.055v5.6a.55.55 0 1 1-1.1 0V9.815l-1.386.756a.55.55 0 1 1-.527-.966l2.2-1.2a.55.55 0 0 1 .746.22M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z' },
   { type: 'heading', label: '折叠标题 2', props: { level: 2, isToggleable: true }, iconPath: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z' },
   { type: 'heading', label: '折叠标题 3', props: { level: 3, isToggleable: true }, iconPath: 'M6.508 4.823c.318 0 .577.258.577.577v3.823h5.645V5.4a.577.577 0 0 1 1.154 0v9.2a.577.577 0 1 1-1.154 0v-4.223H7.086V14.6a.577.577 0 1 1-1.154 0V5.4c0-.319.258-.577.577-.577m10.775 4.415c-.644 0-1.105.316-1.256.631a.55.55 0 1 1-.992-.474c.377-.79 1.292-1.257 2.248-1.257.626 0 1.214.193 1.657.532s.765.846.765 1.45c0 .58-.297 1.072-.715 1.41l.05.036c.468.353.81.883.81 1.514 0 .63-.342 1.16-.81 1.514-.47.354-1.093.556-1.757.556-1.005 0-1.953-.47-2.368-1.264a.55.55 0 1 1 .976-.508c.178.341.685.672 1.392.672.448 0 .833-.138 1.094-.334.26-.197.372-.427.372-.636s-.111-.44-.372-.636c-.26-.196-.646-.334-1.094-.334h-.424a.55.55 0 0 1 0-1.1h.33a1 1 0 0 1 .094-.008c.406 0 .754-.127.989-.306.234-.18.333-.388.333-.576s-.099-.397-.333-.576c-.235-.18-.583-.306-.99-.306M.962 11.14c0 .455.495.735.885.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.885.5z' },
+  { type: 'mark', label: '强调', props: { color: 'blue' }, iconPath: 'M4.75 3.75A1 1 0 0 0 3.75 4.75v10.5a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1V4.75a1 1 0 0 0-1-1zm0 1.25H6v9.5H4.75zm3.5 2.125a.625.625 0 1 1 0-1.25h3.5a.625.625 0 1 1 0 1.25zm0 3a.625.625 0 1 1 0-1.25h2.75a.625.625 0 1 1 0 1.25z' },
   { type: 'quote', label: '引用', iconPath: 'M15.796 4.971a5.067 5.067 0 0 0-5.067 5.067v.635a4.433 4.433 0 0 0 4.433 4.433 3.164 3.164 0 1 0-3.11-3.75 3.2 3.2 0 0 1-.073-.683v-.635a3.817 3.817 0 0 1 3.817-3.817h.635a.625.625 0 1 0 0-1.25zm-9.054 0a5.067 5.067 0 0 0-5.067 5.068v.634a4.433 4.433 0 0 0 4.433 4.433 3.164 3.164 0 1 0-3.11-3.75 3.2 3.2 0 0 1-.073-.683v-.634A3.817 3.817 0 0 1 6.742 6.22h.635a.625.625 0 1 0 0-1.25z' },
   { type: 'codeBlock', label: '代码块', iconPath: 'M12.6 3.172a.625.625 0 0 0-1.201-.344l-4 14a.625.625 0 0 0 1.202.344zM5.842 5.158a.625.625 0 0 1 0 .884L1.884 10l3.958 3.958a.625.625 0 0 1-.884.884l-4.4-4.4a.625.625 0 0 1 0-.884l4.4-4.4a.625.625 0 0 1 .884 0m8.316 0a.625.625 0 0 1 .884 0l4.4 4.4a.625.625 0 0 1 0 .884l-4.4 4.4a.625.625 0 0 1-.884-.884L18.116 10l-3.958-3.958a.625.625 0 0 1 0-.884' },
   { type: 'bulletListItem', label: '无序列表', iconPath: 'M4.809 12.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5M16 13.375a.625.625 0 1 1 0 1.25H8.5a.625.625 0 0 1 0-1.25zM4.809 4.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5M16 5.375a.625.625 0 1 1 0 1.25H8.5a.625.625 0 0 1 0-1.25z' },
@@ -1960,60 +1963,71 @@ export function ColorListContent({
   currentBgColor = 'default',
   onTextColor,
   onBgColor,
+  showTextColors = true,
+  showBgColors = true,
 }: {
   currentTextColor?: string;
   currentBgColor?: string;
   onTextColor: (color: string) => void;
   onBgColor: (color: string) => void;
+  showTextColors?: boolean;
+  showBgColors?: boolean;
 }) {
   const defaultBorder = 'rgba(28,19,1,0.11)';
 
   return (
     <>
-      {/* Text colors */}
-      <div className="color-list-section-title">文字颜色</div>
-      <div
-        className={`color-list-item ${currentTextColor === 'default' ? 'selected' : ''}`}
-        onClick={() => onTextColor('default')}
-      >
-        <span className="color-list-swatch" style={{ color: '#2c2c2b', boxShadow: `inset 0 0 0 1px ${defaultBorder}` }}>A</span>
-        <span className="color-list-label">默认文本</span>
-        {currentTextColor === 'default' && <span className="drag-handle-check">✓</span>}
-      </div>
-      {Object.entries(COLORS).map(([name, color]) => (
-        <div
-          key={`text-${name}`}
-          className={`color-list-item ${currentTextColor === name ? 'selected' : ''}`}
-          onClick={() => onTextColor(name)}
-        >
-          <span className="color-list-swatch" style={{ color: color.text, boxShadow: `inset 0 0 0 1px ${color.textBorder}` }}>A</span>
-          <span className="color-list-label">{COLOR_NAMES[name]}文本</span>
-          {currentTextColor === name && <span className="drag-handle-check">✓</span>}
-        </div>
-      ))}
-      {/* Divider */}
-      <div className="color-list-divider" />
-      {/* Background colors — no "A" letter, just colored square */}
-      <div className="color-list-section-title">背景颜色</div>
-      <div
-        className={`color-list-item ${currentBgColor === 'default' ? 'selected' : ''}`}
-        onClick={() => onBgColor('default')}
-      >
-        <span className="color-list-swatch color-list-swatch-default" style={{ boxShadow: `inset 0 0 0 1px ${defaultBorder}` }} />
-        <span className="color-list-label">默认背景</span>
-        {currentBgColor === 'default' && <span className="drag-handle-check">✓</span>}
-      </div>
-      {Object.entries(COLORS).map(([name, color]) => (
-        <div
-          key={`bg-${name}`}
-          className={`color-list-item ${currentBgColor === name ? 'selected' : ''}`}
-          onClick={() => onBgColor(name)}
-        >
-          <span className="color-list-swatch" style={{ background: color.background, boxShadow: `inset 0 0 0 1px ${color.bgBorder}` }} />
-          <span className="color-list-label">{COLOR_NAMES[name]}背景</span>
-          {currentBgColor === name && <span className="drag-handle-check">✓</span>}
-        </div>
-      ))}
+      {showTextColors && (
+        <>
+          <div className="color-list-section-title">文字颜色</div>
+          <div
+            className={`color-list-item ${currentTextColor === 'default' ? 'selected' : ''}`}
+            onClick={() => onTextColor('default')}
+          >
+            <span className="color-list-swatch" style={{ color: '#2c2c2b', boxShadow: `inset 0 0 0 1px ${defaultBorder}` }}>A</span>
+            <span className="color-list-label">默认文本</span>
+            {currentTextColor === 'default' && <span className="drag-handle-check">✓</span>}
+          </div>
+          {Object.entries(COLORS).map(([name, color]) => (
+            <div
+              key={`text-${name}`}
+              className={`color-list-item ${currentTextColor === name ? 'selected' : ''}`}
+              onClick={() => onTextColor(name)}
+            >
+              <span className="color-list-swatch" style={{ color: color.text, boxShadow: `inset 0 0 0 1px ${color.textBorder}` }}>A</span>
+              <span className="color-list-label">{COLOR_NAMES[name]}文本</span>
+              {currentTextColor === name && <span className="drag-handle-check">✓</span>}
+            </div>
+          ))}
+        </>
+      )}
+      {showTextColors && showBgColors && (
+        <div className="color-list-divider" />
+      )}
+      {showBgColors && (
+        <>
+          <div className="color-list-section-title">背景颜色</div>
+          <div
+            className={`color-list-item ${currentBgColor === 'default' ? 'selected' : ''}`}
+            onClick={() => onBgColor('default')}
+          >
+            <span className="color-list-swatch color-list-swatch-default" style={{ boxShadow: `inset 0 0 0 1px ${defaultBorder}` }} />
+            <span className="color-list-label">默认背景</span>
+            {currentBgColor === 'default' && <span className="drag-handle-check">✓</span>}
+          </div>
+          {Object.entries(COLORS).map(([name, color]) => (
+            <div
+              key={`bg-${name}`}
+              className={`color-list-item ${currentBgColor === name ? 'selected' : ''}`}
+              onClick={() => onBgColor(name)}
+            >
+              <span className="color-list-swatch" style={{ background: color.background, boxShadow: `inset 0 0 0 1px ${color.bgBorder}` }} />
+              <span className="color-list-label">{COLOR_NAMES[name]}背景</span>
+              {currentBgColor === name && <span className="drag-handle-check">✓</span>}
+            </div>
+          ))}
+        </>
+      )}
     </>
   );
 }
@@ -2022,23 +2036,38 @@ function ColorSubmenu({ onClose }: { onClose: () => void }) {
   const editor = useBlockNoteEditor();
   const blockId = getDragHandleBlockId();
   const currentBlock = blockId ? findBlockDeep(editor.document, blockId) : null;
+  const isMark = currentBlock?.type === 'mark';
 
   const currentTextColor = (currentBlock?.props as any)?.textColor || 'default';
   const currentBgColor = (currentBlock?.props as any)?.backgroundColor || 'default';
+  const currentMarkColor = (currentBlock?.props as any)?.color || 'default';
+
+  const handleMarkColor = (color: string) => {
+    if (!blockId || !currentBlock) return;
+    editor.updateBlock(blockId as any, {
+      type: currentBlock.type as any,
+      props: { color } as any,
+    });
+    onClose();
+  };
 
   const handleTextColor = (color: string) => {
-    if (!blockId) return;
+    if (!blockId || !currentBlock) return;
+    if (isMark) {
+      handleMarkColor(color);
+      return;
+    }
     editor.updateBlock(blockId as any, {
-      type: currentBlock?.type as any,
+      type: currentBlock.type as any,
       props: { textColor: color } as any,
     });
     onClose();
   };
 
   const handleBgColor = (color: string) => {
-    if (!blockId) return;
+    if (!blockId || !currentBlock) return;
     editor.updateBlock(blockId as any, {
-      type: currentBlock?.type as any,
+      type: currentBlock.type as any,
       props: { backgroundColor: color } as any,
     });
     onClose();
@@ -2047,10 +2076,12 @@ function ColorSubmenu({ onClose }: { onClose: () => void }) {
   return (
     <SubmenuContainer className="drag-handle-submenu color-submenu">
       <ColorListContent
-        currentTextColor={currentTextColor}
-        currentBgColor={currentBgColor}
+        currentTextColor={isMark ? currentMarkColor : currentTextColor}
+        currentBgColor={isMark ? currentMarkColor : currentBgColor}
         onTextColor={handleTextColor}
-        onBgColor={handleBgColor}
+        onBgColor={isMark ? handleMarkColor : handleBgColor}
+        showTextColors={!isMark}
+        showBgColors
       />
     </SubmenuContainer>
   );
