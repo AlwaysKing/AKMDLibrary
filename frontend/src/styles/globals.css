@@ -3,6 +3,10 @@
 @tailwind utilities;
 
 @layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
   * {
     @apply border-notion-border;
     outline: none;
@@ -11,6 +15,7 @@
   body {
     @apply bg-notion-bg text-notion-text;
     font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', 'Helvetica', 'Arial', sans-serif;
+    overflow: hidden;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -111,6 +116,10 @@ h4[contenteditable],
 /* Block 外层: 对应 Notion 的 padding，左侧多 2px 与选中框对齐 */
 .bn-editor .bn-block-outer {
   padding: 6px 6px 6px 8px !important;
+}
+
+.page-content-scroll {
+  overscroll-behavior-y: contain;
 }
 
 /* Block 背景色圆角 */
@@ -918,6 +927,7 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   padding: 4px !important;
   max-height: 340px !important;
   overflow-y: auto !important;
+  overscroll-behavior-y: contain;
   min-width: 360px !important;
   scrollbar-width: thin !important;
   scrollbar-color: #e9e9e7 transparent !important;
@@ -2168,6 +2178,7 @@ th.visual-cell-selected::after {
   box-shadow: rgba(15, 15, 15, 0.04) 0 8px 20px, rgba(15, 15, 15, 0.03) 0 1px 3px;
   border: 1px solid rgba(55, 53, 47, 0.08);
   overflow: hidden;
+  overscroll-behavior-y: contain;
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Microsoft YaHei", "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
   -webkit-font-smoothing: auto;
   -moz-osx-font-smoothing: auto;
@@ -2177,6 +2188,7 @@ th.visual-cell-selected::after {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overscroll-behavior-y: contain;
 }
 
 .bn-text-input {

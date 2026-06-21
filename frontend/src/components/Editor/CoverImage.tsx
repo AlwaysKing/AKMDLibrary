@@ -434,6 +434,17 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
     ? { background: coverUrl ?? '' }
     : { backgroundImage: `url(${coverUrl ?? ''})`, backgroundPosition: `center ${coverOffset}%` };
 
+  const handlePickerWheelCapture = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const { deltaY } = e;
+    const atTop = el.scrollTop <= 0;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+
+    if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
+      e.preventDefault();
+    }
+  }, []);
+
   // 只在用户配置了 Unsplash API key 时才显示 Unsplash tab
   const hasUnsplashKey = usePreferenceStore(s => !!s.preferences.has_unsplash_key);
   const tabsList = [
@@ -546,6 +557,8 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
           {/* Tab content */}
           <div
             className="max-h-[300px] overflow-y-auto"
+            style={{ overscrollBehaviorY: 'contain' }}
+            onWheelCapture={handlePickerWheelCapture}
             onScroll={(e) => {
               if (pickerTab !== 'unsplash') return;
               const el = e.currentTarget;
