@@ -201,8 +201,8 @@ func (s *PageService) resolveCoverURL(spaceSlug string, pageID string, coverPath
 	if coverPath == "" {
 		return ""
 	}
-	if strings.HasPrefix(coverPath, "./public/") {
-		assetPart := strings.TrimPrefix(coverPath, "./public/")
+	if strings.HasPrefix(coverPath, "./_assets/") {
+		assetPart := strings.TrimPrefix(coverPath, "./_assets/")
 		return fmt.Sprintf("/api/spaces/%s/pages/%s/assets/%s", spaceSlug, pageID, assetPart)
 	}
 	return coverPath
@@ -215,12 +215,12 @@ func (s *PageService) toRelativeCover(coverURL string) string {
 	idx := strings.Index(coverURL, "/assets/")
 	if idx != -1 {
 		assetPart := coverURL[idx+len("/assets/"):]
-		return "./public/" + assetPart
+		return "./_assets/" + assetPart
 	}
 	return coverURL
 }
 
-// cleanupLocalAsset removes a local asset file (icon image) from a page's public directory.
+// cleanupLocalAsset removes a local asset file (icon image) from a page's _assets directory.
 func (s *PageService) cleanupLocalAsset(spaceSlug string, pageFilePath string, iconURL string) {
 	var assetPart string
 	if strings.HasPrefix(iconURL, "/api/spaces/") {
@@ -229,14 +229,14 @@ func (s *PageService) cleanupLocalAsset(spaceSlug string, pageFilePath string, i
 			return
 		}
 		assetPart = iconURL[idx+len("/assets/"):]
-	} else if strings.HasPrefix(iconURL, "./public/") {
-		assetPart = strings.TrimPrefix(iconURL, "./public/")
+	} else if strings.HasPrefix(iconURL, "./_assets/") {
+		assetPart = strings.TrimPrefix(iconURL, "./_assets/")
 	} else {
 		return // not a local asset
 	}
 
 	pageDir := filepath.Dir(pageFilePath)
-	absAssetPath := filepath.Join(s.docsDir, pageDir, "public", assetPart)
+	absAssetPath := filepath.Join(s.docsDir, pageDir, "_assets", assetPart)
 
 	// Safety: ensure path is under docs dir
 	absDocsDir, err := filepath.Abs(s.docsDir)
@@ -700,7 +700,7 @@ func (s *PageService) GetAssetPath(spaceSlug string, pageID string, assetPath st
 	}
 
 	pageDir := filepath.Dir(page.FilePath)
-	fullPath := filepath.Join(s.docsDir, pageDir, "public", assetPath)
+	fullPath := filepath.Join(s.docsDir, pageDir, "_assets", assetPath)
 
 	absPath, err := filepath.Abs(fullPath)
 	if err != nil {
@@ -737,12 +737,12 @@ func (s *PageService) UploadAsset(spaceSlug string, pageID string, filename stri
 	pageDir := filepath.Dir(page.FilePath)
 	id := uuidutil.NewPageID()
 
-	publicDir := filepath.Join(s.docsDir, pageDir, "public", id)
-	if err := os.MkdirAll(publicDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create public directory: %w", err)
+	assetsDir := filepath.Join(s.docsDir, pageDir, "_assets", id)
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create _assets directory: %w", err)
 	}
 
-	filePath := filepath.Join(publicDir, filename)
+	filePath := filepath.Join(assetsDir, filename)
 	if err := os.WriteFile(filePath, content, 0644); err != nil {
 		return "", fmt.Errorf("failed to save asset: %w", err)
 	}
@@ -1619,7 +1619,7 @@ func (s *PageService) MigrateToUUIDs() error {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		if entry.Name() == "public" {
+		if entry.Name() == "_assets" {
 			continue
 		}
 

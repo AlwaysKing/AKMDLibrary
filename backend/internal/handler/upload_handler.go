@@ -62,7 +62,7 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	var filePath string
 	if pageID != "" && slug != "" {
-		// Upload to page's public directory
+		// Upload to page's _assets directory
 		relativePath, uploadErr := h.pageService.UploadAsset(slug, pageID, header.Filename, content)
 		if uploadErr != nil {
 			http.Error(w, uploadErr.Error(), http.StatusInternalServerError)
@@ -195,7 +195,7 @@ func (h *UploadHandler) CheckIconName(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"exists": false})
 }
 
-// UseIcon copies an icon from the library to the page's public directory and returns the asset path
+// UseIcon copies an icon from the library to the page's _assets directory and returns the asset path
 func (h *UploadHandler) UseIcon(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 
@@ -221,7 +221,7 @@ func (h *UploadHandler) UseIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy to page's public directory
+	// Copy to page's _assets directory
 	assetPath, err := h.pageService.UploadAsset(req.SpaceSlug, req.PageID, req.IconName, content)
 	if err != nil {
 		http.Error(w, "Failed to copy icon", http.StatusInternalServerError)
@@ -319,7 +319,7 @@ func (h *UploadHandler) CheckCoverName(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"exists": false})
 }
 
-// UseCover copies a cover from the library to the page's public directory and returns the asset path
+// UseCover copies a cover from the library to the page's _assets directory and returns the asset path
 func (h *UploadHandler) UseCover(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 
@@ -345,7 +345,7 @@ func (h *UploadHandler) UseCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy to page's public directory
+	// Copy to page's _assets directory
 	assetPath, err := h.pageService.UploadAsset(req.SpaceSlug, req.PageID, req.CoverName, content)
 	if err != nil {
 		http.Error(w, "Failed to copy cover", http.StatusInternalServerError)

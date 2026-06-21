@@ -118,7 +118,7 @@ go test ./internal/repository/...
 **Files:**
 - Create: `backend/pkg/filesystem/scanner.go` — recursive directory scanner
 
-- [ ] **Step 1: Implement directory scanner** — Read docs/, skip public/ and dotfiles, build tree of spaces and pages. Map rules: folder=space, .md=page, same-name folder=children
+- [ ] **Step 1: Implement directory scanner** — Read docs/, skip _assets/ and dotfiles, build tree of spaces and pages. Map rules: folder=space, .md=page, same-name folder=children
 
 - [ ] **Step 2: Implement Markdown read/write** — Read .md file content, write .md content
 
@@ -142,11 +142,11 @@ go test ./internal/repository/...
 
 - [ ] **Step 3: Implement space handler** — Wire routes to service
 
-- [ ] **Step 4: Implement page handler** — Wire routes to service, including assets serving for public/ directories
+- [ ] **Step 4: Implement page handler** — Wire routes to service, including assets serving for _assets/ directories
 
 - [ ] **Step 5: Implement user handler** — Admin-only CRUD for users
 
-- [ ] **Step 6: Implement upload handler** — Upload to public/{uuid}/{uuid}/, return relative path
+- [ ] **Step 6: Implement upload handler** — Upload to _assets/{uuid}/{uuid}/, return relative path
 
 - [ ] **Step 7: Write API tests**
 

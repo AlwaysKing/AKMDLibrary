@@ -6,7 +6,7 @@ import { fetchCoverLibrary, checkCoverName, useCoverFromLibrary, CoverLibraryIte
 import apiClient from '../../api/client';
 
 // 图库分类数据（参考 Notion 封面图库分类）
-// 图片内置在 frontend/public/covers/，避免运行时依赖 Unsplash CDN
+// 图片内置在 frontend/public/covers/（Vite 静态目录，非页面资源 _assets），避免运行时依赖 Unsplash CDN
 const GALLERY_CATEGORIES = [
   {
     id: 'gradient',
@@ -246,7 +246,7 @@ export default function CoverImage({ coverUrl, coverOffset: savedOffset, spaceSl
       await updateMetadata(spaceSlug, pageId, { cover_url: preset });
       setShowPicker(false);
     } else {
-      // 本地图片：fetch blob → 走上传流程（后端自动复制到 page 的 public/{uuid}/）
+      // 本地图片：fetch blob → 走上传流程（后端自动复制到 page 的 _assets/{uuid}/）
       try {
         const res = await fetch(preset);
         const blob = await res.blob();

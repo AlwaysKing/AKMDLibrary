@@ -31,7 +31,7 @@ func (s *Scanner) ScanSpaces() ([]*model.Space, error) {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		if entry.Name() == "public" {
+		if entry.Name() == "_assets" {
 			continue
 		}
 		spaces = append(spaces, &model.Space{
@@ -73,7 +73,7 @@ func (s *Scanner) resolveSpaceDir(spaceSlug string) (string, string) {
 		return "", ""
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == "public" {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" {
 			continue
 		}
 		if generateSlug(entry.Name()) == spaceSlug {
@@ -93,7 +93,7 @@ func (s *Scanner) scanDirectory(dirPath string, pathPrefix string) ([]*model.Pag
 	// Build a set of directory names for quick lookup
 	dirSet := make(map[string]bool)
 	for _, entry := range entries {
-		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && entry.Name() != "public" {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && entry.Name() != "_assets" {
 			dirSet[entry.Name()] = true
 		}
 	}
@@ -101,7 +101,7 @@ func (s *Scanner) scanDirectory(dirPath string, pathPrefix string) ([]*model.Pag
 	nodes := make([]*model.PageNode, 0)
 
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "public" {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" {
 			continue
 		}
 

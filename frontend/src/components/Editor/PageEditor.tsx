@@ -128,12 +128,12 @@ function resolvePageAssetUrl(rawUrl: string | undefined, spaceSlug?: string, pag
   if (!spaceSlug || !pageId) return url;
 
   let assetPath = url;
-  if (assetPath.startsWith('./public/')) {
-    assetPath = assetPath.slice('./public/'.length);
-  } else if (assetPath.startsWith('public/')) {
-    assetPath = assetPath.slice('public/'.length);
-  } else if (assetPath.startsWith('/public/')) {
-    assetPath = assetPath.slice('/public/'.length);
+  if (assetPath.startsWith('./_assets/')) {
+    assetPath = assetPath.slice('./_assets/'.length);
+  } else if (assetPath.startsWith('_assets/')) {
+    assetPath = assetPath.slice('_assets/'.length);
+  } else if (assetPath.startsWith('/_assets/')) {
+    assetPath = assetPath.slice('/_assets/'.length);
   } else if (assetPath.startsWith('/')) {
     return assetPath;
   }
