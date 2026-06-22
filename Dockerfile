@@ -34,6 +34,13 @@ FROM alpine:3.20
 # openssh-client: ssh binary for git over SSH remotes
 RUN apk add --no-cache ca-certificates tzdata git openssh-client
 
+# Per-space repos are bind-mounted from the host and typically owned by a
+# different UID than the container process. Since git 2.35+, this triggers
+# "fatal: detected dubious ownership" which breaks every git command. Marking
+# all repos as safe (system-wide, applies to every user) avoids needing to
+# know the exact repo paths ahead of time.
+RUN git config --system --add safe.directory '*'
+
 WORKDIR /app
 
 COPY --from=backend-builder /app/akmdlibrary /app/akmdlibrary
