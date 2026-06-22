@@ -52,7 +52,7 @@ export default function GitPage() {
       if (c) setConfig(c);
       if (cr) setCredMeta(cr);
       // Auto-prune selections that no longer exist as dirty files.
-      const validPaths = new Set(s.files.map((f) => f.path));
+      const validPaths = new Set((s.files ?? []).map((f) => f.path));
       setSelected((prev) => {
         const next = new Set<string>();
         for (const p of prev) if (validPaths.has(p)) next.add(p);
@@ -162,6 +162,9 @@ export default function GitPage() {
       } else {
         setOutput('Credentials saved.');
       }
+      // Collapse the panel on success so the user sees the result in the
+      // toolbar (green dot) instead of a stale open form.
+      setShowCreds(false);
     } catch (e: any) {
       setError(e?.response?.data || e?.message || 'Save credentials failed');
     } finally {
