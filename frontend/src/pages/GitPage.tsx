@@ -81,8 +81,8 @@ export default function GitPage() {
 
   const toggleAll = () => {
     if (!state) return;
-    const allSelected = state.files.length > 0 && selected.size === state.files.length;
-    setSelected(allSelected ? new Set() : new Set(state.files.map((f) => f.path)));
+    const allSelected = (state.files ?? []).length > 0 && selected.size === (state.files ?? []).length;
+    setSelected(allSelected ? new Set() : new Set((state.files ?? []).map((f) => f.path)));
   };
 
   const handleCommit = async () => {
@@ -191,7 +191,11 @@ export default function GitPage() {
     );
   }
 
-  const allSelected = state.files.length > 0 && selected.size === state.files.length;
+  // Backend always returns an array now, but coalesce defensively in case of
+  // older server builds or transient corruption — accessing .length on null
+  // would crash the whole page render.
+  const files = state.files ?? [];
+  const allSelected = files.length > 0 && selected.size === files.length;
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -308,17 +312,17 @@ export default function GitPage() {
             全选
           </button>
           <span className="text-sm text-notion-textSecondary">
-            {state.files.length === 0 ? '工作区干净，没有需要提交的改动' : `${state.files.length} 个文件有改动`}
+            {files.length === 0 ? '工作区干净，没有需要提交的改动' : `${files.length} 个文件有改动`}
           </span>
         </div>
 
         <div className="border border-notion-border rounded divide-y divide-notion-border/60">
-          {state.files.length === 0 ? (
+          {files.length === 0 ? (
             <div className="px-3 py-8 text-center text-sm text-notion-textSecondary">
               ✓ 工作区干净
             </div>
           ) : (
-            state.files.map((f) => {
+            files.map((f) => {
               const Icon = CATEGORY_ICON[f.category] || FileText;
               const isSel = selected.has(f.path);
               return (
@@ -357,7 +361,7 @@ export default function GitPage() {
         />
         <div className="mt-2 flex items-center justify-between">
           <span className="text-xs text-notion-textSecondary">
-            已选 {selected.size} / {state.files.length} 个文件
+            已选 {selected.size} / {files.length} 个文件
           </span>
           <button
             onClick={handleCommit}

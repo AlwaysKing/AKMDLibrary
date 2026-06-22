@@ -155,7 +155,11 @@ func (s *GitService) State(spaceSlug string) (*GitRepoState, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrSpaceNotFound, spaceSlug)
 	}
-	state := &GitRepoState{}
+	// Files is initialized to an empty slice (not nil) so JSON serialization
+	// produces `[]` instead of `null`. The frontend's render path indexes into
+	// Files unconditionally when IsRepo=true; a null would crash it. Even when
+	// statusFiles errors below, we keep Files empty rather than nil.
+	state := &GitRepoState{Files: []GitFileStatus{}}
 	if !s.isRepoAt(spacePath) {
 		return state, nil
 	}
