@@ -4334,6 +4334,42 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     });
   }, [editor, readOnly]);
 
+  // Copy handler — preserve native text copy inside code blocks.
+  // BlockNote serializes editor selections to markdown on copy, which breaks
+  // manual code selections by injecting markdown-oriented formatting.
+  useEffect(() => {
+    const container = editorRef.current;
+    if (!container || readOnly) return;
+
+    const handleCopy = (e: ClipboardEvent) => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+
+      const anchorElement = selection.anchorNode instanceof Element
+        ? selection.anchorNode
+        : selection.anchorNode?.parentElement;
+      const focusElement = selection.focusNode instanceof Element
+        ? selection.focusNode
+        : selection.focusNode?.parentElement;
+
+      const anchorCodeBlock = anchorElement?.closest('[data-content-type="codeBlock"]');
+      const focusCodeBlock = focusElement?.closest('[data-content-type="codeBlock"]');
+
+      if (!anchorCodeBlock || anchorCodeBlock !== focusCodeBlock) return;
+
+      const selectedText = selection.toString().replace(/\u200b/g, '');
+      if (!selectedText) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      e.clipboardData?.setData('text/plain', selectedText);
+    };
+
+    container.addEventListener('copy', handleCopy, true);
+    return () => container.removeEventListener('copy', handleCopy, true);
+  }, [readOnly]);
+
   // Paste handler — capture phase to intercept before BlockNote/ProseMirror processes
   useEffect(() => {
     const container = editorRef.current;
