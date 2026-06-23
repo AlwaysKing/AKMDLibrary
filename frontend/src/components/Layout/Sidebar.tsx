@@ -1,8 +1,9 @@
-import { Settings, ChevronsLeft, Trash2, ArrowLeft, Users, Database, User, Image, ChevronDown, ChevronRight, Plus, LogOut, GitBranch } from 'lucide-react';
+import { Settings, ChevronsLeft, Trash2, ArrowLeft, Users, Database, User, Image, ChevronDown, ChevronRight, Plus, LogOut, GitBranch, Search } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import SpaceSelector from '../Sidebar/SpaceSelector';
 import PageTree from '../Sidebar/PageTree';
 import PageTreeItem from '../Sidebar/PageTreeItem';
+import SearchOverlay from '../Search/SearchOverlay';
 import { useAuthStore } from '../../stores/authStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { usePageStore } from '../../stores/pageStore';
@@ -30,6 +31,10 @@ export default function Sidebar({ onToggle }: SidebarProps) {
   const [showAllRecent, setShowAllRecent] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Global search overlay (within current space). Toggled from a button
+  // above 回收站.
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // Git state for the current space: only used to decide whether to show the
   // Git button and to badge it with pending change count. Poll every 5s; cheap
@@ -314,6 +319,18 @@ export default function Sidebar({ onToggle }: SidebarProps) {
       <div className="border-t border-notion-border/60">
         <div className="py-1">
           <button
+            onClick={() => setSearchOpen(true)}
+            disabled={!currentSpace}
+            className="w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ paddingLeft: '16px', paddingRight: '8px' }}
+            title="搜索当前空间"
+          >
+            <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
+              <Search className="w-[18px] h-[18px] text-[#91918e]" strokeWidth={1.7} />
+            </span>
+            <span className="text-sm font-medium text-notion-sidebarText">搜索</span>
+          </button>
+          <button
             onClick={() => {
               // Toggle: if already on trash page, return to space root.
               const trashPath = `/s/${currentSpace?.slug}/trash`;
@@ -367,6 +384,14 @@ export default function Sidebar({ onToggle }: SidebarProps) {
           </button>
         </div>
       </div>
+
+      {currentSpace && (
+        <SearchOverlay
+          open={searchOpen}
+          onClose={() => setSearchOpen(false)}
+          spaceSlug={currentSpace.slug}
+        />
+      )}
     </aside>
   );
 }

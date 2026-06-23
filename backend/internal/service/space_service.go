@@ -198,6 +198,30 @@ func (s *SpaceService) IsSpaceMember(spaceID, userID int) bool {
 	return err == nil && member != nil
 }
 
+// SpacePath resolves a space slug to its absolute directory under docsDir.
+// Used by services (search, git) that need to read the space's files directly
+// rather than go through the page tree. Mirrors GitService.resolveSpacePath
+// semantics: exact dir name first, slugified fallback scan.
+func (s *SpaceService) SpacePath(slug string) (string, bool) {
+	exact := filepath.Join(s.docsDir, slug)
+	if info, err := os.Stat(exact); err == nil && info.IsDir() {
+		return exact, true
+	}
+	entries, err := os.ReadDir(s.docsDir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if slugify(e.Name()) == slug {
+			return filepath.Join(s.docsDir, e.Name()), true
+		}
+	}
+	return "", false
+}
+
 func (s *SpaceService) SyncFromFS() error {
 	// Scan docs directory
 	scanner := filesystem.NewScanner(s.docsDir)

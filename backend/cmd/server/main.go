@@ -79,6 +79,7 @@ func main() {
 	prefService := service.NewPreferenceService(prefRepo)
 	siteSettingService := service.NewSiteSettingService(siteSettingRepo)
 	bookmarkService := service.NewBookmarkService(bookmarkRepo)
+	searchService := service.NewSearchService(docsDir)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -101,6 +102,7 @@ func main() {
 	bookmarkHandler := handler.NewBookmarkHandler(bookmarkService)
 	unsplashHandler := handler.NewUnsplashHandler(prefService)
 	gitHandler := handler.NewGitHandler(gitService, spaceService)
+	searchHandler := handler.NewSearchHandler(searchService, spaceService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -177,6 +179,9 @@ func main() {
 		r.Get("/api/spaces/{slug}/git/credentials", gitHandler.GetCredential)
 		r.Put("/api/spaces/{slug}/git/credentials", gitHandler.SetCredential)
 		r.Delete("/api/spaces/{slug}/git/credentials", gitHandler.DeleteCredential)
+
+		// Search (per-space, streamed as NDJSON)
+		r.Get("/api/spaces/{slug}/search/stream", searchHandler.Stream)
 
 		// Bookmark
 		r.Get("/api/bookmark/meta", bookmarkHandler.GetMeta)

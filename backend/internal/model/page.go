@@ -27,7 +27,7 @@ type PageNode struct {
 	Title     string      `json:"title"`
 	Icon      string      `json:"icon"`
 	SortOrder float64     `json:"sort_order"`
-	FilePath  string      `json:"-"` // Internal: used for DB enrichment, not exposed in JSON
+	FilePath  string      `json:"file_path"`
 	Children  []*PageNode `json:"children,omitempty"`
 }
 
