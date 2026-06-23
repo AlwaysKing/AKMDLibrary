@@ -15,6 +15,7 @@ import {
   FileX,
   FilePen,
   KeyRound,
+  RotateCcw,
 } from 'lucide-react';
 
 const CATEGORY_ICON: Record<GitFileStatus['category'], typeof FileText> = {
@@ -157,6 +158,35 @@ export default function GitPage() {
       await refresh();
     } catch (e: any) {
       setError(e?.response?.data || e?.message || 'Pull failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!spaceSlug || selected.size === 0) return;
+    // Destructive op — confirm. Using window.confirm keeps the change minimal
+    // and matches a native "are you sure" UX rather than introducing a modal.
+    const paths = Array.from(selected);
+    const msg =
+      paths.length === 1
+        ? `重置选中文件？该文件的工作区改动将被丢弃：\n  ${paths[0]}`
+        : `重置选中的 ${paths.length} 个文件？这些文件的工作区改动将被丢弃。`;
+    if (!window.confirm(msg)) return;
+    setBusy(true);
+    setError('');
+    setOutput('');
+    try {
+      const fresh = await gitApi.restore(spaceSlug, paths);
+      setState(fresh);
+      // Selection is naturally pruned by refresh() on next tick, but clearing
+      // here avoids a flash of stale selection on now-cleaned paths.
+      setSelected(new Set());
+      setUserTouchedMessage(false);
+      setMessage('');
+      setOutput(`已重置 ${paths.length} 个文件。`);
+    } catch (e: any) {
+      setError(e?.response?.data || e?.message || 'Restore failed');
     } finally {
       setBusy(false);
     }
@@ -344,6 +374,14 @@ export default function GitPage() {
           <span className="text-sm text-notion-textSecondary">
             {files.length === 0 ? '工作区干净，没有需要提交的改动' : `${files.length} 个文件有改动`}
           </span>
+          <button
+            onClick={handleRestore}
+            disabled={busy || selected.size === 0}
+            className="ml-auto flex items-center gap-1 px-2.5 py-1 text-sm rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="丢弃选中文件的工作区改动（tracked 文件还原到 HEAD，untracked 文件被删除）"
+          >
+            <RotateCcw size={14} /> 重置选中
+          </button>
         </div>
 
         <div className="border border-notion-border rounded divide-y divide-notion-border/60">

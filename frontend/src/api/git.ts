@@ -48,6 +48,10 @@ export const gitApi = {
   commit: (slug: string, message: string, paths: string[]) =>
     apiClient.post(`/spaces/${slug}/git/commit`, { message, paths }).then((r) => r.data),
 
+  // Discard worktree changes for the given paths. Returns the refreshed state.
+  restore: (slug: string, paths: string[]) =>
+    apiClient.post<GitRepoState>(`/spaces/${slug}/git/restore`, { paths }).then((r) => r.data),
+
   push: (slug: string) =>
     apiClient.post<{ ok: boolean; output: string }>(`/spaces/${slug}/git/push`).then((r) => r.data),
 

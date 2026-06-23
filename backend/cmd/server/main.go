@@ -172,6 +172,7 @@ func main() {
 		// Git (per-space; UI hides these when space isn't a git repo)
 		r.Get("/api/spaces/{slug}/git/state", gitHandler.State)
 		r.Post("/api/spaces/{slug}/git/commit", gitHandler.Commit)
+		r.Post("/api/spaces/{slug}/git/restore", gitHandler.Restore)
 		r.Post("/api/spaces/{slug}/git/push", gitHandler.Push)
 		r.Post("/api/spaces/{slug}/git/pull", gitHandler.Pull)
 		r.Get("/api/spaces/{slug}/git/config", gitHandler.GetConfig)

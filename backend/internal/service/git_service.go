@@ -289,6 +289,95 @@ func (s *GitService) Commit(spaceSlug, message string, paths []string) error {
 	return err
 }
 
+// Restore reverts the supplied paths to their HEAD state (tracked files) or
+// removes them from the worktree (untracked / newly-added files). This is the
+// "discard selected changes" operation.
+//
+// Per-path dispatch (decision D — smart reset):
+//   - untracked ("??"): `git clean -fd -- <path>` removes the file/dir
+//   - newly added in index ("A?" — file not in HEAD): first unstage via
+//     `git restore --staged`, then `git clean -fd` to delete the worktree file
+//   - other tracked states (modified/staged/deleted): `git restore --staged
+//     --worktree -- <path>` resets both index and worktree back to HEAD
+//
+// Paths that are no longer dirty (e.g. changed by another session between
+// State() and Restore()) are silently skipped — they're already in the desired
+// state, erroring would just be noise.
+//
+// Returns the refreshed GitRepoState so the caller can render the result
+// without a follow-up State() round-trip.
+func (s *GitService) Restore(spaceSlug string, paths []string) (*GitRepoState, error) {
+	spacePath, ok := s.resolveSpacePath(spaceSlug)
+	if !ok {
+		return nil, ErrSpaceNotFound
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("no files selected")
+	}
+	if err := validatePaths(spacePath, paths); err != nil {
+		return nil, err
+	}
+
+	s.lockFor(spaceSlug).Lock()
+	defer s.lockFor(spaceSlug).Unlock()
+
+	// Snapshot the current status once and bucket paths by their index/worktree
+	// codes. We avoid re-running `git status` per path — one call is cheaper
+	// and gives a consistent view across all selected paths.
+	files, err := s.statusFiles(spacePath)
+	if err != nil {
+		return nil, err
+	}
+	statusByPath := make(map[string]string, len(files))
+	for _, f := range files {
+		statusByPath[f.Path] = f.Status
+	}
+
+	var tracked, added, untracked []string
+	for _, p := range paths {
+		st, known := statusByPath[p]
+		if !known {
+			// No longer dirty — nothing to do for this path.
+			continue
+		}
+		switch {
+		case st == "??":
+			untracked = append(untracked, p)
+		case st[0] == 'A':
+			// Staged-but-not-in-HEAD: unstage first, then clean the worktree.
+			added = append(added, p)
+		default:
+			tracked = append(tracked, p)
+		}
+	}
+
+	if len(tracked) > 0 {
+		args := append([]string{"restore", "--staged", "--worktree", "--"}, tracked...)
+		if _, err := s.gitForSlug(spaceSlug, spacePath, nil, args...); err != nil {
+			return nil, err
+		}
+	}
+	if len(added) > 0 {
+		// Unstage so the file becomes untracked, then it falls into the
+		// `git clean` batch below.
+		args := append([]string{"restore", "--staged", "--"}, added...)
+		if _, err := s.gitForSlug(spaceSlug, spacePath, nil, args...); err != nil {
+			return nil, err
+		}
+		untracked = append(untracked, added...)
+	}
+	if len(untracked) > 0 {
+		// -d so untracked directories are also removed (status collapses a new
+		// directory into a single "??" entry with trailing slash).
+		args := append([]string{"clean", "-f", "-d", "--"}, untracked...)
+		if _, err := s.gitForSlug(spaceSlug, spacePath, nil, args...); err != nil {
+			return nil, err
+		}
+	}
+
+	return s.State(spaceSlug)
+}
+
 // Push pushes the current branch to its upstream (or origin).
 func (s *GitService) Push(spaceSlug string) (string, error) {
 	return s.withRemote(spaceSlug, func(spacePath string) (string, error) {

@@ -83,6 +83,29 @@ func (h *GitHandler) Commit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// Restore discards selected paths' worktree changes (tracked files revert to
+// HEAD; untracked files are removed). Returns the refreshed state.
+// POST /api/spaces/{slug}/git/restore  body: { paths }
+func (h *GitHandler) Restore(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if !h.checkSpaceAccess(w, r, slug) {
+		return
+	}
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	state, err := h.gitService.Restore(slug, req.Paths)
+	if err != nil {
+		writeGitError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
 // Push pushes the current branch upstream.
 // POST /api/spaces/{slug}/git/push
 func (h *GitHandler) Push(w http.ResponseWriter, r *http.Request) {
