@@ -77,6 +77,52 @@ export default function PageViewPage() {
     refreshGit();
   }, [refreshGit]);
 
+  // Scroll to a block referenced by `#block-<uuid>` in the URL.
+  // BlockNote renders blocks synchronously on mount, but large pages take a
+  // few frames to commit; poll for up to 2s, then give up silently (stale
+  // link, block deleted, etc.). scrollIntoView walks up to the nearest
+  // scrollable ancestor (.page-content-scroll), so we don't need to target
+  // the container manually.
+  const scrollToBlockHash = useCallback(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith('#block-')) return;
+    const blockId = decodeURIComponent(hash.slice('#block-'.length));
+    if (!blockId) return;
+    const deadline = Date.now() + 2000;
+    let raf = 0;
+    const tryScroll = () => {
+      // CSS.escape guards against characters that would break the attribute
+      // selector (e.g. brackets). BlockNote UUIDs are plain hex+dash so this
+      // is belt-and-braces.
+      const el = document.querySelector(`[data-id="${CSS.escape(blockId)}"]`) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      if (Date.now() < deadline) {
+        raf = requestAnimationFrame(tryScroll);
+      }
+    };
+    tryScroll();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // Cross-page navigation: fetchPage resolves → currentPage.id changes →
+  // PageEditor (keyed by id) remounts → effect fires after a tick.
+  useEffect(() => {
+    if (!currentPage) return;
+    // Delay one frame so BlockNote has actually painted the blocks.
+    const id = setTimeout(scrollToBlockHash, 50);
+    return () => clearTimeout(id);
+  }, [currentPage?.id, scrollToBlockHash]);
+
+  // Same-page clicks on a `#block-...` link don't change the route — React
+  // Router doesn't re-render, so we need a hashchange listener.
+  useEffect(() => {
+    window.addEventListener('hashchange', scrollToBlockHash);
+    return () => window.removeEventListener('hashchange', scrollToBlockHash);
+  }, [scrollToBlockHash]);
+
   // When a sync completes, the file on disk has changed → git state may have
   // new dirty entries. Refresh so the per-page commit button appears.
   useEffect(() => {
