@@ -388,6 +388,19 @@ h4[contenteditable],
   overflow-wrap: normal !important;
 }
 
+/* fileContent: same inline-content overrides as codeBlock so long lines scroll
+   horizontally instead of wrapping. The outer .bn-file-content-pre already
+   sets white-space/overflow, but the inner .bn-inline-content inherits the
+   default break-word/break-spaces from .bn-editor .bn-inline-content above
+   and would wrap without this rule. */
+.bn-editor [data-content-type="fileContent"] .bn-inline-content,
+.bn-editor [data-content-type="fileContent"] code {
+  white-space: pre !important;
+  white-space-collapse: preserve !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
 /* Hide native <select> container — replaced by custom toolbar */
 .bn-editor [data-content-type="codeBlock"] > div[contenteditable="false"]:has(select) {
   display: none !important;
@@ -3289,6 +3302,11 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 .bn-file-content-pre::-webkit-scrollbar-thumb {
   background: #c9c8c4;
   border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.bn-file-content-pre::-webkit-scrollbar-thumb:hover {
+  background: #b8b7b2;
   border: 2px solid transparent;
   background-clip: content-box;
 }
