@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { SmilePlus, Search, Shuffle, Upload } from 'lucide-react';
 import { usePageStore } from '../../stores/pageStore';
 import { fetchIconLibrary, checkIconName, useIconFromLibrary, IconLibraryItem } from '../../api/icons';
+import { EMOJI_KEYWORDS } from './emojiKeywords';
 
 interface PageIconProps {
   icon: string | null | undefined;
@@ -63,6 +64,7 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   const gridRef = useRef<HTMLDivElement>(null);
   const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const triggerRef = useRef<HTMLButtonElement | HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const { updateMetadata } = usePageStore();
 
   const setOpen = (open: boolean) => {
@@ -130,6 +132,85 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
     }
   }, [isOpen, tab, updatePopupPosition]);
 
+  // BlockNote's GridSuggestionMenu + floating-ui have three independent
+  // mechanisms that all need to be bypassed for the filter input to receive
+  // focus and stay mounted:
+  //   1. `onMouseDownCapture: preventDefault` on the menu container (React
+  //      fiber tree applies it to the portaled input too) — blocks the
+  //      browser's default focus-on-mousedown behavior.
+  //   2. floating-ui `useDismiss` outsidePress on document (pointerdown,
+  //      bubble) — treats the portaled input as "outside" and closes menu.
+  //   3. Editor blur detection — when focus leaves the editor into the
+  //      input, BlockNote closes the suggestion menu, unmounting PageIcon
+  //      and the picker. This is the *closing* trigger, not the mouse
+  //      events.
+  //
+  // Window is the earliest capture-phase vantage point, before document
+  // (where floating-ui listens) and before body (React's portal-event
+  // root). Stopping propagation there for events destined to our input
+  // hides them from all three mechanisms while preserving default browser
+  // behavior (focus transfer).
+  useEffect(() => {
+    const el = searchInputRef.current;
+    if (!el) return;
+    const stop = (e: Event) => {
+      const target = e.target as Node | null;
+      const related = (e as FocusEvent).relatedTarget as Node | null;
+      const involvesInput =
+        (target && (target === el || el.contains(target))) ||
+        (related && (related === el || el.contains(related)));
+      if (involvesInput) e.stopPropagation();
+    };
+    const types = ['mousedown', 'pointerdown', 'click', 'focus', 'blur', 'focusin', 'focusout'];
+    types.forEach((t) => window.addEventListener(t, stop, true));
+
+    // ESC handling: while the picker is open, ESC should close it and
+    // nothing else. Two cases to cover:
+    //   - Input focused: BlockNote's editor listens on document for ESC
+    //     (used for "deselect block") and would intercept it before
+    //     React's synthetic onKeyDown can reach our portaled input.
+    //   - Input not focused (focus still in editor contentEditable):
+    //     ESC would reach the editor and select/deselect the block.
+    // Window capture fires before document, so we catch ESC at the
+    // earliest point and stop it from reaching any editor listener.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      e.preventDefault();
+      setOpen(false);
+      setSearch('');
+    };
+    window.addEventListener('keydown', onKey, true);
+
+    // Auto-focus: when the picker opens (or switches to the emoji tab),
+    // focus the filter input so the user can type immediately. The
+    // focus/blur stopPropagation above ensures the editor's blur doesn't
+    // close BlockNote's suggestion menu (which would unmount us).
+    const focusId = requestAnimationFrame(() => el.focus());
+
+    return () => {
+      types.forEach((t) => window.removeEventListener(t, stop, true));
+      window.removeEventListener('keydown', onKey, true);
+      cancelAnimationFrame(focusId);
+    };
+  }, [isOpen, tab]);
+
+  // Restore focus to the editor when the picker closes in compact mode
+  // (triggered from BlockNote's GridSuggestionMenu). When the input
+  // unmounts, the browser drops focus to body — explicitly move it
+  // back to the editor so the user can keep typing without re-clicking.
+  // Non-compact mode (page-title trigger) skips this: focus was driven
+  // by mouse click, not keyboard editing flow, so forcing it back to
+  // the editor would be intrusive.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasOpenRef.current && !isOpen && compact) {
+      const editor = document.querySelector('.bn-editor') as HTMLElement | null;
+      if (editor) editor.focus();
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, compact]);
+
   // Load icon library when picker opens
   useEffect(() => {
     if (isOpen && !emojiOnly) {
@@ -142,10 +223,25 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
   }, []);
 
   const searchResults = useMemo(() => {
-    if (!search.trim()) return null;
-    const query = search.toLowerCase();
-    const flat = Object.values(EMOJI_CATEGORIES).flat();
-    return [...new Set(flat)].filter(e => e.includes(query));
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+    // Match by: emoji character itself, category name, or keyword
+    // (Chinese/English/pinyin from EMOJI_KEYWORDS).
+    const matched = new Set<string>();
+    for (const [category, emojis] of Object.entries(EMOJI_CATEGORIES)) {
+      const categoryMatches = category.toLowerCase().includes(q);
+      for (const emoji of emojis) {
+        if (categoryMatches || emoji.includes(q)) {
+          matched.add(emoji);
+          continue;
+        }
+        const kws = EMOJI_KEYWORDS[emoji];
+        if (kws && kws.some((k) => k.toLowerCase().includes(q))) {
+          matched.add(emoji);
+        }
+      }
+    }
+    return [...matched];
   }, [search]);
 
   const scrollToCategory = (cat: string) => {
@@ -373,9 +469,21 @@ export default function PageIcon({ icon, iconLarge, spaceSlug, pageId, compact, 
               <div className="flex-1 relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-notion-textSecondary" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      // Controlled input — value is driven by React state, so
+                      // the browser's default "revert value" behavior is a
+                      // no-op for us. Let the event keep bubbling so
+                      // BlockNote's own Escape handler (floating-ui's
+                      // useDismiss) also fires and closes its suggestion menu.
+                      setOpen(false);
+                      setSearch('');
+                    }
+                  }}
                   placeholder="筛选…"
                   className="w-full pl-7 pr-2 py-1.5 text-sm bg-notion-sidebarBg rounded-md outline-none focus:ring-1 focus:ring-notion-border"
                 />
