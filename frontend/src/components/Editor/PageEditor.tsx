@@ -23,6 +23,8 @@ import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import { MarkBlockSpec } from './MarkBlock';
+import { FileContentBlockSpec } from './FileContentBlock';
+import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
 import { FindReplaceExtension } from './FindReplaceExtension';
@@ -33,6 +35,7 @@ import { pageMetaCache } from './PageMetaCache';
 import { mentionMetaCache } from './MentionMetaCache';
 import { pagesApi } from '../../api/pages';
 import { uploadApi } from '../../api/upload';
+import { writeSpaceFile } from '../../api/files';
 import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { flushSync } from '../../services/syncModule';
@@ -112,6 +115,7 @@ function createEditorSchema(codeTheme: CodeThemeValue) {
       subpage: SubpageBlockSpec(),
       column_list: ColumnListBlockSpec(),
       column: ColumnBlockSpec(),
+      fileContent: FileContentBlockSpec(),
     },
   });
 }
@@ -357,6 +361,31 @@ function getCustomSlashMenuItems(editor: any) {
         // Move cursor to next editable block
         const nextBlock = editor.getTextCursorPosition().nextBlock;
         if (nextBlock) editor.setTextCursorPosition(nextBlock, 'end');
+      },
+    },
+    {
+      title: '文件内容',
+      subtext: '引用 space 共享文件并以代码块展示',
+      key: 'fileContent',
+      aliases: ['fileContent', 'file', '文件', '文件内容'],
+      group: '高级区块',
+      icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4 }}><path d="M4 2.5h6l4 4v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" /><path d="M10 2.5v4h4" /><path d="M6 10h6M6 12.5h6" strokeLinecap="round" /></svg>,
+      onItemClick: () => {
+        const currentBlock = editor.getTextCursorPosition().block;
+        const blockContent = currentBlock.content;
+        const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
+          blockContent[0].type === 'text' && blockContent[0].text === '/';
+        const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
+        const newBlock = {
+          type: 'fileContent',
+          props: { path: '', language: 'text' },
+          content: [{ type: 'text', text: '', styles: {} }],
+        };
+        if (isSlashOnly || isEmpty) {
+          editor.updateBlock(currentBlock, newBlock as any);
+        } else {
+          editor.insertBlocks([newBlock as any], currentBlock, 'after');
+        }
       },
     },
     {
@@ -1796,6 +1825,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
   // Refs for values read inside callbacks — avoid stale closures
   const hasChangesRef = useRef(false);
+  // Baseline content for each fileContent block (blockId -> last persisted
+  // text). Used by triggerMirror to write only blocks whose content actually
+  // changed since the last successful PUT. A block that has never been
+  // persisted is recorded as baseline-on-first-see (no write) so freshly
+  // hydrated content from the API doesn't get redundantly written back.
+  const fileContentBaselineRef = useRef<Map<string, string>>(new Map());
   const isNormalizingColumnsRef = useRef(false);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
@@ -1827,7 +1862,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const result = await uploadApi.upload(file, { pageId, spaceSlug });
       return result.path;
     },
-    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension] },
+    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension, createFileContentHighlightExtension(resolvedCodeTheme)] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules
@@ -4112,18 +4147,68 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
   }, [editor, readOnly]);
 
+  // Persist fileContent block edits to <space>/_files/ via the files API.
+  // Only blocks whose text content differs from the recorded baseline are
+  // written; blocks observed for the first time are recorded as baseline
+  // without a write (so freshly-hydrated content from the API doesn't get
+  // redundantly pushed back). Returns when all writes have settled.
+  //
+  // MUST be awaited before createMirror so that, by the time syncModule
+  // pushes the page markdown, the referenced files are already up to date.
+  const persistFileContentBlocks = useCallback(
+    async (blocks: any[], spaceSlug: string) => {
+      if (!spaceSlug) return;
+      const baseline = fileContentBaselineRef.current;
+      // Stale entries (block deleted) — drop them so the map doesn't grow
+      // without bound across edits.
+      const liveIds = new Set(blocks.filter((b) => b?.id).map((b) => b.id));
+      for (const id of Array.from(baseline.keys())) {
+        if (!liveIds.has(id)) baseline.delete(id);
+      }
+      await Promise.all(
+        blocks
+          .filter((b) => b?.type === 'fileContent' && b?.props?.path)
+          .map(async (b) => {
+            const text = (b.content ?? [])
+              .map((c: any) => c?.text ?? '')
+              .join('');
+            const prev = baseline.get(b.id);
+            if (prev === undefined) {
+              // First time we see this block — record baseline, don't write.
+              // (Content was either just hydrated from disk or just bound
+              // to an uploaded file; in both cases the file already matches.)
+              baseline.set(b.id, text);
+              return;
+            }
+            if (text === prev) return;
+            try {
+              await writeSpaceFile(spaceSlug, b.props.path, text);
+              baseline.set(b.id, text);
+            } catch (err) {
+              console.error('[fileContent] write failed', b.props.path, err);
+              // Leave baseline untouched so the next attempt retries.
+            }
+          })
+      );
+    },
+    []
+  );
+
   // Write mirror to IndexedDB — fast, local, no network
-  const triggerMirror = useCallback(() => {
+  const triggerMirror = useCallback(async () => {
     if (!hasChangesRef.current || readOnlyRef.current) return;
 
     const currentBlocks = editor.document;
-    const markdown = blocksToMarkdown(currentBlocks);
     const { spaceSlug, pageId } = identityRef.current;
+    // Push fileContent edits to the backend first so files are up to date
+    // before syncModule ships the page markdown that references them.
+    await persistFileContentBlocks(currentBlocks, spaceSlug);
+    const markdown = blocksToMarkdown(currentBlocks);
     createMirror(spaceSlug, pageId, markdown);
 
     hasChangesRef.current = false;
     onSyncStatusChangeRef.current?.('syncing');
-  }, [editor]);
+  }, [editor, persistFileContentBlocks]);
 
   // Cmd+S / Ctrl+S: immediate mirror + flush sync
   useEffect(() => {
@@ -4133,18 +4218,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         e.preventDefault();
 
         const currentBlocks = editor.document;
-        const markdown = blocksToMarkdown(currentBlocks);
         const { spaceSlug, pageId } = identityRef.current;
-        createMirror(spaceSlug, pageId, markdown);
-
-        hasChangesRef.current = false;
-        onSyncStatusChangeRef.current?.('syncing');
-        flushSync();
+        // Persist fileContent edits before serializing markdown so files
+        // and page stay consistent on the backend.
+        persistFileContentBlocks(currentBlocks, spaceSlug).finally(() => {
+          const markdown = blocksToMarkdown(editor.document);
+          createMirror(spaceSlug, pageId, markdown);
+          hasChangesRef.current = false;
+          onSyncStatusChangeRef.current?.('syncing');
+          flushSync();
+        });
       }
     };
     document.addEventListener('keydown', handleSaveShortcut);
     return () => document.removeEventListener('keydown', handleSaveShortcut);
-  }, [editor, readOnly]);
+  }, [editor, readOnly, persistFileContentBlocks]);
 
   // Slash menu: only trigger on empty blocks; "//" cancels
   useEffect(() => {
@@ -4731,6 +4819,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
 
           // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
+          await persistFileContentBlocks(editor.document, spaceSlug);
           const markdown = blocksToMarkdown(editor.document);
           await createMirror(spaceSlug, currentPageId, markdown);
           hasChangesRef.current = false;

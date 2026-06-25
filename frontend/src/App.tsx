@@ -9,6 +9,7 @@ import AdminPage from './pages/AdminPage';
 import TrashPage from './pages/TrashPage';
 import WelcomePage from './pages/WelcomePage';
 import GitPage from './pages/GitPage';
+import FilesPage from './pages/FilesPage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 import { usePreferenceStore } from './stores/preferenceStore';
@@ -113,6 +114,7 @@ function App() {
           <Route index element={<SpacePage />} />
           <Route path="trash" element={<TrashPage />} />
           <Route path="git" element={<GitPage />} />
+          <Route path="files" element={<FilesPage />} />
         </Route>
         <Route
           path="/s/:spaceSlug/p/:pageId"

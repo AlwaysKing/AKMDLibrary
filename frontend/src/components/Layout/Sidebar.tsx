@@ -1,4 +1,4 @@
-import { Settings, ChevronsLeft, Trash2, ArrowLeft, Users, Database, User, Image, ChevronDown, ChevronRight, Plus, LogOut, GitBranch, Search } from 'lucide-react';
+import { Settings, ChevronsLeft, Trash2, ArrowLeft, Users, Database, User, Image, ChevronDown, ChevronRight, Plus, LogOut, GitBranch, Search, FolderOpen } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import SpaceSelector from '../Sidebar/SpaceSelector';
 import PageTree from '../Sidebar/PageTree';
@@ -332,18 +332,18 @@ export default function Sidebar({ onToggle }: SidebarProps) {
           </button>
           <button
             onClick={() => {
-              // Toggle: if already on trash page, return to space root.
-              const trashPath = `/s/${currentSpace?.slug}/trash`;
-              navigate(location.pathname === trashPath ? `/s/${currentSpace?.slug}` : trashPath);
+              const filesPath = `/s/${currentSpace?.slug}/files`;
+              navigate(location.pathname === filesPath ? `/s/${currentSpace?.slug}` : filesPath);
             }}
             disabled={!currentSpace}
-            className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed ${location.pathname === `/s/${currentSpace?.slug}/trash` ? 'bg-notion-hover' : ''}`}
+            className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed ${location.pathname === `/s/${currentSpace?.slug}/files` ? 'bg-notion-hover' : ''}`}
             style={{ paddingLeft: '16px', paddingRight: '8px' }}
+            title="文件管理"
           >
             <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
-              <Trash2 className="w-[18px] h-[18px] text-[#91918e]" strokeWidth={1.7} />
+              <FolderOpen className="w-[18px] h-[18px] text-[#91918e]" strokeWidth={1.7} />
             </span>
-            <span className="text-sm font-medium text-notion-sidebarText">回收站</span>
+            <span className="text-sm font-medium text-notion-sidebarText">文件管理</span>
           </button>
           {gitState?.is_repo && (
             <button
@@ -372,6 +372,21 @@ export default function Sidebar({ onToggle }: SidebarProps) {
               )}
             </button>
           )}
+          <button
+            onClick={() => {
+              // Toggle: if already on trash page, return to space root.
+              const trashPath = `/s/${currentSpace?.slug}/trash`;
+              navigate(location.pathname === trashPath ? `/s/${currentSpace?.slug}` : trashPath);
+            }}
+            disabled={!currentSpace}
+            className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed ${location.pathname === `/s/${currentSpace?.slug}/trash` ? 'bg-notion-hover' : ''}`}
+            style={{ paddingLeft: '16px', paddingRight: '8px' }}
+          >
+            <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
+              <Trash2 className="w-[18px] h-[18px] text-[#91918e]" strokeWidth={1.7} />
+            </span>
+            <span className="text-sm font-medium text-notion-sidebarText">回收站</span>
+          </button>
           <button
             onClick={() => navigate('/admin?tab=profile')}
             className="w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left"

@@ -435,6 +435,10 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
 		page.Content = maintained
 	}
 
+	// fileContent blocks hydrate their content client-side via the files
+	// API (see frontend FileContentBlock.tsx + writeSpaceFile). The on-disk
+	// page body only stores the <content file="..." lang="..." /> marker.
+
 	return page, nil
 }
 
@@ -549,6 +553,11 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 
 	// Maintain subpage blocks: ensure content matches actual children
 	maintained := s.maintainSubpageBlocks(req.Content, repo, page.FilePath)
+
+	// fileContent blocks persist their content directly to _files/ via the
+	// files API (PUT /content) before the page is saved; the on-disk page
+	// body only stores the <content file="..." lang="..." /> marker which
+	// passes through untouched here.
 
 	assembled := frontmatter.Render(fm, maintained)
 	if err := os.WriteFile(filePath, assembled, 0644); err != nil {
@@ -1892,3 +1901,4 @@ func (s *PageService) checkCacheNeedsMigration(db *sql.DB) (bool, error) {
 	}
 	return false, nil
 }
+

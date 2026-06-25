@@ -246,6 +246,34 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // fileContent block: <content file="..." lang="..." /> (self-closing) or
+    // paired <content ...>...</content>. The tag carries path + language only;
+    // actual file content is hydrated on the client via the files API, so we
+    // emit an empty-content block here regardless of whether the paired form
+    // had body text (which it normally won't).
+    const contentSelfClose = line.match(
+      /^<content\s+file="([^"]*)"\s+lang="([^"]*)"\s*\/>$/
+    );
+    const contentOpen = line.match(/^<content\s+file="([^"]*)"\s+lang="([^"]*)"\s*>$/);
+    if (contentSelfClose || contentOpen) {
+      const m = contentSelfClose || contentOpen!;
+      const refPath = m[1];
+      const lang = m[2] || 'text';
+      i++;
+      if (contentOpen) {
+        // Consume until the matching </content> close tag. Body is discarded
+        // — content is always hydrated from _files/ on the client.
+        while (i < lines.length && lines[i].trim() !== '</content>') i++;
+        if (i < lines.length) i++;
+      }
+      blocks.push({
+        type: 'fileContent',
+        props: { path: refPath, language: lang },
+        content: [{ type: 'text', text: '', styles: {} }],
+      });
+      continue;
+    }
+
     // Code block
     if (trimmed.startsWith('```')) {
       const rawLang = trimmed.slice(3).trim();
@@ -902,6 +930,18 @@ function serializeRegularBlock(block: any): string {
       const language = block.props?.language || '';
       const code = getTextContent(block.content);
       return `\`\`\`${language}\n${code}\n\`\`\``;
+    }
+
+    case 'fileContent': {
+      // Emit a self-closing <content /> tag carrying the file path and
+      // language. The actual file content lives in <space>/_files/ and is
+      // read/written by FileContentBlock via the files API — page.md never
+      // stores the body inline, which avoids any collision between file
+      // content and markdown syntax.
+      const path = block.props?.path || '';
+      const language = block.props?.language || 'text';
+      if (!path) return '';
+      return `<content file="${escapeHtmlAttribute(path)}" lang="${escapeHtmlAttribute(language)}" />`;
     }
 
     case 'quote': {

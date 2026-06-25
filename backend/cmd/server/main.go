@@ -103,6 +103,7 @@ func main() {
 	unsplashHandler := handler.NewUnsplashHandler(prefService)
 	gitHandler := handler.NewGitHandler(gitService, spaceService)
 	searchHandler := handler.NewSearchHandler(searchService, spaceService)
+	filesHandler := handler.NewFilesHandler(docsDir, spaceService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -183,6 +184,16 @@ func main() {
 
 		// Search (per-space, streamed as NDJSON)
 		r.Get("/api/spaces/{slug}/search/stream", searchHandler.Stream)
+
+		// Files (per-space shared file pool under <space>/_files/)
+		r.Get("/api/spaces/{slug}/files", filesHandler.List)
+		r.Get("/api/spaces/{slug}/files/content", filesHandler.GetContent)
+		r.Put("/api/spaces/{slug}/files/content", filesHandler.PutContent)
+		r.Get("/api/spaces/{slug}/files/download", filesHandler.Download)
+		r.Get("/api/spaces/{slug}/files/check", filesHandler.CheckName)
+		r.Post("/api/spaces/{slug}/files/upload", filesHandler.Upload)
+		r.Put("/api/spaces/{slug}/files/rename", filesHandler.Rename)
+		r.Delete("/api/spaces/{slug}/files", filesHandler.Delete)
 
 		// Bookmark
 		r.Get("/api/bookmark/meta", bookmarkHandler.GetMeta)

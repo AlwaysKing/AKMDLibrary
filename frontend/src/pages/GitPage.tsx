@@ -197,6 +197,8 @@ export default function GitPage() {
     try {
       const saved = await gitApi.setConfig(spaceSlug, cfg);
       setConfig(saved);
+      // Collapse the panel on success, mirroring handleSaveCredentials.
+      setShowSettings(false);
     } catch (e: any) {
       setError(e?.response?.data || e?.message || 'Save config failed');
     }
