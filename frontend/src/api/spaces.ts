@@ -1,11 +1,16 @@
 import apiClient from './client';
 
+export interface FeatureFlags {
+  git: boolean;
+}
+
 export interface Space {
   id: number;
   name: string;
   slug: string;
   icon?: string;
   description?: string;
+  feature_flags: FeatureFlags;
   created_at: string;
   updated_at: string;
 }
@@ -55,6 +60,14 @@ export const spacesApi = {
 
   refresh: async (slug: string): Promise<void> => {
     await apiClient.post(`/spaces/${slug}/refresh`);
+  },
+
+  updateFeatureFlags: async (slug: string, flags: FeatureFlags): Promise<FeatureFlags> => {
+    const response = await apiClient.put<{ feature_flags: FeatureFlags }>(
+      `/spaces/${slug}/feature-flags`,
+      flags
+    );
+    return response.data.feature_flags;
   },
 
   getMembers: async (slug: string): Promise<SpaceMember[]> => {

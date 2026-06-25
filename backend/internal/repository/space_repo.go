@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
@@ -17,8 +18,8 @@ func NewSpaceRepository(db *DB) *SpaceRepository {
 
 func (r *SpaceRepository) Create(space *model.CreateSpaceRequest, slug string) (*model.Space, error) {
 	query := `
-		INSERT INTO spaces (name, slug, icon, description)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO spaces (name, slug, icon, description, feature_flags)
+		VALUES (?, ?, ?, ?, '{}')
 	`
 
 	result, err := r.db.Exec(query, space.Name, slug, space.Icon, space.Description)
@@ -36,16 +37,18 @@ func (r *SpaceRepository) Create(space *model.CreateSpaceRequest, slug string) (
 
 func (r *SpaceRepository) GetByID(id int) (*model.Space, error) {
 	query := `
-		SELECT id, name, slug, icon, description, created_at, updated_at
+		SELECT id, name, slug, icon, description, feature_flags, created_at, updated_at
 		FROM spaces WHERE id = ?
 	`
 
 	var space model.Space
 	var icon, description sql.NullString
+	var featureFlags string
 	err := r.db.QueryRow(query, id).Scan(
 		&space.ID, &space.Name, &space.Slug, &icon,
-		&description, &space.CreatedAt, &space.UpdatedAt,
+		&description, &featureFlags, &space.CreatedAt, &space.UpdatedAt,
 	)
+	space.FeatureFlags = json.RawMessage(featureFlags)
 
 	if icon.Valid {
 		space.Icon = icon.String
@@ -66,16 +69,18 @@ func (r *SpaceRepository) GetByID(id int) (*model.Space, error) {
 
 func (r *SpaceRepository) GetBySlug(slug string) (*model.Space, error) {
 	query := `
-		SELECT id, name, slug, icon, description, created_at, updated_at
+		SELECT id, name, slug, icon, description, feature_flags, created_at, updated_at
 		FROM spaces WHERE slug = ?
 	`
 
 	var space model.Space
 	var icon, description sql.NullString
+	var featureFlags string
 	err := r.db.QueryRow(query, slug).Scan(
 		&space.ID, &space.Name, &space.Slug, &icon,
-		&description, &space.CreatedAt, &space.UpdatedAt,
+		&description, &featureFlags, &space.CreatedAt, &space.UpdatedAt,
 	)
+	space.FeatureFlags = json.RawMessage(featureFlags)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("space not found")
@@ -103,14 +108,14 @@ func (r *SpaceRepository) ListByUserID(userID int) ([]*model.Space, error) {
 
 	if userID == 0 {
 		query = `
-			SELECT id, name, slug, icon, description, created_at, updated_at
+			SELECT id, name, slug, icon, description, feature_flags, created_at, updated_at
 			FROM spaces
 			ORDER BY created_at DESC
 		`
 		rows, err = r.db.Query(query)
 	} else {
 		query = `
-			SELECT DISTINCT s.id, s.name, s.slug, s.icon, s.description, s.created_at, s.updated_at
+			SELECT DISTINCT s.id, s.name, s.slug, s.icon, s.description, s.feature_flags, s.created_at, s.updated_at
 			FROM spaces s
 			JOIN space_members sm ON s.id = sm.space_id
 			WHERE sm.user_id = ?
@@ -128,9 +133,10 @@ func (r *SpaceRepository) ListByUserID(userID int) ([]*model.Space, error) {
 	for rows.Next() {
 		var space model.Space
 		var icon, description sql.NullString
+		var featureFlags string
 		if err := rows.Scan(
 			&space.ID, &space.Name, &space.Slug, &icon,
-			&description, &space.CreatedAt, &space.UpdatedAt,
+			&description, &featureFlags, &space.CreatedAt, &space.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan space: %w", err)
 		}
@@ -141,6 +147,7 @@ func (r *SpaceRepository) ListByUserID(userID int) ([]*model.Space, error) {
 		if description.Valid {
 			space.Description = description.String
 		}
+		space.FeatureFlags = json.RawMessage(featureFlags)
 
 		spaces = append(spaces, &space)
 	}
@@ -178,6 +185,25 @@ func (r *SpaceRepository) Update(id int, req *model.UpdateSpaceRequest) (*model.
 	}
 
 	return r.GetByID(id)
+}
+
+// UpdateFeatureFlags overwrites the feature_flags JSON column for a space.
+func (r *SpaceRepository) UpdateFeatureFlags(slug string, flagsJSON string) error {
+	result, err := r.db.Exec(
+		`UPDATE spaces SET feature_flags = ?, updated_at = CURRENT_TIMESTAMP WHERE slug = ?`,
+		flagsJSON, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update feature_flags: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("space not found")
+	}
+	return nil
 }
 
 func (r *SpaceRepository) Delete(id int) error {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -134,6 +135,19 @@ func (s *SpaceService) Update(slug string, req *model.UpdateSpaceRequest) (*mode
 		s.markGitDirty(newSlugAfterRename)
 	}
 	return updated, nil
+}
+
+// UpdateFeatureFlags overwrites the feature_flags JSON for a space and returns
+// the parsed object. PUT semantics: replace, not merge.
+func (s *SpaceService) UpdateFeatureFlags(slug string, flags model.FeatureFlags) (model.FeatureFlags, error) {
+	data, err := json.Marshal(flags)
+	if err != nil {
+		return model.FeatureFlags{}, fmt.Errorf("failed to marshal feature flags: %w", err)
+	}
+	if err := s.spaceRepo.UpdateFeatureFlags(slug, string(data)); err != nil {
+		return model.FeatureFlags{}, err
+	}
+	return flags, nil
 }
 
 func (s *SpaceService) Delete(slug string) error {

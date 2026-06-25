@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, Fragment } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { usersApi } from '../api/users';
-import { spacesApi, Space, SpaceMember } from '../api/spaces';
+import { spacesApi, Space, SpaceMember, FeatureFlags } from '../api/spaces';
 import { authApi } from '../api/auth';
 import { fetchIconLibrary, uploadToIconLibrary, deleteIcon, renameIcon, IconLibraryItem } from '../api/icons';
 import { fetchCoverLibrary, uploadToCoverLibrary, deleteCover, renameCover, CoverLibraryItem } from '../api/covers';
@@ -118,7 +118,7 @@ export default function AdminPage() {
   const [spacesLoading, setSpacesLoading] = useState(false);
   // 统一面板: null=关闭, 'new'=创建, slug=编辑
   const [spacePanelSlug, setSpacePanelSlug] = useState<string | null>(null);
-  const [spaceFormData, setSpaceFormData] = useState({ name: '', icon: '', description: '' });
+  const [spaceFormData, setSpaceFormData] = useState<{ name: string; icon: string; description: string; feature_flags: FeatureFlags }>({ name: '', icon: '', description: '', feature_flags: { git: false } });
   const [showIconPicker, setShowIconPicker] = useState(false);
   const iconPickerRef = useRef<HTMLDivElement>(null);
 
@@ -564,7 +564,7 @@ export default function AdminPage() {
 
   // ---- 空间面板操作 ----
   const openCreatePanel = () => {
-    setSpaceFormData({ name: '', icon: '', description: '' });
+    setSpaceFormData({ name: '', icon: '', description: '', feature_flags: { git: false } });
     setMembers([]);
     setSpacePanelSlug('new');
     setIsAddingMember(false);
@@ -575,7 +575,7 @@ export default function AdminPage() {
       closePanel();
       return;
     }
-    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '' });
+    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false }) } });
     setSpacePanelSlug(space.slug);
     setIsAddingMember(false);
     await fetchMembers(space.slug);
@@ -603,6 +603,23 @@ export default function AdminPage() {
       closePanel();
       fetchSpaces();
     } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleToggleGitFeature = async (checked: boolean) => {
+    if (!spacePanelSlug || spacePanelSlug === 'new') return;
+    const previous = spaceFormData.feature_flags;
+    // Optimistic update
+    setSpaceFormData(prev => ({ ...prev, feature_flags: { ...prev.feature_flags, git: checked } }));
+    try {
+      const updated = await spacesApi.updateFeatureFlags(spacePanelSlug, { git: checked });
+      setSpaceFormData(prev => ({ ...prev, feature_flags: updated }));
+      // Keep the spaces list in sync so other components see the new flag.
+      setSpaces(prev => prev.map(s => s.slug === spacePanelSlug ? { ...s, feature_flags: updated } : s));
+    } catch (err: any) {
+      // Roll back on failure
+      setSpaceFormData(prev => ({ ...prev, feature_flags: previous }));
       setError(err.message);
     }
   };
@@ -1119,6 +1136,21 @@ export default function AdminPage() {
           <button type="submit" className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="创建"><Check className="w-4 h-4" /></button>
           <button type="button" onClick={closePanel} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="取消"><X className="w-4 h-4" /></button>
         </div>
+        )}
+
+        {/* 功能开关（仅编辑模式） */}
+        {isEditing && (
+          <div className="mb-3 pb-3 border-b border-notion-border">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={spaceFormData.feature_flags?.git ?? false}
+                onChange={(e) => handleToggleGitFeature(e.target.checked)}
+                className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+              />
+              <span className="text-sm text-notion-text">Git 管理</span>
+            </label>
+          </div>
         )}
 
         {/* 成员区域（仅编辑模式） */}

@@ -148,6 +148,11 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("failed to migrate pages: %w", err)
 		}
 	}
+	if _, err := db.Exec(`ALTER TABLE spaces ADD COLUMN feature_flags TEXT NOT NULL DEFAULT '{}'`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("failed to migrate spaces.feature_flags: %w", err)
+		}
+	}
 
 	return nil
 }

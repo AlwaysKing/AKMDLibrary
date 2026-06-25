@@ -32,6 +32,11 @@ type GitSyncWorker struct {
 	cfgCache   map[string]cachedConfig
 	cfgCacheMu sync.Mutex
 
+	// gitFeatureEnabled returns false when the space has feature_flags.git
+	// disabled. Optional; nil means "all enabled". Injected from main.go to
+	// avoid a circular import with SpaceService.
+	gitFeatureEnabled func(slug string) bool
+
 	stopping atomic.Bool // set when Stop is called; commitNow checks it
 	stop     chan struct{}
 	done     chan struct{}
@@ -54,6 +59,13 @@ func NewGitSyncWorker(git *GitService) *GitSyncWorker {
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+}
+
+// SetGitFeatureProbe injects a callback the worker consults before committing.
+// Returning false causes commitNow and MarkDirty to skip the space entirely.
+// Injected from main.go to avoid a circular import with SpaceService.
+func (w *GitSyncWorker) SetGitFeatureProbe(f func(slug string) bool) {
+	w.gitFeatureEnabled = f
 }
 
 func (w *GitSyncWorker) Start() {
@@ -115,6 +127,9 @@ func (w *GitSyncWorker) MarkDirty(slug string) {
 	if w.stopping.Load() {
 		return
 	}
+	if w.gitFeatureEnabled != nil && !w.gitFeatureEnabled(slug) {
+		return
+	}
 
 	w.dirtyMu.Lock()
 	w.dirty[slug] = time.Now()
@@ -146,6 +161,9 @@ func (w *GitSyncWorker) MarkDirty(slug string) {
 // logged but don't affect the already-successful commit.
 func (w *GitSyncWorker) commitNow(slug, reason string) {
 	if w.stopping.Load() {
+		return
+	}
+	if w.gitFeatureEnabled != nil && !w.gitFeatureEnabled(slug) {
 		return
 	}
 

@@ -345,7 +345,7 @@ export default function Sidebar({ onToggle }: SidebarProps) {
             </span>
             <span className="text-sm font-medium text-notion-sidebarText">文件管理</span>
           </button>
-          {gitState?.is_repo && (
+          {currentSpace?.feature_flags?.git && gitState?.is_repo && (
             <button
               onClick={() => {
                 // Toggle: if already on git page, return to space root.

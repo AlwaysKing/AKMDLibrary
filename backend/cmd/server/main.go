@@ -76,6 +76,15 @@ func main() {
 	pageService.SetGitSyncWorker(gitSyncWorker)
 	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageService, docsDir)
 	spaceService.SetGitSyncWorker(gitSyncWorker)
+	// Inject feature-flag probe so the worker skips spaces with git disabled.
+	// Must run after spaceService is constructed to avoid a circular import.
+	gitSyncWorker.SetGitFeatureProbe(func(slug string) bool {
+		space, err := spaceService.GetBySlug(slug)
+		if err != nil {
+			return false
+		}
+		return space.ParseFeatureFlags().Git
+	})
 	prefService := service.NewPreferenceService(prefRepo)
 	siteSettingService := service.NewSiteSettingService(siteSettingRepo)
 	bookmarkService := service.NewBookmarkService(bookmarkRepo)
@@ -107,6 +116,7 @@ func main() {
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
+	featureFlagMiddleware := middleware.NewFeatureFlagMiddleware(spaceService)
 
 	// Router
 	r := chi.NewRouter()
@@ -145,6 +155,7 @@ func main() {
 		r.Put("/api/spaces/{slug}", spaceHandler.Update)
 		r.Delete("/api/spaces/{slug}", spaceHandler.Delete)
 		r.Post("/api/spaces/{slug}/refresh", spaceHandler.Refresh)
+		r.Put("/api/spaces/{slug}/feature-flags", spaceHandler.UpdateFeatureFlags)
 
 		// Space members
 		r.Get("/api/spaces/{slug}/members", spaceHandler.ListMembers)
@@ -170,17 +181,21 @@ func main() {
 		r.Post("/api/spaces/{slug}/trash/restore", pageHandler.RestoreFromTrash)
 		r.Post("/api/spaces/{slug}/trash/delete", pageHandler.PermanentDelete)
 
-		// Git (per-space; UI hides these when space isn't a git repo)
-		r.Get("/api/spaces/{slug}/git/state", gitHandler.State)
-		r.Post("/api/spaces/{slug}/git/commit", gitHandler.Commit)
-		r.Post("/api/spaces/{slug}/git/restore", gitHandler.Restore)
-		r.Post("/api/spaces/{slug}/git/push", gitHandler.Push)
-		r.Post("/api/spaces/{slug}/git/pull", gitHandler.Pull)
-		r.Get("/api/spaces/{slug}/git/config", gitHandler.GetConfig)
-		r.Put("/api/spaces/{slug}/git/config", gitHandler.SetConfig)
-		r.Get("/api/spaces/{slug}/git/credentials", gitHandler.GetCredential)
-		r.Put("/api/spaces/{slug}/git/credentials", gitHandler.SetCredential)
-		r.Delete("/api/spaces/{slug}/git/credentials", gitHandler.DeleteCredential)
+		// Git (per-space; UI hides these when space isn't a git repo).
+		// RequireGitFeature returns 403 when feature_flags.git is off.
+		r.Group(func(r chi.Router) {
+			r.Use(featureFlagMiddleware.RequireGitFeature)
+			r.Get("/api/spaces/{slug}/git/state", gitHandler.State)
+			r.Post("/api/spaces/{slug}/git/commit", gitHandler.Commit)
+			r.Post("/api/spaces/{slug}/git/restore", gitHandler.Restore)
+			r.Post("/api/spaces/{slug}/git/push", gitHandler.Push)
+			r.Post("/api/spaces/{slug}/git/pull", gitHandler.Pull)
+			r.Get("/api/spaces/{slug}/git/config", gitHandler.GetConfig)
+			r.Put("/api/spaces/{slug}/git/config", gitHandler.SetConfig)
+			r.Get("/api/spaces/{slug}/git/credentials", gitHandler.GetCredential)
+			r.Put("/api/spaces/{slug}/git/credentials", gitHandler.SetCredential)
+			r.Delete("/api/spaces/{slug}/git/credentials", gitHandler.DeleteCredential)
+		})
 
 		// Search (per-space, streamed as NDJSON)
 		r.Get("/api/spaces/{slug}/search/stream", searchHandler.Stream)
