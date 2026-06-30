@@ -117,8 +117,14 @@ func (h *FilesHandler) List(w http.ResponseWriter, r *http.Request) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if walkErr != nil {
-			return walkErr
+		// Skip dotfiles / dot-directories (e.g. .DS_Store, .gitkeep, .git/).
+		// Pruning the directory branch with SkipDir avoids descending into
+		// hidden folders entirely.
+		if strings.HasPrefix(info.Name(), ".") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if info.IsDir() {
 			return nil
