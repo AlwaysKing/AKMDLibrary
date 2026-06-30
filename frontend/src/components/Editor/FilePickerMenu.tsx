@@ -133,8 +133,15 @@ export function FilePickerMenu({ slug, onClose, onPick, onUnbind, currentPath, a
   }, [onClose, anchorRef]);
 
   // Close on scroll (any ancestor) and resize so position never goes stale.
+  // NOTE: scroll fires with capture=true, so it also catches scrolling
+  // INSIDE this menu (e.g. the list body has overflow-y:auto). Ignore those
+  // events — only close when something outside the menu scrolls.
   useEffect(() => {
-    const handler = () => onClose();
+    const handler = (e: Event) => {
+      const t = e.target as Node | null;
+      if (t && menuRef.current?.contains(t)) return;
+      onClose();
+    };
     window.addEventListener('scroll', handler, true);
     window.addEventListener('resize', handler);
     return () => {
