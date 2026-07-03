@@ -540,9 +540,6 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 	if err != nil {
 		return nil, err
 	}
-	if page.IsLocked {
-		return nil, errors.New("page is locked")
-	}
 
 	filePath := filepath.Join(s.docsDir, page.FilePath)
 	raw, err := os.ReadFile(filePath)
@@ -614,12 +611,6 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
 	}
 	if req.IsStarred != nil {
 		fm.Starred = req.IsStarred
-	}
-	if page.IsLocked {
-		unlocking := req.IsLocked != nil && !*req.IsLocked
-		if !unlocking {
-			return nil, errors.New("page is locked")
-		}
 	}
 
 	if req.Title != nil && *req.Title != "" && *req.Title != page.Title {
