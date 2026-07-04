@@ -14,9 +14,13 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build backend
-FROM golang:1.25-alpine AS backend-builder
+# 用 debian-based 而非 alpine：mattn/go-sqlite3 要 CGO_ENABLED=1，
+# alpine 的 golang 镜像默认链 musl libc，编译出来的二进制拿到 debian 运行时
+# （glibc）会因找不到 /lib/ld-musl-x86_64.so.1 而报 "no such file or directory"。
+# debian-based 镜像链 glibc，与 Stage 3 的 debian:12-slim runtime 一致。
+FROM golang:1.25 AS backend-builder
 
-RUN apk add --no-cache gcc musl-dev
+# gcc/glibc 已经在 golang:1.25（debian bookworm）里了，不需要额外装
 
 WORKDIR /app
 COPY backend/go.mod backend/go.sum ./
