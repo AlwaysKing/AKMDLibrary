@@ -214,8 +214,8 @@ func (s *Session) handleControlRequest(line []byte) {
 		AttachDir:    s.attachDir,
 		ToolConfig:   s.toolCfg,
 	})
-	// 回应 claude
-	resp := NewControlResponse(cr.RequestID, result.Allowed, result.Reason)
+	// 回应 claude；allow 时把原始 input 原样回传为 updatedInput（Claude Code 2.1.201+ 要求）
+	resp := NewControlResponse(cr.RequestID, result.Allowed, result.Reason, cr.Request.Input)
 	s.writeJSON(resp)
 	// 拒绝时通知前端
 	if !result.Allowed {

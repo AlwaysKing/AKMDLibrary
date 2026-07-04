@@ -51,20 +51,37 @@ type ControlResponse struct {
 	Response map[string]any `json:"response"`
 }
 
-func NewControlResponse(requestID string, allowed bool, reason string) *ControlResponse {
+// NewControlResponse 构造权限请求的应答。
+//
+// Claude Code 2.1.201+ 的权限响应 schema 是 union：
+//
+//	allow 分支：{behavior: "allow", updatedInput: <record>}   ← updatedInput 必填
+//	deny  分支：{behavior: "deny",  message: <string>}        ← message 必填
+//
+// updatedInput 允许权限处理方在放行的同时改写工具入参（脱敏/规范化）。
+// 这里采用透传策略：原样回传原始 input，等价于"放行但不修改"。
+func NewControlResponse(requestID string, allowed bool, reason string, toolInput map[string]any) *ControlResponse {
 	behavior := "allow"
 	if !allowed {
 		behavior = "deny"
 	}
+	inner := map[string]any{
+		"behavior": behavior,
+	}
+	if allowed {
+		// allow 分支必须带 updatedInput；若上层未提供 input，给空对象保底
+		if toolInput == nil {
+			toolInput = map[string]any{}
+		}
+		inner["updatedInput"] = toolInput
+	} else {
+		// deny 分支必须带 message
+		inner["message"] = reason
+	}
 	resp := map[string]any{
 		"subtype":    "success",
 		"request_id": requestID,
-		"response": map[string]any{
-			"behavior": behavior,
-		},
-	}
-	if !allowed {
-		resp["response"].(map[string]any)["message"] = reason
+		"response":   inner,
 	}
 	return &ControlResponse{Type: "control_response", Response: resp}
 }
