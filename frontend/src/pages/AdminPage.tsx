@@ -162,17 +162,21 @@ export default function AdminPage() {
   const logoFileRef = useRef<HTMLInputElement>(null);
 
   // ---- Claude 配置状态 ----
-  const [, setClaudeConfig] = useState<ClaudeAdminConfig | null>(null);
+  const [claudeConfig, setClaudeConfig] = useState<ClaudeAdminConfig | null>(null);
   const [claudeEnvToken, setClaudeEnvToken] = useState('');
   const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
   const [claudeEnvModel, setClaudeEnvModel] = useState('');
   const [claudeSettingsRaw, setClaudeSettingsRaw] = useState('');
   const [claudeSettingsError, setClaudeSettingsError] = useState('');
+  const [claudeShowFullSettings, setClaudeShowFullSettings] = useState(false);
   const [claudeSystemPrompt, setClaudeSystemPrompt] = useState('');
   const [claudeAllowBash, setClaudeAllowBash] = useState(false);
   const [claudeAllowWeb, setClaudeAllowWeb] = useState(false);
-  const [claudeSaving, setClaudeSaving] = useState(false);
-  const [claudeMsg, setClaudeMsg] = useState('');
+  const [claudeTokenSaving, setClaudeTokenSaving] = useState(false);
+  const [claudeTokenMsg, setClaudeTokenMsg] = useState('');
+  const [claudePromptSaving, setClaudePromptSaving] = useState(false);
+  const [claudePromptMsg, setClaudePromptMsg] = useState('');
+  const [claudeToolMsg, setClaudeToolMsg] = useState('');
 
   // ---- 图标选择器点击外部关闭 ----
   useEffect(() => {
@@ -326,7 +330,10 @@ export default function AdminPage() {
       setClaudeSystemPrompt(cfg.system_prompt ?? '');
       setClaudeAllowBash(cfg.tool_config?.allow_bash ?? false);
       setClaudeAllowWeb(cfg.tool_config?.allow_web ?? false);
-    }).catch(() => setClaudeMsg('加载 Claude 配置失败'));
+      setClaudeTokenMsg('');
+      setClaudePromptMsg('');
+      setClaudeToolMsg('');
+    }).catch(() => setClaudeTokenMsg('加载 Claude 配置失败'));
   }, [activeTab]);
 
   const updateFaviconLink = (url: string | null) => {
@@ -1183,7 +1190,7 @@ export default function AdminPage() {
 
         {/* 功能开关（仅编辑模式） */}
         {isEditing && (
-          <div className="mb-3 pb-3 border-b border-notion-border space-y-2">
+          <div className="mb-3 pb-3 border-b border-notion-border flex items-center gap-6">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -1200,7 +1207,7 @@ export default function AdminPage() {
                 onChange={(e) => handleToggleClaudeFeature(e.target.checked)}
                 className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
               />
-              <span className="text-sm text-notion-text">Claude 助手</span>
+              <span className="text-sm text-notion-text">Agent助手</span>
             </label>
           </div>
         )}
@@ -1905,9 +1912,9 @@ export default function AdminPage() {
     }
   };
 
-  const handleSaveClaudeConfig = async () => {
-    setClaudeSaving(true);
-    setClaudeMsg('');
+  const handleSaveTokenConfig = async () => {
+    setClaudeTokenSaving(true);
+    setClaudeTokenMsg('');
     try {
       let parsedSettings: Record<string, any>;
       try {
@@ -1917,87 +1924,176 @@ export default function AdminPage() {
       }
       const cfg: ClaudeAdminConfig = {
         settings_json: parsedSettings,
-        system_prompt: claudeSystemPrompt,
-        tool_config: { allow_bash: claudeAllowBash, allow_web: claudeAllowWeb },
+        system_prompt: claudeConfig?.system_prompt ?? '',
+        tool_config: claudeConfig?.tool_config ?? { allow_bash: false, allow_web: false },
       };
       await claudeApi.updateConfig(cfg);
       setClaudeConfig(cfg);
-      setClaudeMsg('已保存');
+      setClaudeTokenMsg('已保存');
     } catch (e: any) {
-      setClaudeMsg(e.message || '保存失败');
+      setClaudeTokenMsg(e.message || '保存失败');
     } finally {
-      setClaudeSaving(false);
+      setClaudeTokenSaving(false);
+    }
+  };
+
+  const handleResetTokenConfig = () => {
+    if (!claudeConfig) return;
+    setClaudeEnvToken(claudeConfig.settings_json?.env?.ANTHROPIC_AUTH_TOKEN ?? '');
+    setClaudeEnvBaseUrl(claudeConfig.settings_json?.env?.ANTHROPIC_BASE_URL ?? '');
+    setClaudeEnvModel(claudeConfig.settings_json?.env?.ANTHROPIC_MODEL ?? '');
+    setClaudeSettingsRaw(JSON.stringify(claudeConfig.settings_json ?? {}, null, 2));
+    setClaudeSettingsError('');
+    setClaudeTokenMsg('');
+  };
+
+  const handleSaveSystemPrompt = async () => {
+    setClaudePromptSaving(true);
+    setClaudePromptMsg('');
+    try {
+      const cfg: ClaudeAdminConfig = {
+        settings_json: claudeConfig?.settings_json ?? {},
+        system_prompt: claudeSystemPrompt,
+        tool_config: claudeConfig?.tool_config ?? { allow_bash: false, allow_web: false },
+      };
+      await claudeApi.updateConfig(cfg);
+      setClaudeConfig(cfg);
+      setClaudePromptMsg('已保存');
+    } catch (e: any) {
+      setClaudePromptMsg(e.message || '保存失败');
+    } finally {
+      setClaudePromptSaving(false);
+    }
+  };
+
+  const handleResetSystemPrompt = () => {
+    if (!claudeConfig) return;
+    setClaudeSystemPrompt(claudeConfig.system_prompt ?? '');
+    setClaudePromptMsg('');
+  };
+
+  const handleToggleTool = async (key: 'allow_bash' | 'allow_web', value: boolean) => {
+    // 即时提交：先 optimistic UI，失败则回滚
+    const prevBash = claudeAllowBash;
+    const prevWeb = claudeAllowWeb;
+    if (key === 'allow_bash') setClaudeAllowBash(value);
+    else setClaudeAllowWeb(value);
+    setClaudeToolMsg('');
+    try {
+      const cfg: ClaudeAdminConfig = {
+        settings_json: claudeConfig?.settings_json ?? {},
+        system_prompt: claudeConfig?.system_prompt ?? '',
+        tool_config: {
+          allow_bash: key === 'allow_bash' ? value : prevBash,
+          allow_web: key === 'allow_web' ? value : prevWeb,
+        },
+      };
+      await claudeApi.updateConfig(cfg);
+      setClaudeConfig(cfg);
+    } catch (e: any) {
+      // 回滚
+      setClaudeAllowBash(prevBash);
+      setClaudeAllowWeb(prevWeb);
+      setClaudeToolMsg('工具权限保存失败: ' + (e.message || ''));
     }
   };
 
   const renderClaudeConfig = () => {
     return (
       <>
-        <h1 className="text-xl font-semibold text-notion-text mb-6">Claude 助手配置</h1>
+        <h1 className="text-xl font-semibold text-notion-text mb-6">Agent配置</h1>
         <div className="space-y-6">
-          {/* 环境变量快速配置 */}
+          {/* 令牌配置（合并 settings.json 完整编辑） */}
           <section className="bg-white rounded-lg p-5 border border-notion-border">
-            <h2 className="text-sm font-medium text-notion-text mb-3">环境变量（写入 settings.json.env）</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_AUTH_TOKEN</label>
-                <input
-                  type="password"
-                  value={claudeEnvToken}
-                  onChange={(e) => { setClaudeEnvToken(e.target.value); syncEnvToSettings('ANTHROPIC_AUTH_TOKEN', e.target.value); }}
-                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
-                  autoComplete="off"
-                />
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-medium text-notion-text">令牌配置</h2>
+                <button
+                  type="button"
+                  onClick={() => setClaudeShowFullSettings(!claudeShowFullSettings)}
+                  className={`px-2 py-0.5 text-xs border rounded transition-colors ${
+                    claudeShowFullSettings
+                      ? 'bg-blue-500 text-white border-blue-500'
+                      : 'text-notion-textSecondary border-notion-border hover:bg-notion-hover'
+                  }`}
+                >
+                  显示完整 settings.json
+                </button>
               </div>
-              <div>
-                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_BASE_URL</label>
-                <input
-                  type="text"
-                  value={claudeEnvBaseUrl}
-                  onChange={(e) => { setClaudeEnvBaseUrl(e.target.value); syncEnvToSettings('ANTHROPIC_BASE_URL', e.target.value); }}
-                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_MODEL</label>
-                <input
-                  type="text"
-                  value={claudeEnvModel}
-                  onChange={(e) => { setClaudeEnvModel(e.target.value); syncEnvToSettings('ANTHROPIC_MODEL', e.target.value); }}
-                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
-                />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetTokenConfig}
+                  disabled={claudeTokenSaving}
+                  className="px-3 py-1 text-xs text-notion-text border border-notion-border rounded hover:bg-notion-hover disabled:opacity-50"
+                >
+                  还原
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveTokenConfig}
+                  disabled={claudeTokenSaving}
+                  className="px-3 py-1 text-xs bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-50"
+                >
+                  {claudeTokenSaving ? '保存中...' : '保存'}
+                </button>
               </div>
             </div>
-          </section>
 
-          {/* settings.json 完整编辑 */}
-          <section className="bg-white rounded-lg p-5 border border-notion-border">
-            <h2 className="text-sm font-medium text-notion-text mb-3">settings.json 完整内容</h2>
-            <textarea
-              value={claudeSettingsRaw}
-              onChange={(e) => setClaudeSettingsRaw(e.target.value)}
-              rows={12}
-              className="w-full px-3 py-2 border border-notion-border rounded text-xs font-mono"
-              spellCheck={false}
-            />
-            {claudeSettingsError && (
-              <div className="text-xs text-red-600 mt-1">{claudeSettingsError}</div>
+            {claudeShowFullSettings ? (
+              <>
+                <textarea
+                  value={claudeSettingsRaw}
+                  onChange={(e) => setClaudeSettingsRaw(e.target.value)}
+                  rows={12}
+                  className="w-full px-3 py-2 border border-notion-border rounded text-xs font-mono"
+                  spellCheck={false}
+                />
+                {claudeSettingsError && (
+                  <div className="text-xs text-red-600 mt-1">{claudeSettingsError}</div>
+                )}
+              </>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_AUTH_TOKEN</label>
+                  <input
+                    type="password"
+                    value={claudeEnvToken}
+                    onChange={(e) => { setClaudeEnvToken(e.target.value); syncEnvToSettings('ANTHROPIC_AUTH_TOKEN', e.target.value); }}
+                    className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_BASE_URL</label>
+                  <input
+                    type="text"
+                    value={claudeEnvBaseUrl}
+                    onChange={(e) => { setClaudeEnvBaseUrl(e.target.value); syncEnvToSettings('ANTHROPIC_BASE_URL', e.target.value); }}
+                    className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_MODEL</label>
+                  <input
+                    type="text"
+                    value={claudeEnvModel}
+                    onChange={(e) => { setClaudeEnvModel(e.target.value); syncEnvToSettings('ANTHROPIC_MODEL', e.target.value); }}
+                    className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+                  />
+                </div>
+              </div>
+            )}
+
+            {claudeTokenMsg && (
+              <div className={`text-xs mt-2 ${claudeTokenMsg.includes('失败') || claudeTokenMsg.includes('合法') ? 'text-red-600' : 'text-green-600'}`}>
+                {claudeTokenMsg}
+              </div>
             )}
           </section>
 
-          {/* 系统提示词 */}
-          <section className="bg-white rounded-lg p-5 border border-notion-border">
-            <h2 className="text-sm font-medium text-notion-text mb-3">默认系统提示词</h2>
-            <textarea
-              value={claudeSystemPrompt}
-              onChange={(e) => setClaudeSystemPrompt(e.target.value)}
-              rows={6}
-              className="w-full px-3 py-2 border border-notion-border rounded text-sm"
-              placeholder="每次会话启动时通过 --append-system-prompt 传给 Claude"
-            />
-          </section>
-
-          {/* 工具权限开关 */}
+          {/* 工具权限开关（变换即提交） */}
           <section className="bg-white rounded-lg p-5 border border-notion-border">
             <h2 className="text-sm font-medium text-notion-text mb-3">工具权限</h2>
             <div className="space-y-2">
@@ -2005,7 +2101,7 @@ export default function AdminPage() {
                 <input
                   type="checkbox"
                   checked={claudeAllowBash}
-                  onChange={(e) => setClaudeAllowBash(e.target.checked)}
+                  onChange={(e) => handleToggleTool('allow_bash', e.target.checked)}
                   className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
                 />
                 <span className="text-sm text-notion-text">允许 Bash 工具（默认拒绝，启用前请评估风险）</span>
@@ -2014,29 +2110,53 @@ export default function AdminPage() {
                 <input
                   type="checkbox"
                   checked={claudeAllowWeb}
-                  onChange={(e) => setClaudeAllowWeb(e.target.checked)}
+                  onChange={(e) => handleToggleTool('allow_web', e.target.checked)}
                   className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
                 />
                 <span className="text-sm text-notion-text">允许网络工具（WebSearch / WebFetch）</span>
               </label>
             </div>
+            {claudeToolMsg && (
+              <div className="text-xs text-red-600 mt-2">{claudeToolMsg}</div>
+            )}
           </section>
 
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleSaveClaudeConfig}
-              disabled={claudeSaving}
-              className="px-4 py-2 bg-notion-text text-white rounded text-sm hover:bg-notion-text/90 disabled:opacity-50"
-            >
-              {claudeSaving ? '保存中...' : '保存'}
-            </button>
-            {claudeMsg && (
-              <span className={`text-sm ${claudeMsg.includes('失败') || claudeMsg.includes('合法') ? 'text-red-600' : 'text-green-600'}`}>
-                {claudeMsg}
-              </span>
+          {/* 默认系统提示词 */}
+          <section className="bg-white rounded-lg p-5 border border-notion-border">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-medium text-notion-text">默认系统提示词</h2>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetSystemPrompt}
+                  disabled={claudePromptSaving}
+                  className="px-3 py-1 text-xs text-notion-text border border-notion-border rounded hover:bg-notion-hover disabled:opacity-50"
+                >
+                  还原
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveSystemPrompt}
+                  disabled={claudePromptSaving}
+                  className="px-3 py-1 text-xs bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-50"
+                >
+                  {claudePromptSaving ? '保存中...' : '保存'}
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={claudeSystemPrompt}
+              onChange={(e) => setClaudeSystemPrompt(e.target.value)}
+              rows={6}
+              className="w-full px-3 py-2 border border-notion-border rounded text-sm"
+              placeholder="每次会话启动时通过 --append-system-prompt 传给 Claude"
+            />
+            {claudePromptMsg && (
+              <div className={`text-xs mt-2 ${claudePromptMsg.includes('失败') ? 'text-red-600' : 'text-green-600'}`}>
+                {claudePromptMsg}
+              </div>
             )}
-          </div>
+          </section>
         </div>
       </>
     );

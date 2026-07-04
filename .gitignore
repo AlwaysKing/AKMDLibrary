@@ -24,6 +24,8 @@ dist/
 # 运行时文档库（用户数据），但保留 README 截图
 docs/*
 !docs/screenshots/
+!docs/FORMATS.md
+!docs/STRUCTURE.md
 drag-test-1
 drag-test-handle
 frontend/.next/

@@ -1,10 +1,23 @@
-import { ChatMessage } from '../../hooks/useClaudeChat';
+import { useEffect, useRef } from 'react';
+import { ChatMessage, ChatStatus } from '../../hooks/useClaudeChat';
 
-export function MessageList({ messages }: { messages: ChatMessage[] }) {
-  if (messages.length === 0) {
+interface Props {
+  messages: ChatMessage[];
+  status: ChatStatus;
+}
+
+export function MessageList({ messages, status }: Props) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // 新消息或思考状态变化时滚到底部
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages.length, status]);
+
+  if (messages.length === 0 && status !== 'answering') {
     return (
       <div className="flex-1 flex items-center justify-center text-sm text-notion-textSecondary">
-        向 Claude 提问关于这个空间的问题
+        向 Agent 提问关于这个空间的问题
       </div>
     );
   }
@@ -16,6 +29,15 @@ export function MessageList({ messages }: { messages: ChatMessage[] }) {
             <div key={m.id} className="flex justify-end">
               <div className="max-w-[85%] px-3 py-1.5 bg-blue-500 text-white rounded-lg text-sm whitespace-pre-wrap">
                 {m.content}
+                {m.attachments && m.attachments.length > 0 && (
+                  <div className="mt-1 pt-1 border-t border-white/30 flex flex-wrap gap-1">
+                    {m.attachments.map((a, i) => (
+                      <span key={i} className="text-xs px-1 py-0.5 bg-white/20 rounded">
+                        📎 {a.filename}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -39,6 +61,16 @@ export function MessageList({ messages }: { messages: ChatMessage[] }) {
           </div>
         );
       })}
+      {status === 'answering' && (
+        <div className="flex">
+          <div className="px-3 py-2.5 bg-white border border-notion-border rounded-lg inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-notion-textSecondary/60 animate-bounce [animation-delay:-0.3s]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-notion-textSecondary/60 animate-bounce [animation-delay:-0.15s]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-notion-textSecondary/60 animate-bounce" />
+          </div>
+        </div>
+      )}
+      <div ref={bottomRef} />
     </div>
   );
 }

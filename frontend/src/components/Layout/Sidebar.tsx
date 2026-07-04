@@ -104,30 +104,17 @@ export default function Sidebar({ onToggle }: SidebarProps) {
           {/* 设置组 */}
           <p className="px-2 pt-1 pb-0.5 text-[11px] font-medium text-notion-sidebarSecHeader uppercase tracking-wider">设置</p>
           {isAdminRole && (
-            <>
-              <button
-                onClick={() => navigate('/admin?tab=site')}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
-                  adminTab === 'site'
-                    ? 'bg-notion-hover text-notion-text font-medium'
-                    : 'text-notion-text hover:bg-notion-hover'
-                }`}
-              >
-                <Settings className="w-4 h-4" />
-                <span>站点设置</span>
-              </button>
-              <button
-                onClick={() => navigate('/admin?tab=claude')}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
-                  adminTab === 'claude'
-                    ? 'bg-notion-hover text-notion-text font-medium'
-                    : 'text-notion-text hover:bg-notion-hover'
-                }`}
-              >
-                <Bot className="w-4 h-4" />
-                <span>Claude</span>
-              </button>
-            </>
+            <button
+              onClick={() => navigate('/admin?tab=site')}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
+                adminTab === 'site'
+                  ? 'bg-notion-hover text-notion-text font-medium'
+                  : 'text-notion-text hover:bg-notion-hover'
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              <span>站点设置</span>
+            </button>
           )}
           <button
             onClick={() => navigate('/admin?tab=profile')}
@@ -166,6 +153,17 @@ export default function Sidebar({ onToggle }: SidebarProps) {
               >
                 <Database className="w-4 h-4" />
                 <span>空间管理</span>
+              </button>
+              <button
+                onClick={() => navigate('/admin?tab=claude')}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
+                  adminTab === 'claude'
+                    ? 'bg-notion-hover text-notion-text font-medium'
+                    : 'text-notion-text hover:bg-notion-hover'
+                }`}
+              >
+                <Bot className="w-4 h-4" />
+                <span>Agent管理</span>
               </button>
             </>
           )}

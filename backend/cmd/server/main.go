@@ -93,7 +93,7 @@ func main() {
 	if err := claudeConfigStore.EnsureDefaults(); err != nil {
 		log.Printf("Warning: failed to init claude config: %v", err)
 	}
-	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, authService, docsDir)
+	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, pageService, authService, docsDir)
 	bookmarkService := service.NewBookmarkService(bookmarkRepo)
 	searchService := service.NewSearchService(docsDir)
 
@@ -146,6 +146,8 @@ func main() {
 	r.Get("/api/site-settings", siteSettingHandler.Get)
 	// Claude WebSocket（独立鉴权——浏览器 WS 不能用 Authorization header）
 	r.Get("/api/spaces/{slug}/claude/ws", claudeHandler.ChatWS)
+	// Claude 附件上传（multipart，5MB 上限，鉴权同 WS：query param ?token=）
+	r.Post("/api/spaces/{slug}/claude/attachments", claudeHandler.UploadAttachment)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {

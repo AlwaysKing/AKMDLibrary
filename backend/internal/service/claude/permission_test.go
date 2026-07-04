@@ -110,3 +110,29 @@ func TestSpaceDirResolution(t *testing.T) {
 		t.Error("joined subpath should be inside")
 	}
 }
+
+func TestCheck_ReadAllowsAttachDir(t *testing.T) {
+	// AttachDir 内的文件应该允许 Read（claude 读取 session 附件）
+	r := Check(PermissionInput{
+		ToolName:  "Read",
+		ToolInput: map[string]any{"file_path": "/tmp/akmdlibrary/session/abc/att_xxx_image.png"},
+		SpaceDir:  "/app/docs/demo",
+		AttachDir: "/tmp/akmdlibrary/session/abc",
+	})
+	if !r.Allowed {
+		t.Errorf("expected attach dir access allowed, got deny: %s", r.Reason)
+	}
+}
+
+func TestCheck_ReadDeniesOtherTmpPath(t *testing.T) {
+	// AttachDir 外的 /tmp 路径仍应被拒绝
+	r := Check(PermissionInput{
+		ToolName:  "Read",
+		ToolInput: map[string]any{"file_path": "/etc/passwd"},
+		SpaceDir:  "/app/docs/demo",
+		AttachDir: "/tmp/akmdlibrary/session/abc",
+	})
+	if r.Allowed {
+		t.Error("path outside space & attach dir should be denied")
+	}
+}

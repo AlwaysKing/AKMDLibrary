@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -30,6 +33,23 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 		r.body.Write(b)
 	}
 	return r.ResponseWriter.Write(b)
+}
+
+// Hijack 转发到底层 ResponseWriter，使 WebSocket 升级能正常工作。
+// 没有这个方法，coder/websocket 的 Accept 会因类型断言失败拿到 501。
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("ResponseWriter does not implement Hijacker")
+	}
+	return hj.Hijack()
+}
+
+// Flush 同样转发，确保流式响应（如 SSE）能立即发送。
+func (r *statusRecorder) Flush() {
+	if fl, ok := r.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
 }
 
 // ErrorLogging logs any 5xx response to stdout along with the response

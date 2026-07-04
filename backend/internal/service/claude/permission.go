@@ -11,6 +11,7 @@ type PermissionInput struct {
 	ToolInput    map[string]any // 工具参数原始 map
 	UserCanWrite bool           // 用户对该 space 是否有写权限
 	SpaceDir     string         // space 绝对路径（resolve 后）
+	AttachDir    string         // 当前 session 附件目录（/tmp/.../session/<id>）—— Read 工具额外允许
 	ToolConfig   ToolConfig     // 全局工具开关
 }
 
@@ -41,7 +42,11 @@ func Check(in PermissionInput) PermissionResult {
 		if rawPath == "" {
 			return PermissionResult{Allowed: true} // 没有路径字段（罕见），不阻断
 		}
-		if !isPathInsideSpace(rawPath, in.SpaceDir) {
+		// Read 工具额外允许访问当前 session 的附件目录（图片/文件附件存放在这里）
+		if in.AttachDir != "" && isPathInside(rawPath, in.AttachDir) {
+			return PermissionResult{Allowed: true, Path: rawPath}
+		}
+		if !isPathInside(rawPath, in.SpaceDir) {
 			return PermissionResult{Allowed: false, Reason: "路径不在当前空间范围内: " + rawPath, Path: rawPath}
 		}
 		return PermissionResult{Allowed: true, Path: rawPath}
@@ -87,17 +92,23 @@ func extractReadPath(toolName string, input map[string]any) string {
 // isPathInsideSpace 判断 rawPath（可能是相对/绝对路径）解析后是否落在 spaceDir 内。
 // 不跟随 symlink（symlink 可能逃逸到 space 外）。
 func isPathInsideSpace(rawPath, spaceDir string) bool {
-	if rawPath == "" {
+	return isPathInside(rawPath, spaceDir)
+}
+
+// isPathInside 是 isPathInsideSpace 的通用版本，把 rawPath 解析到 base 后判断是否落在 base 内。
+// 如果 rawPath 是相对路径，按 base 解析（与 cwd 无关，base 一般是 SpaceDir 或 AttachDir）。
+func isPathInside(rawPath, base string) bool {
+	if rawPath == "" || base == "" {
 		return false
 	}
 	abs := rawPath
 	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(spaceDir, abs)
+		abs = filepath.Join(base, abs)
 	}
 	abs = filepath.Clean(abs)
-	spaceDirClean := filepath.Clean(spaceDir)
-	if abs == spaceDirClean {
+	baseClean := filepath.Clean(base)
+	if abs == baseClean {
 		return true
 	}
-	return strings.HasPrefix(abs, spaceDirClean+string(filepath.Separator))
+	return strings.HasPrefix(abs, baseClean+string(filepath.Separator))
 }

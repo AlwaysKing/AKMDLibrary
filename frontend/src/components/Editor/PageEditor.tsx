@@ -4017,6 +4017,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const hasFiles = !!e.dataTransfer?.types?.includes('Files');
       if (!hasFiles) return;
 
+      // 落点在 Claude 聊天面板上：放行，让聊天面板处理
+      const overEl = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (overEl?.closest('[data-claude-chat="true"]')) return;
+
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) {
@@ -4030,10 +4034,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const files = Array.from(e.dataTransfer?.files || []);
       if (files.length === 0) return;
 
+      // 落点在 Claude 聊天面板上：放行，让聊天面板处理
+      const dropTarget = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (dropTarget?.closest('[data-claude-chat="true"]')) return;
+
       e.preventDefault();
       e.stopPropagation();
 
-      const dropTarget = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
       const targetBlockEl = dropTarget?.closest('[data-id]') as HTMLElement | null;
       const targetBlockId = targetBlockEl?.getAttribute('data-id') || null;
 
@@ -4676,6 +4683,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     // Keyboard: Escape toggles selection, Delete/Backspace removes selected blocks
     // Uses module-level getSelectedBlockIds() to avoid stale closure issues
     const handleKeyDown = (e: KeyboardEvent) => {
+      // 焦点在 Claude 聊天面板内（textarea 等）：放行，让输入框原生处理
+      const targetEl = e.target as HTMLElement | null;
+      if (targetEl?.closest('[data-claude-chat="true"]')) return;
+
       // Cmd+A / Ctrl+A: two-step select all (block text → all blocks)
       if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.altKey) {
         e.preventDefault();

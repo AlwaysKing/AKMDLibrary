@@ -3,14 +3,21 @@ package claude
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
+
+	"github.com/alwaysking/akmdlibrary/internal/repository"
 )
 
 // SessionCallbacks 是 session 向 handler 回调的接口。
@@ -29,31 +36,40 @@ type Session struct {
 	stdoutMu     sync.Mutex // 保护 stdin 写入
 	wg           sync.WaitGroup
 	cancel       context.CancelFunc
+	sessionID    string
 	spaceDir     string
+	attachDir    string
 	userWrite    bool
 	toolCfg      ToolConfig
 	sysPrompt    string
 	envOverrides map[string]string
+	pageRepo     *repository.PageRepository
 	callbacks    SessionCallbacks
 }
 
 type SessionParams struct {
-	SpaceDir     string            // 子进程 cwd
-	EnvOverrides map[string]string // settings.json.env 的覆盖
+	SessionID    string                         // 由 manager 生成
+	SpaceDir     string                         // 子进程 cwd
+	AttachDir    string                         // /tmp/.../session/<id>，由 manager 创建好
+	EnvOverrides map[string]string              // settings.json.env 的覆盖
 	SystemPrompt string
 	UserCanWrite bool
 	ToolConfig   ToolConfig
+	PageRepo     *repository.PageRepository
 	Callbacks    SessionCallbacks
 }
 
 // NewSession 创建（不启动）一个 session。
 func NewSession(p SessionParams) *Session {
 	return &Session{
+		sessionID:    p.SessionID,
 		spaceDir:     p.SpaceDir,
+		attachDir:    p.AttachDir,
 		userWrite:    p.UserCanWrite,
 		toolCfg:      p.ToolConfig,
 		sysPrompt:    p.SystemPrompt,
 		envOverrides: p.EnvOverrides,
+		pageRepo:     p.PageRepo,
 		callbacks:    p.Callbacks,
 	}
 }
@@ -66,9 +82,14 @@ func (s *Session) Start(ctx context.Context) error {
 
 	args := []string{
 		"--print",
+		"--verbose",
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--permission-prompt-tool", "stdio",
+	}
+	// 把 sessionID 同时作为 claude 的 session_id（日志关联方便；不影响持久化策略）
+	if s.sessionID != "" {
+		args = append(args, "--session-id", s.sessionID)
 	}
 	if s.sysPrompt != "" {
 		args = append(args, "--append-system-prompt", s.sysPrompt)
@@ -182,6 +203,7 @@ func (s *Session) handleControlRequest(line []byte) {
 		ToolInput:    cr.Request.Input,
 		UserCanWrite: s.userWrite,
 		SpaceDir:     s.spaceDir,
+		AttachDir:    s.attachDir,
 		ToolConfig:   s.toolCfg,
 	})
 	// 回应 claude
@@ -207,13 +229,140 @@ func (s *Session) writeJSON(v any) {
 	}
 }
 
-// SendUserMessage 接收用户文本，转成 stdin 格式发出。
-func (s *Session) SendUserMessage(text string) {
+// SendUserMessage 接收用户文本 + 可选 context + 可选附件列表，拼装成 content blocks 发给 claude。
+//
+// 拼装顺序：
+//   1. 当前文档（如果 context.ActivePageID 不为空）：text block
+//   2. 选中文本（如果 context.Selection 不为空）：text block
+//   3. 每个附件：图片走 image block（直接看），其他文件走 text block（告诉路径）
+//   4. 用户提示词原文（含 @filename 标记，原样透传）
+func (s *Session) SendUserMessage(text string, ctx *ClientContext, attachments []string) {
 	s.callbacks.OnStatus("answering")
-	s.writeJSON(NewUserMessage(text))
+
+	blocks := s.buildContextBlocks(text, ctx, attachments)
+	s.writeJSON(NewUserMessageFromBlocks(blocks))
 }
 
-// Stop 终止子进程。
+// buildContextBlocks 把 UI 状态翻译成 claude 的 content blocks。
+func (s *Session) buildContextBlocks(text string, ctx *ClientContext, attachments []string) []ContentBlock {
+	var blocks []ContentBlock
+
+	// 当前文档：page id → file_path → 绝对路径
+	if ctx != nil && ctx.ActivePageID != "" && s.pageRepo != nil {
+		if page, err := s.pageRepo.GetByID(ctx.ActivePageID); err == nil && page != nil {
+			absPath := filepath.Join(s.spaceDir, page.FilePath)
+			blocks = append(blocks, ContentBlock{
+				Type: "text",
+				Text: fmt.Sprintf("当前文件: %s", absPath),
+			})
+		}
+	}
+
+	// 选中文本
+	if ctx != nil && strings.TrimSpace(ctx.Selection) != "" {
+		blocks = append(blocks, ContentBlock{
+			Type: "text",
+			Text: fmt.Sprintf("当前选中的内容:\n\n%s", ctx.Selection),
+		})
+	}
+
+	// 附件：每个附件都建立 @filename 到内容的明确映射
+	for _, attID := range attachments {
+		attPath, attFilename, ok := s.resolveAttachment(attID)
+		if !ok {
+			blocks = append(blocks, ContentBlock{
+				Type: "text",
+				Text: fmt.Sprintf("(用户引用了附件 %s，但文件不存在)", attID),
+			})
+			continue
+		}
+
+		if mediaType, ok := imageMediaType(attFilename); ok {
+			// 图片：image block + 紧跟的 text block 标注 @filename 映射
+			if imgBlock, err := buildImageBlock(attPath, mediaType); err == nil {
+				blocks = append(blocks, imgBlock)
+				blocks = append(blocks, ContentBlock{
+					Type: "text",
+					Text: fmt.Sprintf("（上方图片对应用户引用的 @%s）", attFilename),
+				})
+				continue
+			}
+		}
+
+		// 其他文件：text block 告诉路径 + @filename 映射
+		blocks = append(blocks, ContentBlock{
+			Type: "text",
+			Text: fmt.Sprintf("用户上传了文件 @%s，路径: %s", attFilename, attPath),
+		})
+	}
+
+	// 用户提示词（原样透传，@filename 让 claude 根据前面的块自己推理）
+	blocks = append(blocks, ContentBlock{Type: "text", Text: text})
+
+	if len(blocks) == 0 {
+		blocks = []ContentBlock{{Type: "text", Text: text}}
+	}
+	return blocks
+}
+
+// resolveAttachment 在 attachDir 里查找附件路径。
+// 命名约定：<attachmentID>_<originalFilename>
+func (s *Session) resolveAttachment(attachmentID string) (path, filename string, ok bool) {
+	if s.attachDir == "" || attachmentID == "" {
+		return "", "", false
+	}
+	entries, err := os.ReadDir(s.attachDir)
+	if err != nil {
+		return "", "", false
+	}
+	prefix := attachmentID + "_"
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(e.Name(), prefix) {
+			full := filepath.Join(s.attachDir, e.Name())
+			original := strings.TrimPrefix(e.Name(), prefix)
+			return full, original, true
+		}
+	}
+	return "", "", false
+}
+
+// imageMediaType 用扩展名判断是否是 claude 支持的图片格式。
+func imageMediaType(filename string) (string, bool) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".png":
+		return "image/png", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	case ".gif":
+		return "image/gif", true
+	case ".webp":
+		return "image/webp", true
+	default:
+		return "", false
+	}
+}
+
+// buildImageBlock 读图片文件 base64 编码成 image block。
+func buildImageBlock(path, mediaType string) (ContentBlock, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ContentBlock{}, err
+	}
+	return ContentBlock{
+		Type: "image",
+		Source: &ImageSource{
+			Type:      "base64",
+			MediaType: mediaType,
+			Data:      base64.StdEncoding.EncodeToString(data),
+		},
+	}, nil
+}
+
+// Stop 终止子进程并清理附件目录。
 func (s *Session) Stop() {
 	if s.cancel != nil {
 		s.cancel()
@@ -223,6 +372,11 @@ func (s *Session) Stop() {
 	}
 	if s.stdin != nil {
 		_ = s.stdin.Close()
+	}
+	if s.attachDir != "" {
+		if err := os.RemoveAll(s.attachDir); err != nil {
+			log.Printf("[claude session] cleanup attachDir %s failed: %v", s.attachDir, err)
+		}
 	}
 }
 
@@ -244,7 +398,16 @@ func (s *Session) HandleWebSocket(ctx context.Context, c *websocket.Conn) {
 			continue
 		}
 		if msg.Type == "user_message" {
-			s.SendUserMessage(msg.Content)
+			s.SendUserMessage(msg.Content, msg.Context, msg.Attachments)
 		}
 	}
 }
+
+// SessionID 暴露给 manager 用于 HTTP 上传接口。
+func (s *Session) SessionID() string { return s.sessionID }
+
+// AttachDir 暴露给 manager 用于上传接口写入文件。
+func (s *Session) AttachDir() string { return s.attachDir }
+
+// 生成新的 sessionID（暴露给 manager）
+func NewSessionID() string { return uuid.NewString() }

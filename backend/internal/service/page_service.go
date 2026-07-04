@@ -121,6 +121,11 @@ func (s *PageService) getRepo(spaceSlug string) (*repository.PageRepository, err
 	return repo, nil
 }
 
+// GetRepo 公开 getRepo，给 claude manager 用来按 spaceSlug 取 pageRepo（每个 space 一个 db）。
+func (s *PageService) GetRepo(spaceSlug string) (*repository.PageRepository, error) {
+	return s.getRepo(spaceSlug)
+}
+
 // CloseAll closes all open space database connections.
 func (s *PageService) CloseAll() {
 	s.mu.Lock()
