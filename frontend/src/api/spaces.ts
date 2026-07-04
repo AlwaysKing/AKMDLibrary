@@ -2,6 +2,7 @@ import apiClient from './client';
 
 export interface FeatureFlags {
   git: boolean;
+  claude: boolean;
 }
 
 export interface Space {

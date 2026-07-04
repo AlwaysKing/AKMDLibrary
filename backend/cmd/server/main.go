@@ -16,6 +16,7 @@ import (
 	"github.com/alwaysking/akmdlibrary/internal/middleware"
 	"github.com/alwaysking/akmdlibrary/internal/repository"
 	"github.com/alwaysking/akmdlibrary/internal/service"
+	"github.com/alwaysking/akmdlibrary/internal/service/claude"
 )
 
 func main() {
@@ -87,6 +88,12 @@ func main() {
 	})
 	prefService := service.NewPreferenceService(prefRepo)
 	siteSettingService := service.NewSiteSettingService(siteSettingRepo)
+	// Claude config store
+	claudeConfigStore := claude.NewConfigStore(dataDir, siteSettingRepo)
+	if err := claudeConfigStore.EnsureDefaults(); err != nil {
+		log.Printf("Warning: failed to init claude config: %v", err)
+	}
+	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, authService, docsDir)
 	bookmarkService := service.NewBookmarkService(bookmarkRepo)
 	searchService := service.NewSearchService(docsDir)
 
@@ -109,6 +116,7 @@ func main() {
 	prefHandler := handler.NewPreferenceHandler(prefService)
 	siteSettingHandler := handler.NewSiteSettingHandler(siteSettingService, siteDir)
 	bookmarkHandler := handler.NewBookmarkHandler(bookmarkService)
+	claudeHandler := handler.NewClaudeHandler(claudeConfigStore, claudeManager)
 	unsplashHandler := handler.NewUnsplashHandler(prefService)
 	gitHandler := handler.NewGitHandler(gitService, spaceService)
 	searchHandler := handler.NewSearchHandler(searchService, spaceService)
@@ -136,6 +144,8 @@ func main() {
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/logout", authHandler.Logout)
 	r.Get("/api/site-settings", siteSettingHandler.Get)
+	// Claude WebSocket（独立鉴权——浏览器 WS 不能用 Authorization header）
+	r.Get("/api/spaces/{slug}/claude/ws", claudeHandler.ChatWS)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -232,6 +242,10 @@ func main() {
 			r.Put("/api/users/{id}", userHandler.Update)
 			r.Delete("/api/users/{id}", userHandler.Delete)
 			r.Put("/api/users/{id}/password", userHandler.ResetPassword)
+
+			// Claude admin config
+			r.Get("/api/admin/claude/config", claudeHandler.GetConfig)
+			r.Put("/api/admin/claude/config", claudeHandler.UpdateConfig)
 		})
 
 		// Upload

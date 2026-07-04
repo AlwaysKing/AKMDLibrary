@@ -19,7 +19,8 @@ type Space struct {
 // FeatureFlags is the parsed shape of Space.FeatureFlags. Add new toggles
 // here as fields; absent fields decode to their zero value (off).
 type FeatureFlags struct {
-	Git bool `json:"git"`
+	Git    bool `json:"git"`
+	Claude bool `json:"claude"`
 }
 
 // ParseFeatureFlags decodes the JSON column into a FeatureFlags struct.

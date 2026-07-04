@@ -7,6 +7,7 @@ import { authApi } from '../api/auth';
 import { fetchIconLibrary, uploadToIconLibrary, deleteIcon, renameIcon, IconLibraryItem } from '../api/icons';
 import { fetchCoverLibrary, uploadToCoverLibrary, deleteCover, renameCover, CoverLibraryItem } from '../api/covers';
 import { siteSettingsApi, SiteSettings } from '../api/siteSettings';
+import { claudeApi, ClaudeAdminConfig } from '../api/claude';
 import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen } from 'lucide-react';
 import PageIcon from '../components/Editor/PageIcon';
 import { usePreferenceStore } from '../stores/preferenceStore';
@@ -118,7 +119,7 @@ export default function AdminPage() {
   const [spacesLoading, setSpacesLoading] = useState(false);
   // 统一面板: null=关闭, 'new'=创建, slug=编辑
   const [spacePanelSlug, setSpacePanelSlug] = useState<string | null>(null);
-  const [spaceFormData, setSpaceFormData] = useState<{ name: string; icon: string; description: string; feature_flags: FeatureFlags }>({ name: '', icon: '', description: '', feature_flags: { git: false } });
+  const [spaceFormData, setSpaceFormData] = useState<{ name: string; icon: string; description: string; feature_flags: FeatureFlags }>({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
   const [showIconPicker, setShowIconPicker] = useState(false);
   const iconPickerRef = useRef<HTMLDivElement>(null);
 
@@ -159,6 +160,19 @@ export default function AdminPage() {
   const [confirmReset, setConfirmReset] = useState<'favicon' | 'logo' | 'site_name' | null>(null);
   const faviconFileRef = useRef<HTMLInputElement>(null);
   const logoFileRef = useRef<HTMLInputElement>(null);
+
+  // ---- Claude 配置状态 ----
+  const [, setClaudeConfig] = useState<ClaudeAdminConfig | null>(null);
+  const [claudeEnvToken, setClaudeEnvToken] = useState('');
+  const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
+  const [claudeEnvModel, setClaudeEnvModel] = useState('');
+  const [claudeSettingsRaw, setClaudeSettingsRaw] = useState('');
+  const [claudeSettingsError, setClaudeSettingsError] = useState('');
+  const [claudeSystemPrompt, setClaudeSystemPrompt] = useState('');
+  const [claudeAllowBash, setClaudeAllowBash] = useState(false);
+  const [claudeAllowWeb, setClaudeAllowWeb] = useState(false);
+  const [claudeSaving, setClaudeSaving] = useState(false);
+  const [claudeMsg, setClaudeMsg] = useState('');
 
   // ---- 图标选择器点击外部关闭 ----
   useEffect(() => {
@@ -298,6 +312,21 @@ export default function AdminPage() {
       });
       setSiteSettingsMsg('');
     }
+  }, [activeTab]);
+
+  // 加载 Claude 配置
+  useEffect(() => {
+    if (activeTab !== 'claude') return;
+    claudeApi.getConfig().then(cfg => {
+      setClaudeConfig(cfg);
+      setClaudeEnvToken(cfg.settings_json?.env?.ANTHROPIC_AUTH_TOKEN ?? '');
+      setClaudeEnvBaseUrl(cfg.settings_json?.env?.ANTHROPIC_BASE_URL ?? '');
+      setClaudeEnvModel(cfg.settings_json?.env?.ANTHROPIC_MODEL ?? '');
+      setClaudeSettingsRaw(JSON.stringify(cfg.settings_json ?? {}, null, 2));
+      setClaudeSystemPrompt(cfg.system_prompt ?? '');
+      setClaudeAllowBash(cfg.tool_config?.allow_bash ?? false);
+      setClaudeAllowWeb(cfg.tool_config?.allow_web ?? false);
+    }).catch(() => setClaudeMsg('加载 Claude 配置失败'));
   }, [activeTab]);
 
   const updateFaviconLink = (url: string | null) => {
@@ -564,7 +593,7 @@ export default function AdminPage() {
 
   // ---- 空间面板操作 ----
   const openCreatePanel = () => {
-    setSpaceFormData({ name: '', icon: '', description: '', feature_flags: { git: false } });
+    setSpaceFormData({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
     setMembers([]);
     setSpacePanelSlug('new');
     setIsAddingMember(false);
@@ -575,7 +604,7 @@ export default function AdminPage() {
       closePanel();
       return;
     }
-    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false }) } });
+    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false, claude: false }) } });
     setSpacePanelSlug(space.slug);
     setIsAddingMember(false);
     await fetchMembers(space.slug);
@@ -613,12 +642,26 @@ export default function AdminPage() {
     // Optimistic update
     setSpaceFormData(prev => ({ ...prev, feature_flags: { ...prev.feature_flags, git: checked } }));
     try {
-      const updated = await spacesApi.updateFeatureFlags(spacePanelSlug, { git: checked });
+      const updated = await spacesApi.updateFeatureFlags(spacePanelSlug, { ...spaceFormData.feature_flags, git: checked });
       setSpaceFormData(prev => ({ ...prev, feature_flags: updated }));
       // Keep the spaces list in sync so other components see the new flag.
       setSpaces(prev => prev.map(s => s.slug === spacePanelSlug ? { ...s, feature_flags: updated } : s));
     } catch (err: any) {
       // Roll back on failure
+      setSpaceFormData(prev => ({ ...prev, feature_flags: previous }));
+      setError(err.message);
+    }
+  };
+
+  const handleToggleClaudeFeature = async (checked: boolean) => {
+    if (!spacePanelSlug || spacePanelSlug === 'new') return;
+    const previous = spaceFormData.feature_flags;
+    setSpaceFormData(prev => ({ ...prev, feature_flags: { ...prev.feature_flags, claude: checked } }));
+    try {
+      const updated = await spacesApi.updateFeatureFlags(spacePanelSlug, { ...spaceFormData.feature_flags, claude: checked });
+      setSpaceFormData(prev => ({ ...prev, feature_flags: updated }));
+      setSpaces(prev => prev.map(s => s.slug === spacePanelSlug ? { ...s, feature_flags: updated } : s));
+    } catch (err: any) {
       setSpaceFormData(prev => ({ ...prev, feature_flags: previous }));
       setError(err.message);
     }
@@ -1140,7 +1183,7 @@ export default function AdminPage() {
 
         {/* 功能开关（仅编辑模式） */}
         {isEditing && (
-          <div className="mb-3 pb-3 border-b border-notion-border">
+          <div className="mb-3 pb-3 border-b border-notion-border space-y-2">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -1149,6 +1192,15 @@ export default function AdminPage() {
                 className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
               />
               <span className="text-sm text-notion-text">Git 管理</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={spaceFormData.feature_flags?.claude ?? false}
+                onChange={(e) => handleToggleClaudeFeature(e.target.checked)}
+                className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+              />
+              <span className="text-sm text-notion-text">Claude 助手</span>
             </label>
           </div>
         )}
@@ -1840,6 +1892,156 @@ export default function AdminPage() {
     );
   };
 
+  const syncEnvToSettings = (key: string, value: string) => {
+    // 把 env 三个高亮字段同步回 raw JSON
+    try {
+      const parsed = JSON.parse(claudeSettingsRaw || '{}');
+      if (!parsed.env) parsed.env = {};
+      parsed.env[key] = value;
+      setClaudeSettingsRaw(JSON.stringify(parsed, null, 2));
+      setClaudeSettingsError('');
+    } catch {
+      setClaudeSettingsError('settings.json 不是合法 JSON，无法自动合并 env');
+    }
+  };
+
+  const handleSaveClaudeConfig = async () => {
+    setClaudeSaving(true);
+    setClaudeMsg('');
+    try {
+      let parsedSettings: Record<string, any>;
+      try {
+        parsedSettings = JSON.parse(claudeSettingsRaw || '{}');
+      } catch {
+        throw new Error('settings.json 不是合法 JSON');
+      }
+      const cfg: ClaudeAdminConfig = {
+        settings_json: parsedSettings,
+        system_prompt: claudeSystemPrompt,
+        tool_config: { allow_bash: claudeAllowBash, allow_web: claudeAllowWeb },
+      };
+      await claudeApi.updateConfig(cfg);
+      setClaudeConfig(cfg);
+      setClaudeMsg('已保存');
+    } catch (e: any) {
+      setClaudeMsg(e.message || '保存失败');
+    } finally {
+      setClaudeSaving(false);
+    }
+  };
+
+  const renderClaudeConfig = () => {
+    return (
+      <>
+        <h1 className="text-xl font-semibold text-notion-text mb-6">Claude 助手配置</h1>
+        <div className="space-y-6">
+          {/* 环境变量快速配置 */}
+          <section className="bg-white rounded-lg p-5 border border-notion-border">
+            <h2 className="text-sm font-medium text-notion-text mb-3">环境变量（写入 settings.json.env）</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_AUTH_TOKEN</label>
+                <input
+                  type="password"
+                  value={claudeEnvToken}
+                  onChange={(e) => { setClaudeEnvToken(e.target.value); syncEnvToSettings('ANTHROPIC_AUTH_TOKEN', e.target.value); }}
+                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+                  autoComplete="off"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_BASE_URL</label>
+                <input
+                  type="text"
+                  value={claudeEnvBaseUrl}
+                  onChange={(e) => { setClaudeEnvBaseUrl(e.target.value); syncEnvToSettings('ANTHROPIC_BASE_URL', e.target.value); }}
+                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_MODEL</label>
+                <input
+                  type="text"
+                  value={claudeEnvModel}
+                  onChange={(e) => { setClaudeEnvModel(e.target.value); syncEnvToSettings('ANTHROPIC_MODEL', e.target.value); }}
+                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+                />
+              </div>
+            </div>
+          </section>
+
+          {/* settings.json 完整编辑 */}
+          <section className="bg-white rounded-lg p-5 border border-notion-border">
+            <h2 className="text-sm font-medium text-notion-text mb-3">settings.json 完整内容</h2>
+            <textarea
+              value={claudeSettingsRaw}
+              onChange={(e) => setClaudeSettingsRaw(e.target.value)}
+              rows={12}
+              className="w-full px-3 py-2 border border-notion-border rounded text-xs font-mono"
+              spellCheck={false}
+            />
+            {claudeSettingsError && (
+              <div className="text-xs text-red-600 mt-1">{claudeSettingsError}</div>
+            )}
+          </section>
+
+          {/* 系统提示词 */}
+          <section className="bg-white rounded-lg p-5 border border-notion-border">
+            <h2 className="text-sm font-medium text-notion-text mb-3">默认系统提示词</h2>
+            <textarea
+              value={claudeSystemPrompt}
+              onChange={(e) => setClaudeSystemPrompt(e.target.value)}
+              rows={6}
+              className="w-full px-3 py-2 border border-notion-border rounded text-sm"
+              placeholder="每次会话启动时通过 --append-system-prompt 传给 Claude"
+            />
+          </section>
+
+          {/* 工具权限开关 */}
+          <section className="bg-white rounded-lg p-5 border border-notion-border">
+            <h2 className="text-sm font-medium text-notion-text mb-3">工具权限</h2>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={claudeAllowBash}
+                  onChange={(e) => setClaudeAllowBash(e.target.checked)}
+                  className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+                />
+                <span className="text-sm text-notion-text">允许 Bash 工具（默认拒绝，启用前请评估风险）</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={claudeAllowWeb}
+                  onChange={(e) => setClaudeAllowWeb(e.target.checked)}
+                  className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+                />
+                <span className="text-sm text-notion-text">允许网络工具（WebSearch / WebFetch）</span>
+              </label>
+            </div>
+          </section>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleSaveClaudeConfig}
+              disabled={claudeSaving}
+              className="px-4 py-2 bg-notion-text text-white rounded text-sm hover:bg-notion-text/90 disabled:opacity-50"
+            >
+              {claudeSaving ? '保存中...' : '保存'}
+            </button>
+            {claudeMsg && (
+              <span className={`text-sm ${claudeMsg.includes('失败') || claudeMsg.includes('合法') ? 'text-red-600' : 'text-green-600'}`}>
+                {claudeMsg}
+              </span>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  };
+
   const renderProfile = () => {
     // 属性行样式
     const row = (label: string, content: React.ReactNode) => (
@@ -2073,7 +2275,12 @@ export default function AdminPage() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto py-8 px-6">
         {(activeTab === 'users' || activeTab === 'spaces') && !isAdminUser ? renderProfile() :
-          activeTab === 'users' ? renderUsers() : activeTab === 'spaces' ? renderSpaces() : activeTab === 'resources' ? renderResources() : activeTab === 'site' ? renderSiteSettings() : renderProfile()}
+          activeTab === 'users' ? renderUsers() :
+          activeTab === 'spaces' ? renderSpaces() :
+          activeTab === 'resources' ? renderResources() :
+          activeTab === 'site' ? renderSiteSettings() :
+          activeTab === 'claude' ? (isAdminUser ? renderClaudeConfig() : renderProfile()) :
+          renderProfile()}
       </div>
     </div>
   );

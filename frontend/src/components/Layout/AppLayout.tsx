@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import { ClaudeChat } from '../ClaudeChat';
 import { useUndoStore } from '../../stores/undoStore';
 import { usePreferenceStore } from '../../stores/preferenceStore';
 
@@ -120,6 +121,7 @@ export default function AppLayout() {
       <main className="flex-1 flex flex-col overflow-hidden">
         <Outlet context={{ sidebarCollapsed, toggleSidebar: toggle }} />
       </main>
+      <ClaudeChat />
     </div>
   );
 }

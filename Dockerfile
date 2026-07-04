@@ -34,6 +34,8 @@ FROM alpine:3.20
 # openssh-client: ssh binary for git over SSH remotes
 RUN apk add --no-cache ca-certificates tzdata git openssh-client
 
+# TODO: install Claude Code CLI (e.g., npm install -g @anthropic/claude-code) once Node.js runtime is added
+
 # Per-space repos are bind-mounted from the host and typically owned by a
 # different UID than the container process. Since git 2.35+, this triggers
 # "fatal: detected dubious ownership" which breaks every git command. Marking
@@ -46,6 +48,10 @@ WORKDIR /app
 COPY --from=backend-builder /app/akmdlibrary /app/akmdlibrary
 COPY --from=frontend-builder /app/frontend/dist /app/html
 
+# Entrypoint for runtime user/group switching (USER_NAME/USER_ID/GROUP_NAME/GROUP_ID env vars)
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Create data and docs directories
 RUN mkdir -p /app/docs /app/data
 
@@ -56,4 +62,5 @@ EXPOSE 8080
 
 VOLUME ["/app/docs", "/app/data"]
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/app/akmdlibrary"]
