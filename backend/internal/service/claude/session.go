@@ -128,6 +128,8 @@ func (s *Session) Start(ctx context.Context) error {
 	go func() {
 		err := cmd.Wait()
 		if err != nil && ctx.Err() == nil {
+			// 把退出原因一并记到日志（前端只收到精简版）
+			log.Printf("[claude session] process exit: %v", err)
 			s.callbacks.OnError(fmt.Sprintf("claude 进程退出: %v", err))
 		}
 		s.wg.Wait()
@@ -166,6 +168,8 @@ func (s *Session) handleLine(line []byte) {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(line, &probe); err != nil {
+		// 非 JSON 输出（claude 在 stream-json 模式下不应有，出现说明异常）
+		log.Printf("[claude session] non-JSON stdout line: %s", string(line))
 		return
 	}
 	switch probe.Type {
@@ -176,8 +180,12 @@ func (s *Session) handleLine(line []byte) {
 	case "result":
 		// 一轮回答结束
 		s.callbacks.OnStatus("idle")
+	case "system", "user", "stream_event":
+		// 已知但当前不处理的类型，落到 debug 日志方便排查
+		log.Printf("[claude session] %s: %s", probe.Type, string(line))
 	default:
-		// system/init/user/stream_event 等忽略
+		// 未知类型（可能是 error 等），完整记录
+		log.Printf("[claude session] unknown type=%s: %s", probe.Type, string(line))
 	}
 }
 
