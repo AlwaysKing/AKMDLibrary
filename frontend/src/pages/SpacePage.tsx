@@ -18,7 +18,7 @@ function findPageInTree(pages: Page[], targetId: string): boolean {
 export default function SpacePage() {
   const { spaceSlug } = useParams<{ spaceSlug: string }>();
   const navigate = useNavigate();
-  const { currentSpace, setCurrentSpace, pageTree, error } = useSpaceStore();
+  const { currentSpace, setCurrentSpace, pageTree, pageTreeSlug, error } = useSpaceStore();
   const { createPage } = usePageStore();
 
   useEffect(() => {
@@ -33,16 +33,21 @@ export default function SpacePage() {
     }
   }, [spaceSlug, currentSpace, setCurrentSpace]);
 
-  // Auto-navigate: prefer last viewed page, else first page
+  // Auto-navigate: prefer last viewed page, else first page.
+  // 关键：必须等 pageTree 真正是为当前 slug 加载的（pageTreeSlug === spaceSlug），
+  // 否则切换 space 期间会拿到上一个 space 的旧树，pageTree[0].id 属于别的 space，
+  // 跳过去就是 404。
   useEffect(() => {
-    if (pageTree.length > 0 && spaceSlug) {
+    if (!spaceSlug) return;
+    if (pageTreeSlug !== spaceSlug) return; // 旧树或还没加载，不要用
+    if (pageTree.length > 0) {
       const lastViewedId = usePreferenceStore.getState().getLastViewedPageId(spaceSlug);
-      // Check if the stored page ID still exists in the tree
       const pageExists = lastViewedId && findPageInTree(pageTree, lastViewedId);
       const targetId = pageExists ? lastViewedId! : pageTree[0].id;
       navigate(`/s/${spaceSlug}/p/${targetId}`, { replace: true });
     }
-  }, [pageTree, spaceSlug, navigate]);
+    // pageTree.length === 0 且已确认是当前 slug 的结果 → 落到下面的"空状态/创建第一个页面"UI
+  }, [pageTree, pageTreeSlug, spaceSlug, navigate]);
 
   const handleCreateFirstPage = async () => {
     if (!spaceSlug) return;
@@ -73,6 +78,16 @@ export default function SpacePage() {
             返回首页
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // 加载中：pageTree 还没确认是当前 slug 的结果（旧树或没数据），但后端在拉
+  // 显示 spinner，避免闪现"此工作区暂无内容"
+  if (pageTreeSlug !== spaceSlug && !error) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-notion-border border-t-notion-text"></div>
       </div>
     );
   }

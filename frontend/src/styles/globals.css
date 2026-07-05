@@ -1395,6 +1395,12 @@ body.multi-drag-active .bn-drag-preview {
   border-radius: 4px;
 }
 
+/* 侧边栏页面拖入编辑器期间，抑制 subpage block 自身的 :hover 高亮，
+   避免误以为 drop 目标是那个 subpage block 本身。 */
+.sidebar-page-drag-active [data-content-type="subpage"] .hover\:bg-notion-hover:hover {
+  background-color: transparent !important;
+}
+
 /* 空折叠标题/列表拖拽放置视觉效果 */
 /* 1. 蓝色覆盖层 — 覆盖整个 toggle 区域（与 subpage drop target 高亮一致） */
 .empty-toggle-drop-target {

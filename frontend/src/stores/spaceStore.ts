@@ -6,6 +6,9 @@ interface SpaceState {
   spaces: Space[];
   currentSpace: Space | null;
   pageTree: Page[];
+  // pageTree 是为哪个 slug 加载的；切换 space 后到新树到达前，pageTree 仍是旧值，
+  // 调用方需要用这个字段判断 pageTree 是否对当前 slug 有效，避免误用旧 space 的树。
+  pageTreeSlug: string | null;
   starredPages: Page[];
   recentPages: Page[];
   isLoading: boolean;
@@ -24,6 +27,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   spaces: [],
   currentSpace: null,
   pageTree: [],
+  pageTreeSlug: null,
   starredPages: [],
   recentPages: [],
   isLoading: false,
@@ -46,7 +50,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       get().fetchStarred(space.slug);
       get().fetchRecent(space.slug);
     } else {
-      set({ pageTree: [], starredPages: [], recentPages: [] });
+      set({ pageTree: [], pageTreeSlug: null, starredPages: [], recentPages: [] });
     }
   },
 
@@ -54,7 +58,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const pageTree = await pagesApi.getTree(spaceSlug);
-      set({ pageTree: pageTree || [], isLoading: false });
+      set({ pageTree: pageTree || [], pageTreeSlug: spaceSlug, isLoading: false });
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
     }

@@ -5751,7 +5751,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   }, [editorEl]);
 
   return (
-    <div className="relative" ref={editorRefCallback}>
+    <div className="relative" ref={editorRefCallback} data-page-editor="true">
       <ComponentsContext.Provider value={blockNoteComponents as any}>
         <div>
           <BlockNoteViewRaw

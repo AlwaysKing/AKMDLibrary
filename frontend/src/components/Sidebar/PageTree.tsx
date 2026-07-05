@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { FileText } from 'lucide-react';
 import {
   DndContext,
@@ -135,13 +136,71 @@ function findParentId(pages: Page[], pageId: string, parentId: string | null = n
   return undefined as unknown as string | null;
 }
 
+// ─── Sidebar → Editor drop helpers ──────────────────────
+//
+// 拖拽侧边栏页面到编辑器中：把拖动的页面变成"当前打开页面"的子页面，
+// 插入位置由 drop 位置在已有 subpage block 序列中的相对位置决定。
+//
+// afterId 的计算规则（与后端 insertSubpageInParent 对齐）：
+//   - afterID = nil  → 插入到第一个现有 subpage 之前
+//   - afterID = "X"  → 插入到 subpage X 之后
+//
+// 我们以 drop 位置为基准，向回查找最近的 subpage block：
+//   - 找到 → afterId = 该 subpage 引用的 pageId
+//   - 没找到 → afterId = null（插入到所有 subpage 之前）
+
+interface EditorDropTarget {
+  blockEl: HTMLElement;     // 鼠标附近的 .bn-block-outer 元素
+  position: 'before' | 'after'; // 在该 block 的上方/下方
+  rect: DOMRect;            // 该 block 的 rect（用于绘制指示线）
+}
+
+/** 在当前编辑器中按文档顺序遍历所有 .bn-block-outer */
+function getEditorBlocks(editorEl: HTMLElement): HTMLElement[] {
+  return Array.from(editorEl.querySelectorAll<HTMLElement>('.bn-block-outer'));
+}
+
+/** 从某个 block 元素的 data 属性取出 subpage pageId（如果有） */
+function getBlockSubpageId(blockEl: HTMLElement): string | null {
+  const sub = blockEl.querySelector('[data-content-type="subpage"]');
+  if (!sub) return null;
+  return sub.getAttribute('data-page-id');
+}
+
+/** 给定 drop 目标，按文档顺序回溯找最近的前置 subpage，返回其 pageId（或 null） */
+function computeAfterIdForEditorDrop(editorEl: HTMLElement, target: EditorDropTarget): string | null {
+  const blocks = getEditorBlocks(editorEl);
+  const idx = blocks.indexOf(target.blockEl);
+  if (idx === -1) return null;
+  // position === 'after' 时，目标 block 自身也算"前置"
+  const endIdx = target.position === 'after' ? idx : idx - 1;
+  for (let i = endIdx; i >= 0; i--) {
+    const id = getBlockSubpageId(blocks[i]);
+    if (id) return id;
+  }
+  return null;
+}
+
+/** 用 elementFromPoint 找当前光标下的编辑器 block；找不到返回 null */
+function detectEditorDrop(clientX: number, clientY: number): { editor: HTMLElement; target: EditorDropTarget } | null {
+  const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+  if (!el) return null;
+  const editor = el.closest('[data-page-editor="true"]') as HTMLElement | null;
+  if (!editor) return null;
+  const blockEl = el.closest('.bn-block-outer') as HTMLElement | null;
+  if (!blockEl) return null;
+  const rect = blockEl.getBoundingClientRect();
+  const position: 'before' | 'after' = (clientY - rect.top) < rect.height / 2 ? 'before' : 'after';
+  return { editor, target: { blockEl, position, rect } };
+}
+
 // DragGhost: renders a mini page tree for the drag overlay, matching real item appearance
 function DragGhost({ page, level, expandedPageIds }: { page: Page; level: number; expandedPageIds: Set<string> }) {
   const hasChildren = page.children && page.children.length > 0;
   const isExpanded = expandedPageIds.has(page.id);
 
   return (
-    <div style={{ opacity: 0.7 }}>
+    <div style={{ opacity: 0.7, pointerEvents: 'none' }}>
       <div
         className="w-full flex items-center h-[30px] rounded-md"
         style={{ paddingLeft: `${level * 16 + 8}px`, paddingRight: '8px' }}
@@ -194,6 +253,8 @@ export default function PageTree() {
   const [activePage, setActivePage] = useState<Page | null>(null);
   const [overInfo, setOverInfo] = useState<{ id: string; position: 'before' | 'on' | 'after' } | null>(null);
   const [descendantIds, setDescendantIds] = useState<Set<string>>(new Set());
+  // 拖到编辑器里的 drop 目标（仅当光标在 PageEditor 区域内时设置）
+  const [editorDropTarget, setEditorDropTarget] = useState<EditorDropTarget | null>(null);
 
   // Track activation Y so we can compute current pointer Y = activatorY + delta.y
   const activatorYRef = useRef(0);
@@ -201,31 +262,60 @@ export default function PageTree() {
   const overRectRef = useRef<{ id: string; rowRect: DOMRect } | null>(null);
   // Real-time pointer Y (updated by pointermove listener)
   const pointerYRef = useRef(0);
+  // 实时光标 X（用于检测编辑器 drop）
+  const pointerXRef = useRef(0);
   // rAF loop handle
   const rafRef = useRef<number>(0);
   // Tree container ref for block drop overlay
   const treeContainerRef = useRef<HTMLDivElement>(null);
+  // 编辑器 drop 目标 ref（与 editorDropTarget 同步，避免 handleDragEnd 闭包读到旧值）
+  const editorDropTargetRef = useRef<EditorDropTarget | null>(null);
 
   // When drag is active: track pointer Y + run rAF loop to continuously update drop position
   // (onDragOver only fires when over ELEMENT changes; we need updates on every pointer move)
   useEffect(() => {
     if (!activeId) return;
 
+    // 标记 body，让 CSS 抑制编辑器内 subpage block 的 :hover 高亮，
+    // 避免拖入编辑器时被悬停的 subpage 误判为 drop target。
+    document.body.classList.add('sidebar-page-drag-active');
+
     // Track real-time pointer Y
-    const onPointerMove = (e: PointerEvent) => { pointerYRef.current = e.clientY; };
+    const onPointerMove = (e: PointerEvent) => {
+      pointerYRef.current = e.clientY;
+      pointerXRef.current = e.clientX;
+    };
     window.addEventListener('pointermove', onPointerMove);
 
     // Continuously calculate drop position from pointer Y + saved row rect
     const update = () => {
-      const over = overRectRef.current;
-      if (over) {
-        const pointerY = pointerYRef.current;
-        if (pointerY) {
-          const position = getDropPositionFromRect(over.rowRect, pointerY);
-          setOverInfo(prev => {
-            if (prev && prev.id === over.id && prev.position === position) return prev;
-            return { id: over.id, position };
-          });
+      // 1. 编辑器 drop 检测：光标是否在 PageEditor 区域内
+      const editorDrop = detectEditorDrop(pointerXRef.current, pointerYRef.current);
+      if (editorDrop) {
+        // 在编辑器内：清空侧边栏 over 信息，设置编辑器 drop 目标
+        overRectRef.current = null;
+        setOverInfo(null);
+        setEditorDropTarget(prev => {
+          if (prev && prev.blockEl === editorDrop.target.blockEl && prev.position === editorDrop.target.position) return prev;
+          return editorDrop.target;
+        });
+        editorDropTargetRef.current = editorDrop.target;
+      } else {
+        // 不在编辑器内：清空编辑器 drop，回到侧边栏 drop 检测
+        if (editorDropTargetRef.current) {
+          setEditorDropTarget(null);
+          editorDropTargetRef.current = null;
+        }
+        const over = overRectRef.current;
+        if (over) {
+          const pointerY = pointerYRef.current;
+          if (pointerY) {
+            const position = getDropPositionFromRect(over.rowRect, pointerY);
+            setOverInfo(prev => {
+              if (prev && prev.id === over.id && prev.position === position) return prev;
+              return { id: over.id, position };
+            });
+          }
         }
       }
       rafRef.current = requestAnimationFrame(update);
@@ -235,6 +325,7 @@ export default function PageTree() {
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       cancelAnimationFrame(rafRef.current);
+      document.body.classList.remove('sidebar-page-drag-active');
     };
   }, [activeId]);
 
@@ -301,12 +392,85 @@ export default function PageTree() {
 
     // Clean up
     const savedOverInfo = overInfo;
+    const savedEditorDrop = editorDropTargetRef.current;
     setActiveId(null);
     setActivePage(null);
     setOverInfo(null);
     setDescendantIds(new Set());
+    setEditorDropTarget(null);
+    editorDropTargetRef.current = null;
 
-    if (!over || !currentSpace) return;
+    if (!currentSpace) return;
+
+    // ─── 分支 1：拖到编辑器内 → 把页面移成"当前打开页面"的子页面
+    if (savedEditorDrop) {
+      const editorEl = savedEditorDrop.blockEl.closest('[data-page-editor="true"]') as HTMLElement | null;
+      if (!editorEl) return;
+      const currentPageId = window.location.pathname.match(/\/p\/([^/]+)$/)?.[1] || null;
+      if (!currentPageId) return;
+
+      // 不能拖到自己里面（或自己的子孙里面）
+      const draggedPage = active.data.current?.page as Page | undefined;
+      const draggedId = active.id as string;
+      if (draggedId === currentPageId) return;
+      if (draggedPage && collectDescendantIds(draggedPage).includes(currentPageId)) return;
+
+      const afterId = computeAfterIdForEditorDrop(editorEl, savedEditorDrop);
+
+      const fromParentId = findParentId(pageTree, draggedId) ?? null;
+      const fromFound = findPageInTree(pageTree, draggedId);
+      const fromAfterId = fromFound && fromFound.index > 0
+        ? fromFound.parentChildren[fromFound.index - 1].id
+        : null;
+
+      try {
+        await movePage(currentSpace.slug, draggedId, currentPageId, afterId);
+        // subpage block 同步：通过 PageTree 自身的 refresh + PageEditor 已有的
+        // subpage-created/subpage-reordered 事件监听完成。
+        if (fromParentId !== currentPageId) {
+          document.dispatchEvent(new CustomEvent('subpage-created', {
+            detail: { pageId: draggedId, afterId, fromParentId }
+          }));
+        } else {
+          document.dispatchEvent(new CustomEvent('subpage-reordered', {
+            detail: { parentId: currentPageId, movedPageId: draggedId, afterId }
+          }));
+        }
+
+        pushAction({
+          type: 'move',
+          spaceSlug: currentSpace.slug,
+          pageId: draggedId,
+          from: { parentId: fromParentId, afterId: fromAfterId },
+          to: { parentId: currentPageId, afterId },
+        });
+
+        const activeTitle = draggedPage?.title || '未命名页面';
+        showToastWithAction(`已将「${activeTitle}」移动到当前页面下`, [
+          {
+            label: '访问',
+            onClick: () => {
+              const slug = currentSpace?.slug;
+              if (slug) window.location.href = `/s/${slug}/p/${draggedId}`;
+            },
+          },
+          {
+            label: '撤销',
+            onClick: async () => {
+              await useUndoStore.getState().undo();
+            },
+          },
+        ]);
+      } catch (err) {
+        console.error('[PageTree] Failed to move page into editor:', err);
+      }
+
+      await refreshPageTree();
+      return;
+    }
+
+    // ─── 分支 2：常规的侧边栏内拖拽
+    if (!over) return;
 
     // Ignore drop on self or descendant
     if (active.id === over.id) return;
@@ -330,9 +494,12 @@ export default function PageTree() {
     let toAfterId: string | null;
 
     if (position === 'on') {
-      // Drop ON → become child of over page
+      // Drop ON → 成为 overPage 的子页面，并插到现有子项的最末尾
+      //（后端约定 afterID=nil 表示"插到首位"，所以必须显式取最后一个子项的 id）
       toParentId = overPage.id;
-      toAfterId = null;
+      const overFound = findPageInTree(pageTree, overPage.id);
+      const overChildren = overFound?.page.children ?? [];
+      toAfterId = overChildren.length > 0 ? overChildren[overChildren.length - 1].id : null;
     } else {
       // Drop BEFORE/AFTER → insert among siblings of over page
       toParentId = findParentId(pageTree, overPage.id) ?? null;
@@ -453,11 +620,39 @@ export default function PageTree() {
           <BlockDropOverlay containerRef={treeContainerRef} />
         </div>
       </SortableContext>
-      <DragOverlay dropAnimation={null}>
+      <DragOverlay dropAnimation={null} style={{ pointerEvents: 'none' }}>
         {activePage ? (
           <DragGhost page={activePage} level={0} expandedPageIds={expandedPageIds} />
         ) : null}
       </DragOverlay>
+      {editorDropTarget && <EditorDropIndicator target={editorDropTarget} />}
     </DndContext>
+  );
+}
+
+// ─── Editor drop indicator ──────────────────────────────
+//
+// 在编辑器中拖到 drop 目标位置画一条横线，样式与 BlockNote 原生
+// dropcursor 对齐（BlockNote 默认: width=5, color="#ddeeff"，淡蓝色 5px 实线）。
+// 用 portal 渲染到 body，避免被编辑器父元素的 transform/overflow 影响。
+function EditorDropIndicator({ target }: { target: EditorDropTarget }) {
+  // BlockNote 的 dropcursor 以中线为基准、上下各 2.5px，所以这里 top 也减 2.5
+  const DROP_CURSOR_HEIGHT = 5;
+  const baseTop = target.position === 'before' ? target.rect.top : target.rect.bottom;
+  const top = baseTop - DROP_CURSOR_HEIGHT / 2;
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        top,
+        left: target.rect.left,
+        width: target.rect.width,
+        height: DROP_CURSOR_HEIGHT,
+        backgroundColor: '#ddeeff',
+        pointerEvents: 'none',
+        zIndex: 50,
+      }}
+    />,
+    document.body,
   );
 }
