@@ -280,9 +280,24 @@ export default function PageViewPage() {
 
   const handleTitleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (currentPage?.is_locked) return;
+    // Cmd+A / Ctrl+A：默认会冒泡到 BlockNote 编辑器触发"选择所有 block"，
+    // 这里拦截，让 Cmd+A 只选中标题文本
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault();
+      const el = titleRef.current;
+      if (!el) return;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       titleRef.current?.blur();
+      // 通知编辑器在顶部插入空 block 并聚焦（用户在标题按回车 = 想直接开始写正文）
+      document.dispatchEvent(new CustomEvent('title-enter-pressed'));
     }
   }, [currentPage?.is_locked]);
 

@@ -2035,10 +2035,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     document.addEventListener('subpage-created', handleSubpageCreated);
     document.addEventListener('subpage-deleted', handleSubpageDeleted);
     document.addEventListener('subpage-reordered', handleSubpageReordered);
+
+    // 标题按 Enter：在页面顶部插入空 paragraph 并聚焦（用户想直接开始写正文）
+    const handleTitleEnter = () => {
+      const doc = editor.document;
+      const firstBlock = doc[0];
+      if (!firstBlock) return;
+      // 已经是空 paragraph 就直接复用，避免每次 Enter 都堆一个新空 block
+      const isEmptyParagraph = firstBlock.type === 'paragraph'
+        && !(firstBlock.content as any)?.length;
+      const targetId = isEmptyParagraph
+        ? firstBlock.id
+        : editor.insertBlocks([{ type: 'paragraph' } as any], firstBlock, 'before')[0].id;
+      editor.focus();
+      editor.setTextCursorPosition(targetId as any, 'start');
+    };
+    document.addEventListener('title-enter-pressed', handleTitleEnter);
+
     return () => {
       document.removeEventListener('subpage-created', handleSubpageCreated);
       document.removeEventListener('subpage-deleted', handleSubpageDeleted);
       document.removeEventListener('subpage-reordered', handleSubpageReordered);
+      document.removeEventListener('title-enter-pressed', handleTitleEnter);
     };
   }, [editor, readOnly]);
 
@@ -4683,9 +4701,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     // Keyboard: Escape toggles selection, Delete/Backspace removes selected blocks
     // Uses module-level getSelectedBlockIds() to avoid stale closure issues
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 焦点在 Claude 聊天面板内（textarea 等）：放行，让输入框原生处理
+      // 焦点不在编辑器内（标题、侧边栏、Claude 聊天面板等）：放行，
+      // 让原生 + 各组件自己的 React handler 处理。
+      // 注意：本 handler 注册在 capture 阶段，会先于 React 合成事件，
+      // 不放行的话会拦截掉标题的 Cmd+A / Enter 等。
       const targetEl = e.target as HTMLElement | null;
-      if (targetEl?.closest('[data-claude-chat="true"]')) return;
+      if (!targetEl?.closest('[data-page-editor="true"]')) return;
 
       // Cmd+A / Ctrl+A: two-step select all (block text → all blocks)
       if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.altKey) {
@@ -4838,6 +4859,32 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           await useSpaceStore.getState().refreshAll();
         })();
         return;
+      }
+
+      // Delete 在文本 block 末尾时的"向前合并"修正：
+      // BlockNote 默认调用 ProseMirror deleteForward，遇到下一个 atom 类 block
+      // （subpage / table / image / divider 等 content:'none' 的 block）时会
+      // 直接删除它而不是合并——因为对方没有 inline content 可合并。
+      // 用户预期：什么都不发生（或只是无法合并），不应该删除下一个 block。
+      if (e.key === 'Delete' && !e.altKey && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        const ids = getSelectedBlockIds();
+        if (ids.length === 0) {
+          const cursor = editor.getTextCursorPosition();
+          // 用 ProseMirror 判断光标是否在当前文本 block 末尾
+          const pmView = (editor as any).prosemirrorView;
+          const sel = pmView?.state?.selection;
+          const isAtEndOfBlock = sel?.empty
+            && sel.$head.parentOffset === sel.$head.parent.content.size;
+          if (isAtEndOfBlock && cursor.nextBlock) {
+            const nextSchema = (editor.schema.blockSchema as any)[cursor.nextBlock.type];
+            // 下一个 block 的 content 不是 inline → 文本无法合并进去，禁止默认动作
+            if (nextSchema && nextSchema.content !== 'inline') {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              return;
+            }
+          }
+        }
       }
 
       if (e.key !== 'Escape' && e.key !== 'Backspace' && e.key !== 'Delete') return;
