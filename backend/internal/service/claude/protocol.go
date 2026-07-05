@@ -225,11 +225,11 @@ type EventPermissionDenied struct {
 //   - 若 filePath 等于当前打开页面的 file_path → 重新拉文档内容
 //   - 否则 → 刷新左侧目录树
 //
-// 注意：filePath 已被规范化为相对 spaceDir 的路径，与 Page.file_path 字段一致。
+// filePath 已构造为与 Page.file_path 完全一致的格式：spaceSlug + "/" + space内相对路径。
 type EventToolFileChanged struct {
-	Type     string `json:"type"` // "tool_file_changed"
-	Tool     string `json:"tool"` // "Write" | "Edit" | "MultiEdit"
-	FilePath string `json:"filePath"`
+	Type     string `json:"type"`     // "tool_file_changed"
+	Tool     string `json:"tool"`     // "Write" | "Edit" | "MultiEdit"
+	FilePath string `json:"filePath"` // 与 Page.file_path 同格式
 }
 
 type EventError struct {

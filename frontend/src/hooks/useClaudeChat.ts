@@ -20,8 +20,8 @@ export interface ChatContext {
 interface UseClaudeChatOptions {
   spaceSlug: string | null;
   enabled: boolean; // space 是否启用 claude
-  /** 模型通过 Write/Edit/MultiEdit 成功改动了文件时触发；filePath 是相对 spaceDir 的路径 */
-  onToolFileChanged?: (tool: string, filePath: string) => void;
+  /** 模型通过 Write/Edit/MultiEdit 成功改动了文件时触发；filePath 与 Page.file_path 同格式 */
+  onToolFileChanged?: (event: { tool: string; filePath: string }) => void;
 }
 
 interface UseClaudeChatReturn {
@@ -31,6 +31,8 @@ interface UseClaudeChatReturn {
   sessionId: string | null;
   /** 发送消息：text + 可选 context + 可选附件列表 */
   send: (text: string, context?: ChatContext, attachments?: ChatAttachment[]) => void;
+  /** 中止当前回答（向 claude 发 control_request subtype=interrupt） */
+  stop: () => void;
   /** 上传附件到当前 session，返回 attachmentId 与去重后的 filename */
   uploadAttachment: (file: File) => Promise<{ attachmentId: string; filename: string }>;
   reset: () => void;
@@ -146,7 +148,7 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
           break;
         case 'tool_file_changed':
           // 模型通过 Write/Edit/MultiEdit 改了文件；交给上层判断刷当前页还是刷目录
-          try { onToolFileChangedRef.current?.(msg.tool, msg.filePath); } catch (e) { console.error('[useClaudeChat] onToolFileChanged handler error:', e); }
+          try { onToolFileChangedRef.current?.({ tool: msg.tool, filePath: msg.filePath }); } catch (e) { console.error('[useClaudeChat] onToolFileChanged handler error:', e); }
           break;
         case 'error':
           setMessages(prev => [...prev, {
@@ -244,5 +246,13 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
     setStatus('idle');
   }, []);
 
-  return { messages, status, isConnected, sessionId, send, uploadAttachment, reset };
+  const stop = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // 后端会把这个 stop 转成 claude 的 control_request subtype=interrupt
+    ws.send(JSON.stringify({ type: 'stop' }));
+    console.log('[useClaudeChat] sent stop');
+  }, []);
+
+  return { messages, status, isConnected, sessionId, send, stop, uploadAttachment, reset };
 }

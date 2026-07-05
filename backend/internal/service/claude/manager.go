@@ -128,6 +128,8 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
 			_ = params.Conn.Write(ctx, websocket.MessageText, data)
 		},
 		OnToolFileChanged: func(tool, filePath string) {
+			// session 已经把路径构造为 Page.file_path 格式（spaceSlug/...），直接透传
+			log.Printf("[claude manager][debug] OnToolFileChanged tool=%s filePath=%s", tool, filePath)
 			data, _ := json.Marshal(EventToolFileChanged{Type: "tool_file_changed", Tool: tool, FilePath: filePath})
 			_ = params.Conn.Write(ctx, websocket.MessageText, data)
 		},
@@ -138,6 +140,7 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
 	}
 	sess := NewSession(SessionParams{
 		SessionID:    sessionID,
+		SpaceSlug:    params.SpaceSlug,
 		SpaceDir:     params.SpaceDir,
 		AttachDir:    attachDir,
 		EnvOverrides: m.config.LoadSettingsEnv(),

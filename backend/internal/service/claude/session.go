@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -38,6 +39,7 @@ type Session struct {
 	wg           sync.WaitGroup
 	cancel       context.CancelFunc
 	sessionID    string
+	spaceSlug    string
 	spaceDir     string
 	attachDir    string
 	userWrite    bool
@@ -61,6 +63,7 @@ type pendingToolUse struct {
 
 type SessionParams struct {
 	SessionID    string                         // 由 manager 生成
+	SpaceSlug    string                         // 用于构造与 Page.file_path 一致的路径
 	SpaceDir     string                         // 子进程 cwd
 	AttachDir    string                         // /tmp/.../session/<id>，由 manager 创建好
 	EnvOverrides map[string]string              // settings.json.env 的覆盖
@@ -75,6 +78,7 @@ type SessionParams struct {
 func NewSession(p SessionParams) *Session {
 	return &Session{
 		sessionID:       p.SessionID,
+		spaceSlug:       p.SpaceSlug,
 		spaceDir:        p.SpaceDir,
 		attachDir:       p.AttachDir,
 		userWrite:       p.UserCanWrite,
@@ -223,6 +227,7 @@ func (s *Session) handleAssistant(line []byte) {
 			toolName: tu.Name,
 			input:    tu.Input,
 		}
+		log.Printf("[claude session][debug] cached tool_use: id=%s name=%s input_keys=%v", tu.ID, tu.Name, keysOf(tu.Input))
 	}
 }
 
@@ -231,14 +236,19 @@ func (s *Session) handleAssistant(line []byte) {
 func (s *Session) handleUser(line []byte) {
 	var msg ToolResultMessage
 	if err := json.Unmarshal(line, &msg); err != nil {
+		log.Printf("[claude session][debug] handleUser unmarshal failed: %v", err)
 		return
 	}
-	for _, tr := range msg.ExtractToolResults() {
+	results := msg.ExtractToolResults()
+	log.Printf("[claude session][debug] user message: %d tool_result(s), pending_size=%d", len(results), len(s.pendingToolUses))
+	for _, tr := range results {
 		pending, ok := s.pendingToolUses[tr.ToolUseID]
 		if !ok {
+			log.Printf("[claude session][debug] tool_result id=%s NOT in pending (miss)", tr.ToolUseID)
 			continue
 		}
 		delete(s.pendingToolUses, tr.ToolUseID)
+		log.Printf("[claude session][debug] tool_result id=%s matched pending name=%s is_error=%v", tr.ToolUseID, pending.toolName, tr.IsError)
 		if tr.IsError {
 			continue
 		}
@@ -246,22 +256,45 @@ func (s *Session) handleUser(line []byte) {
 		switch pending.toolName {
 		case "Write", "Edit", "MultiEdit":
 			rawPath, _ := pending.input["file_path"].(string)
-			if rawPath == "" || s.callbacks.OnToolFileChanged == nil {
+			if rawPath == "" {
+				log.Printf("[claude session][debug] %s: empty file_path, skip", pending.toolName)
 				continue
 			}
-			// 规范化为相对 spaceDir 的路径，与 Page.file_path 字段一致，前端可直接比对。
+			if s.callbacks.OnToolFileChanged == nil {
+				log.Printf("[claude session][debug] %s: OnToolFileChanged callback nil, skip", pending.toolName)
+				continue
+			}
+			// 解析为绝对路径。空间外的路径（理论被权限层挡掉）做兜底校验。
 			absPath := rawPath
 			if !filepath.IsAbs(absPath) {
 				absPath = filepath.Join(s.spaceDir, absPath)
 			}
 			relPath, err := filepath.Rel(s.spaceDir, absPath)
 			if err != nil || strings.HasPrefix(relPath, "..") {
-				// 路径不在 spaceDir 内（理论上权限层已经挡掉，这里是兜底）
+				log.Printf("[claude session][debug] %s: path outside spaceDir abs=%s spaceDir=%s", pending.toolName, absPath, s.spaceDir)
 				continue
 			}
-			s.callbacks.OnToolFileChanged(pending.toolName, relPath)
+			// 构造与 Page.file_path 一致的格式：spaceSlug + "/" + space内相对路径
+			// 前端可直接用 === 与 currentPage.file_path 比对，无需后端查 DB。
+			pageFilePath := strings.TrimPrefix(filepath.Join(s.spaceSlug, relPath), "/")
+			log.Printf("[claude session][debug] firing OnToolFileChanged: tool=%s pageFilePath=%s", pending.toolName, pageFilePath)
+			s.callbacks.OnToolFileChanged(pending.toolName, pageFilePath)
+		default:
+			log.Printf("[claude session][debug] %s: not file-modifying tool, skip", pending.toolName)
 		}
 	}
+}
+
+// keysOf 返回 map 的键集合（仅用于诊断日志，顺序无意义）。
+func keysOf(m map[string]any) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func (s *Session) handleControlRequest(line []byte) {
@@ -300,7 +333,19 @@ func (s *Session) writeJSON(v any) {
 	}
 }
 
-// SendUserMessage 接收用户文本 + 可选 context + 可选附件列表，拼装成 content blocks 发给 claude。
+// SendInterrupt 中止当前回答：向 claude 发 control_request subtype=interrupt。
+// claude 会停止当前生成并产出一条带 "[Request interrupted by user]" 的收尾消息。
+func (s *Session) SendInterrupt() {
+	msg := map[string]any{
+		"type": "control_request",
+		"request": map[string]any{
+			"subtype": "interrupt",
+		},
+		"request_id": fmt.Sprintf("interrupt_%d", time.Now().UnixMilli()),
+	}
+	s.writeJSON(msg)
+	log.Printf("[claude session] sent interrupt")
+}
 //
 // 拼装顺序：
 //   1. 当前文档（如果 context.ActivePageID 不为空）：text block
@@ -468,8 +513,12 @@ func (s *Session) HandleWebSocket(ctx context.Context, c *websocket.Conn) {
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
-		if msg.Type == "user_message" {
+		switch msg.Type {
+		case "user_message":
 			s.SendUserMessage(msg.Content, msg.Context, msg.Attachments)
+		case "stop":
+			// 用户点击中止按钮：向 claude 发 interrupt
+			s.SendInterrupt()
 		}
 	}
 }
