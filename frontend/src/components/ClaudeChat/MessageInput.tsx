@@ -1,10 +1,13 @@
 import { useRef, useState, KeyboardEvent, ChangeEvent, ClipboardEvent } from 'react';
-import { Send, Paperclip, Loader2, X } from 'lucide-react';
+import { Send, Paperclip, Loader2, X, Square } from 'lucide-react';
 import { ChatAttachment } from '../../hooks/useClaudeChat';
 
 interface Props {
   onSend: (text: string, attachments?: ChatAttachment[]) => void;
+  /** 回答中状态：true 时输入禁用、发送按钮变中止按钮 */
   disabled: boolean;
+  /** 用户点击中止按钮时触发 */
+  onStop?: () => void;
   uploadAttachment: (file: File) => Promise<{ attachmentId: string; filename: string }>;
   // 由 ChatPanel 提升上来的附件状态（整个面板都是 drop target）
   pendings: PendingAttachment[];
@@ -32,7 +35,7 @@ export function nextLocalId() {
   return `pa_${Date.now()}_${localIdCounter}`;
 }
 
-export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFiles }: Props) {
+export function MessageInput({ onSend, disabled, onStop, pendings, onRemovePending, onFiles }: Props) {
   const [text, setText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -51,6 +54,9 @@ export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFi
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 输入法 composing 状态（用户在选词按回车）不触发发送
+    // isComposing 是标准属性；keyCode 229 是兼容老浏览器的 fallback
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -124,14 +130,25 @@ export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFi
           className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm resize-none max-h-32 focus:outline-none focus:ring-1 focus:ring-blue-500"
           disabled={disabled}
         />
-        <button
-          onClick={submit}
-          disabled={!canSend}
-          className="p-2 bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-30"
-          title={hasUploading ? '附件上传中...' : '发送'}
-        >
-          <Send className="w-4 h-4" />
-        </button>
+        {disabled ? (
+          <button
+            onClick={() => onStop?.()}
+            disabled={!onStop}
+            className="p-2 bg-notion-text text-white rounded hover:bg-red-500 disabled:opacity-30"
+            title="中止当前回答"
+          >
+            <Square className="w-4 h-4 fill-current" />
+          </button>
+        ) : (
+          <button
+            onClick={submit}
+            disabled={!canSend}
+            className="p-2 bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-30"
+            title={hasUploading ? '附件上传中...' : '发送'}
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   );
