@@ -25,6 +25,7 @@ type SessionCallbacks struct {
 	OnStatus           func(status string) // "answering" | "idle"
 	OnAssistantText    func(text string)
 	OnPermissionDenied func(tool, path, reason string)
+	OnToolFileChanged  func(tool, filePath string) // Write/Edit/MultiEdit 成功执行后触发
 	OnError            func(message string)
 }
 
@@ -45,6 +46,17 @@ type Session struct {
 	envOverrides map[string]string
 	pageRepo     *repository.PageRepository
 	callbacks    SessionCallbacks
+
+	// pendingToolUses 缓存 tool_use（由 assistant 消息产出），
+	// 等对应 tool_use_id 的 tool_result（user 消息）到达时再决定是否触发 OnToolFileChanged。
+	// readLoop 串行调用 handleLine，无需加锁。
+	pendingToolUses map[string]pendingToolUse
+}
+
+// pendingToolUse 是 pendingToolUses 表的条目。
+type pendingToolUse struct {
+	toolName string
+	input    map[string]any
 }
 
 type SessionParams struct {
@@ -62,15 +74,16 @@ type SessionParams struct {
 // NewSession 创建（不启动）一个 session。
 func NewSession(p SessionParams) *Session {
 	return &Session{
-		sessionID:    p.SessionID,
-		spaceDir:     p.SpaceDir,
-		attachDir:    p.AttachDir,
-		userWrite:    p.UserCanWrite,
-		toolCfg:      p.ToolConfig,
-		sysPrompt:    p.SystemPrompt,
-		envOverrides: p.EnvOverrides,
-		pageRepo:     p.PageRepo,
-		callbacks:    p.Callbacks,
+		sessionID:       p.SessionID,
+		spaceDir:        p.SpaceDir,
+		attachDir:       p.AttachDir,
+		userWrite:       p.UserCanWrite,
+		toolCfg:         p.ToolConfig,
+		sysPrompt:       p.SystemPrompt,
+		envOverrides:    p.EnvOverrides,
+		pageRepo:        p.PageRepo,
+		callbacks:       p.Callbacks,
+		pendingToolUses: make(map[string]pendingToolUse),
 	}
 }
 
@@ -175,12 +188,14 @@ func (s *Session) handleLine(line []byte) {
 	switch probe.Type {
 	case "assistant":
 		s.handleAssistant(line)
+	case "user":
+		s.handleUser(line)
 	case "control_request":
 		s.handleControlRequest(line)
 	case "result":
 		// 一轮回答结束
 		s.callbacks.OnStatus("idle")
-	case "system", "user", "stream_event":
+	case "system", "stream_event":
 		// 已知但当前不处理的类型，落到 debug 日志方便排查
 		log.Printf("[claude session] %s: %s", probe.Type, string(line))
 	default:
@@ -198,6 +213,54 @@ func (s *Session) handleAssistant(line []byte) {
 	text := msg.ExtractText()
 	if text != "" {
 		s.callbacks.OnAssistantText(text)
+	}
+	// 缓存本轮 tool_use，等 tool_result 到达后再决定是否通知文件变更
+	for _, tu := range msg.ExtractToolUses() {
+		if tu.ID == "" {
+			continue
+		}
+		s.pendingToolUses[tu.ID] = pendingToolUse{
+			toolName: tu.Name,
+			input:    tu.Input,
+		}
+	}
+}
+
+// handleUser 处理 claude 回传的 user 消息（一般是 tool_result）。
+// 这里只关心文件修改类工具的执行结果；其他 tool_result（Read/Bash/Grep 等）忽略。
+func (s *Session) handleUser(line []byte) {
+	var msg ToolResultMessage
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return
+	}
+	for _, tr := range msg.ExtractToolResults() {
+		pending, ok := s.pendingToolUses[tr.ToolUseID]
+		if !ok {
+			continue
+		}
+		delete(s.pendingToolUses, tr.ToolUseID)
+		if tr.IsError {
+			continue
+		}
+		// 只关心文件修改类工具
+		switch pending.toolName {
+		case "Write", "Edit", "MultiEdit":
+			rawPath, _ := pending.input["file_path"].(string)
+			if rawPath == "" || s.callbacks.OnToolFileChanged == nil {
+				continue
+			}
+			// 规范化为相对 spaceDir 的路径，与 Page.file_path 字段一致，前端可直接比对。
+			absPath := rawPath
+			if !filepath.IsAbs(absPath) {
+				absPath = filepath.Join(s.spaceDir, absPath)
+			}
+			relPath, err := filepath.Rel(s.spaceDir, absPath)
+			if err != nil || strings.HasPrefix(relPath, "..") {
+				// 路径不在 spaceDir 内（理论上权限层已经挡掉，这里是兜底）
+				continue
+			}
+			s.callbacks.OnToolFileChanged(pending.toolName, relPath)
+		}
 	}
 }
 

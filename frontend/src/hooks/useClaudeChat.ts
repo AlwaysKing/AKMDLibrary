@@ -20,6 +20,8 @@ export interface ChatContext {
 interface UseClaudeChatOptions {
   spaceSlug: string | null;
   enabled: boolean; // space 是否启用 claude
+  /** 模型通过 Write/Edit/MultiEdit 成功改动了文件时触发；filePath 是相对 spaceDir 的路径 */
+  onToolFileChanged?: (tool: string, filePath: string) => void;
 }
 
 interface UseClaudeChatReturn {
@@ -46,7 +48,7 @@ function nextId() {
   return `m${Date.now()}_${msgIdCounter}`;
 }
 
-export function useClaudeChat({ spaceSlug, enabled }: UseClaudeChatOptions): UseClaudeChatReturn {
+export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClaudeChatOptions): UseClaudeChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>('idle');
   const [isConnected, setIsConnected] = useState(false);
@@ -66,6 +68,10 @@ export function useClaudeChat({ spaceSlug, enabled }: UseClaudeChatOptions): Use
   // 在 connect 内读取最新 spaceSlug/enabled，避免把 connect 加进 useEffect deps
   const cfgRef = useRef({ spaceSlug, enabled });
   cfgRef.current = { spaceSlug, enabled };
+
+  // 回调用 ref 持有，避免 connect() 闭包捕获旧版本导致回调失效
+  const onToolFileChangedRef = useRef(onToolFileChanged);
+  onToolFileChangedRef.current = onToolFileChanged;
 
   // 创建 WS 连接（lazy：仅在 send 时触发）
   const connect = useCallback(() => {
@@ -137,6 +143,10 @@ export function useClaudeChat({ spaceSlug, enabled }: UseClaudeChatOptions): Use
             variant: 'denied' as const,
             content: `已拒绝 ${msg.tool}${msg.path ? ' ' + msg.path : ''} — ${msg.reason}`,
           }]);
+          break;
+        case 'tool_file_changed':
+          // 模型通过 Write/Edit/MultiEdit 改了文件；交给上层判断刷当前页还是刷目录
+          try { onToolFileChangedRef.current?.(msg.tool, msg.filePath); } catch (e) { console.error('[useClaudeChat] onToolFileChanged handler error:', e); }
           break;
         case 'error':
           setMessages(prev => [...prev, {

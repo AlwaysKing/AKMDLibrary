@@ -124,6 +124,73 @@ func (m *AssistantMessage) ExtractText() string {
 	return out
 }
 
+// ToolUseBlock 是 assistant 消息里 type=tool_use 的 content 元素。
+// claude 决定调用工具时会产出这种块，后续会有一条 user 消息（含 tool_result）回执。
+type ToolUseBlock struct {
+	Type  string         `json:"type"` // "tool_use"
+	ID    string         `json:"id"`   // 关联 tool_result 的 id
+	Name  string         `json:"name"` // "Write" / "Edit" / "Bash" / ...
+	Input map[string]any `json:"input"`
+}
+
+// ExtractToolUses 返回 assistant 消息里所有 tool_use 块。
+func (m *AssistantMessage) ExtractToolUses() []ToolUseBlock {
+	var out []ToolUseBlock
+	for _, raw := range m.Message.Content {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			continue
+		}
+		if probe.Type != "tool_use" {
+			continue
+		}
+		var tu ToolUseBlock
+		if err := json.Unmarshal(raw, &tu); err == nil {
+			out = append(out, tu)
+		}
+	}
+	return out
+}
+
+// ToolResultMessage 是 claude 在工具执行完成后回传的 user 消息。
+type ToolResultMessage struct {
+	Type    string `json:"type"` // "user"
+	Message struct {
+		Role    string            `json:"role"`
+		Content []json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
+// ToolResultBlock 是 user 消息里 type=tool_result 的 content 元素。
+type ToolResultBlock struct {
+	Type      string `json:"type"`        // "tool_result"
+	ToolUseID string `json:"tool_use_id"` // 关联前面的 tool_use.id
+	IsError   bool   `json:"is_error"`    // true 表示工具执行失败
+}
+
+// ExtractToolResults 返回 user 消息里所有 tool_result 块。
+func (m *ToolResultMessage) ExtractToolResults() []ToolResultBlock {
+	var out []ToolResultBlock
+	for _, raw := range m.Message.Content {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			continue
+		}
+		if probe.Type != "tool_result" {
+			continue
+		}
+		var tr ToolResultBlock
+		if err := json.Unmarshal(raw, &tr); err == nil {
+			out = append(out, tr)
+		}
+	}
+	return out
+}
+
 // ControlRequest 是 claude 请求权限的工具调用。
 type ControlRequest struct {
 	Type      string `json:"type"` // "control_request"
@@ -151,6 +218,18 @@ type EventPermissionDenied struct {
 	Tool   string `json:"tool"`
 	Path   string `json:"path,omitempty"`
 	Reason string `json:"reason"`
+}
+
+// EventToolFileChanged 通知前端：模型通过 Write/Edit/MultiEdit 改动了某个文件。
+// 前端据此判断：
+//   - 若 filePath 等于当前打开页面的 file_path → 重新拉文档内容
+//   - 否则 → 刷新左侧目录树
+//
+// 注意：filePath 已被规范化为相对 spaceDir 的路径，与 Page.file_path 字段一致。
+type EventToolFileChanged struct {
+	Type     string `json:"type"` // "tool_file_changed"
+	Tool     string `json:"tool"` // "Write" | "Edit" | "MultiEdit"
+	FilePath string `json:"filePath"`
 }
 
 type EventError struct {

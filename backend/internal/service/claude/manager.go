@@ -127,6 +127,10 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
 			data, _ := json.Marshal(EventPermissionDenied{Type: "permission_denied", Tool: tool, Path: path, Reason: reason})
 			_ = params.Conn.Write(ctx, websocket.MessageText, data)
 		},
+		OnToolFileChanged: func(tool, filePath string) {
+			data, _ := json.Marshal(EventToolFileChanged{Type: "tool_file_changed", Tool: tool, FilePath: filePath})
+			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+		},
 		OnError: func(message string) {
 			data, _ := json.Marshal(EventError{Type: "error", Message: message})
 			_ = params.Conn.Write(ctx, websocket.MessageText, data)

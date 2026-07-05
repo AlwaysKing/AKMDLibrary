@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { MessageList } from './MessageList';
 import { MessageInput, PendingAttachment, nextLocalId, MAX_SIZE } from './MessageInput';
 import { useClaudeChat, ChatAttachment } from '../../hooks/useClaudeChat';
+import { usePageStore } from '../../stores/pageStore';
 
 interface Props {
   spaceSlug: string;
@@ -34,7 +35,23 @@ interface ResizeStart {
 }
 
 export function ChatPanel({ spaceSlug, open, onClose }: Props) {
-  const { messages, status, send, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true });
+  // 文件变更回调：模型改了文件就根据是否当前页决定刷新哪个
+  // 用 useCallback + pageStore.getState() 避免闭包陈旧；hook 内部会用 ref 持有最新版本
+  const handleToolFileChanged = (tool: string, filePath: string) => {
+    const pageState = usePageStore.getState();
+    const current = pageState.currentPage;
+    if (current && current.file_path === filePath) {
+      // 当前打开的页被改 → 重新拉内容
+      console.log(`[ChatPanel] tool=${tool} 改了当前页 ${filePath}，刷新内容`);
+      pageState.fetchPage(spaceSlug, current.id).catch(e => console.error('[ChatPanel] fetchPage 失败:', e));
+    } else {
+      // 不是当前页 → 刷新左侧目录树
+      console.log(`[ChatPanel] tool=${tool} 改了 ${filePath}（非当前页），刷新目录树`);
+      pageState.refreshPageTree().catch(e => console.error('[ChatPanel] refreshPageTree 失败:', e));
+    }
+  };
+
+  const { messages, status, send, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true, onToolFileChanged: handleToolFileChanged });
   // 初始位置：让面板距右边缘和底边缘各 20px（与 size 460x520 配合）
   const [pos, setPos] = useState({ x: window.innerWidth - 480, y: window.innerHeight - 540 });
   const [size, setSize] = useState({ w: 460, h: 520 });
