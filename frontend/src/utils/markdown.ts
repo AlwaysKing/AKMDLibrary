@@ -246,6 +246,52 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    // Synced block mirror: <sync-block id="..." source-page="..." source-block="..." />
+    const syncMirrorMatch = trimmed.match(/^<sync-block\s+([^>]*?)\s*\/>$/);
+    if (syncMirrorMatch) {
+      const attrs = parseTagAttributes(syncMirrorMatch[1] || '');
+      if (attrs.id && attrs['source-page'] && attrs['source-block']) {
+        blocks.push({
+          type: 'syncedBlockMirror',
+          props: {
+            syncId: attrs.id,
+            sourcePageId: attrs['source-page'],
+            sourceBlockId: attrs['source-block'],
+          },
+        });
+        i++;
+        continue;
+      }
+    }
+
+    // Synced block source: <sync-block id="..."><quoted>...</quoted><content>...</content></sync-block>
+    const syncSourceMatch = trimmed.match(/^<sync-block\s+([^>]*?)>$/);
+    if (syncSourceMatch) {
+      const attrs = parseTagAttributes(syncSourceMatch[1] || '');
+      if (attrs.id && !attrs['source-page']) {
+        const innerLines: string[] = [];
+        i++;
+        while (i < lines.length && lines[i].trim() !== '</sync-block>') {
+          innerLines.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) i++;
+
+        const quotedText = extractTagContent(innerLines, 'quoted');
+        const quoted = parseSyncedQuoted(quotedText);
+        const contentText = extractTagContent(innerLines, 'content');
+        blocks.push({
+          type: 'syncedBlockSource',
+          props: {
+            syncId: attrs.id,
+            quoted: JSON.stringify(quoted),
+          },
+          children: contentText.trim() ? markdownToBlocks(contentText) : [{ type: 'paragraph' }],
+        });
+        continue;
+      }
+    }
+
     // fileContent block: <content file="..." lang="..." /> (self-closing) or
     // paired <content ...>...</content>. The tag carries path + language only;
     // actual file content is hydrated on the client via the files API, so we
@@ -691,6 +737,16 @@ function parseTagAttributes(attrText: string): Record<string, string> {
   return attrs;
 }
 
+function parseSyncedQuoted(text: string): Array<{ pageId: string; syncId: string }> {
+  const quoted: Array<{ pageId: string; syncId: string }> = [];
+  const qRegex = /<q\s+page-id="([^"]+)"\s+sync-id="([^"]+)"\s*\/>/g;
+  let match: RegExpExecArray | null;
+  while ((match = qRegex.exec(text)) !== null) {
+    quoted.push({ pageId: unescapeHtmlAttribute(match[1]), syncId: unescapeHtmlAttribute(match[2]) });
+  }
+  return quoted;
+}
+
 function escapeHtmlAttribute(value: any): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -843,6 +899,15 @@ export function blocksToMarkdown(blocks: any[]): string {
  * Serialize a single block to markdown, handling toggle blocks and children recursively.
  */
 function serializeBlock(block: any): string {
+  if (block.type === 'syncedBlockSource') {
+    const syncId = block.props?.syncId || '';
+    const quoted = parseQuotedProp(block.props?.quoted);
+    const childrenMd = block.children?.length
+      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+      : '';
+    return renderSyncedSourceMarkdown(syncId, quoted, childrenMd);
+  }
+
   // Column list — skip if all columns are empty (content was deleted)
   if (block.type === 'column_list') {
     const columns = (block.children || []).filter((col: any) =>
@@ -942,6 +1007,14 @@ function serializeRegularBlock(block: any): string {
       const language = block.props?.language || 'text';
       if (!path) return '';
       return `<content file="${escapeHtmlAttribute(path)}" lang="${escapeHtmlAttribute(language)}" />`;
+    }
+
+    case 'syncedBlockMirror': {
+      const syncId = block.props?.syncId || '';
+      const sourcePageId = block.props?.sourcePageId || '';
+      const sourceBlockId = block.props?.sourceBlockId || '';
+      if (!syncId || !sourcePageId || !sourceBlockId) return '';
+      return `<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`;
     }
 
     case 'quote': {
@@ -1090,6 +1163,34 @@ function serializeRegularBlock(block: any): string {
     default:
       return `<!-- Unknown block type: ${block.type} -->`;
   }
+}
+
+function parseQuotedProp(raw: any): Array<{ pageId: string; syncId: string }> {
+  if (Array.isArray(raw)) return raw;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderSyncedSourceMarkdown(syncId: string, quoted: Array<{ pageId: string; syncId: string }>, content: string): string {
+  const quotedLines = quoted
+    .filter((q) => q.pageId && q.syncId)
+    .map((q) => `    <q page-id="${escapeHtmlAttribute(q.pageId)}" sync-id="${escapeHtmlAttribute(q.syncId)}" />`)
+    .join('\n');
+  return [
+    `<sync-block id="${escapeHtmlAttribute(syncId)}">`,
+    '  <quoted>',
+    quotedLines,
+    '  </quoted>',
+    '  <content>',
+    content.trim(),
+    '  </content>',
+    '</sync-block>',
+  ].filter((line, index) => line !== '' || index !== 2).join('\n');
 }
 
 /**

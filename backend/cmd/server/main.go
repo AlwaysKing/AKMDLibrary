@@ -121,6 +121,7 @@ func main() {
 	gitHandler := handler.NewGitHandler(gitService, spaceService)
 	searchHandler := handler.NewSearchHandler(searchService, spaceService)
 	filesHandler := handler.NewFilesHandler(docsDir, spaceService)
+	syncedBlockHandler := handler.NewSyncedBlockHandler(pageService, spaceService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -154,8 +155,8 @@ func main() {
 		r.Use(authMiddleware.RequireAuth)
 
 		r.Get("/api/auth/me", authHandler.Me)
-			r.Put("/api/auth/profile", authHandler.UpdateProfile)
-			r.Put("/api/auth/password", authHandler.ChangePassword)
+		r.Put("/api/auth/profile", authHandler.UpdateProfile)
+		r.Put("/api/auth/password", authHandler.ChangePassword)
 
 		// Preferences
 		r.Get("/api/user/preferences", prefHandler.Get)
@@ -178,8 +179,8 @@ func main() {
 
 		// Pages
 		r.Get("/api/spaces/{slug}/pages", pageHandler.GetTree)
-			r.Get("/api/spaces/{slug}/pages/starred", pageHandler.ListStarred)
-			r.Get("/api/spaces/{slug}/pages/recent", pageHandler.ListRecent)
+		r.Get("/api/spaces/{slug}/pages/starred", pageHandler.ListStarred)
+		r.Get("/api/spaces/{slug}/pages/recent", pageHandler.ListRecent)
 		r.Get("/api/spaces/{slug}/pages/{id}", pageHandler.GetByID)
 		r.Post("/api/spaces/{slug}/pages", pageHandler.Create)
 		r.Put("/api/spaces/{slug}/pages/{id}", pageHandler.Update)
@@ -188,6 +189,12 @@ func main() {
 		r.Post("/api/spaces/{slug}/pages/{id}/restore", pageHandler.RestoreByPageID)
 		r.Put("/api/spaces/{slug}/pages/{id}/move", pageHandler.Move)
 		r.Delete("/api/spaces/{slug}/pages/{id}", pageHandler.Delete)
+
+		// Synced blocks
+		r.Get("/api/spaces/{slug}/synced-block", syncedBlockHandler.Get)
+		r.Put("/api/spaces/{slug}/synced-block/{sourceBlockId}", syncedBlockHandler.Update)
+		r.Post("/api/spaces/{slug}/synced-block/wrap-source", syncedBlockHandler.WrapSource)
+		r.Delete("/api/spaces/{slug}/synced-block/{sourceBlockId}", syncedBlockHandler.Delete)
 
 		// Trash
 		r.Get("/api/spaces/{slug}/trash", pageHandler.ListTrash)
@@ -261,13 +268,13 @@ func main() {
 		r.Post("/api/icons/delete", uploadHandler.DeleteIcon)
 		r.Put("/api/icons/rename", uploadHandler.RenameIcon)
 
-			// Cover library
-			r.Get("/api/covers", uploadHandler.ListCovers)
-			r.Get("/api/covers/check", uploadHandler.CheckCoverName)
-			r.Post("/api/covers/use", uploadHandler.UseCover)
-			r.Post("/api/covers/upload", uploadHandler.UploadCover)
-			r.Post("/api/covers/delete", uploadHandler.DeleteCover)
-			r.Put("/api/covers/rename", uploadHandler.RenameCover)
+		// Cover library
+		r.Get("/api/covers", uploadHandler.ListCovers)
+		r.Get("/api/covers/check", uploadHandler.CheckCoverName)
+		r.Post("/api/covers/use", uploadHandler.UseCover)
+		r.Post("/api/covers/upload", uploadHandler.UploadCover)
+		r.Post("/api/covers/delete", uploadHandler.DeleteCover)
+		r.Put("/api/covers/rename", uploadHandler.RenameCover)
 	})
 
 	// Public upload files

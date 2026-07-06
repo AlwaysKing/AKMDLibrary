@@ -7,6 +7,18 @@ let clipboardBlocks: any[] | null = null;
 let clipboardMarkdown: string | null = null;
 let clipboardIsCut = false;
 
+export type PendingSyncedPaste = {
+  sourceSpaceSlug: string;
+  sourcePageId: string;
+  sourceBlockIds: string[];
+  sourceMarkdown: string;
+  blocks: any[];
+  createdAt: number;
+};
+
+let pendingSyncedPaste: PendingSyncedPaste | null = null;
+const PENDING_SYNCED_PASTE_TTL_MS = 5 * 60 * 1000;
+
 export function setClipboardData(blocks: any[], markdown: string, isCut: boolean): void {
   clipboardBlocks = blocks;
   clipboardMarkdown = markdown;
@@ -22,6 +34,23 @@ export function clearClipboardData(): void {
   clipboardBlocks = null;
   clipboardMarkdown = null;
   clipboardIsCut = false;
+}
+
+export function setPendingSyncedPaste(data: Omit<PendingSyncedPaste, 'createdAt'>): void {
+  pendingSyncedPaste = { ...data, createdAt: Date.now() };
+}
+
+export function getPendingSyncedPaste(): PendingSyncedPaste | null {
+  if (!pendingSyncedPaste) return null;
+  if (Date.now() - pendingSyncedPaste.createdAt > PENDING_SYNCED_PASTE_TTL_MS) {
+    pendingSyncedPaste = null;
+    return null;
+  }
+  return pendingSyncedPaste;
+}
+
+export function clearPendingSyncedPaste(): void {
+  pendingSyncedPaste = null;
 }
 
 /**

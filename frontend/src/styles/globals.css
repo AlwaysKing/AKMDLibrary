@@ -135,7 +135,9 @@ h4[contenteditable],
 /* Custom blocks (pageReference, bookmark, subpage): remove BlockNote's default selection outline (#64a0ff) */
 .bn-editor .bn-block-content[data-content-type="pageReference"],
 .bn-editor .bn-block-content[data-content-type="bookmark"],
-.bn-editor .bn-block-content[data-content-type="subpage"] {
+.bn-editor .bn-block-content[data-content-type="subpage"],
+.bn-editor .bn-block-content[data-content-type="syncedBlockSource"],
+.bn-editor .bn-block-content[data-content-type="syncedBlockMirror"] {
   padding: 0 !important;
 }
 .bn-block-content.ProseMirror-selectednode[data-content-type="pageReference"] > *,
@@ -146,6 +148,8 @@ h4[contenteditable],
 .bn-block-content.ProseMirror-selectednode[data-content-type="file"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="audio"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="fileContent"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="syncedBlockSource"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="syncedBlockMirror"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="pageReference"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > *,
@@ -153,7 +157,9 @@ h4[contenteditable],
 .ProseMirror-selectednode > .bn-block-content[data-content-type="video"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="file"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="audio"] > *,
-.ProseMirror-selectednode > .bn-block-content[data-content-type="fileContent"] > * {
+.ProseMirror-selectednode > .bn-block-content[data-content-type="fileContent"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="syncedBlockSource"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="syncedBlockMirror"] > * {
   outline: none !important;
 }
 
@@ -671,6 +677,25 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
   opacity: 1 !important;
   pointer-events: auto !important;
   transition: none !important;
+}
+
+body.sync-source-side-menu-mode [data-floating-ui-focusable]:has(> .bn-side-menu) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+
+.bn-sync-source-floating-menu {
+  position: fixed;
+  z-index: calc(var(--bn-ui-base-z-index, 0) + 21);
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bn-sync-source-floating-menu[data-visible="true"] {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Table block: drag handle sits a little farther left so the gap to the table
@@ -3189,6 +3214,382 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 .bn-editor .bn-block-content[data-content-type="fileContent"] {
   padding: 0 !important;
   position: relative !important;
+}
+
+.bn-editor .bn-block-content[data-content-type="syncedBlockSource"],
+.bn-editor .bn-block-content[data-content-type="syncedBlockMirror"] {
+  padding: 0 !important;
+  width: 100% !important;
+  position: relative !important;
+}
+
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
+  padding: 0 !important;
+}
+
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource),
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
+  margin-left: 0 !important;
+}
+
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)::before,
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)::before {
+  content: none !important;
+  display: none !important;
+  border-left: 0 !important;
+}
+
+.react-renderer.node-syncedBlockMirror.ProseMirror-selectednode,
+.react-renderer.node-syncedBlockMirror.ProseMirror-selectednode > .bn-block-content,
+.react-renderer.node-syncedBlockMirror.ProseMirror-selectednode > .bn-block-content > * {
+  outline: none !important;
+}
+
+.bn-synced-block {
+  box-sizing: border-box;
+  width: 100%;
+  color: inherit;
+}
+
+.bn-synced-block-source {
+  height: 0;
+  min-height: 0;
+  overflow: visible;
+  position: relative;
+  pointer-events: none;
+}
+
+.bn-editor .bn-block-outer:has(.react-renderer [data-content-type="syncedBlockSource"]) {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) {
+  position: relative;
+  padding: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .react-renderer {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 0;
+  overflow: visible;
+  z-index: 12;
+  pointer-events: auto;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group {
+  position: relative;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group {
+  position: relative;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  border-left: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group > .bn-block-outer {
+  margin-left: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group > .bn-block-outer {
+  margin-left: 0 !important;
+}
+
+.bn-editor .bn-block-group .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group {
+  margin-left: 0 !important;
+}
+
+.bn-editor .bn-block-group .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group,
+.bn-editor .bn-block-group .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group {
+  margin-left: 0 !important;
+}
+
+.bn-editor .bn-block-group .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group > .bn-block-outer::before {
+  content: none !important;
+  display: none !important;
+  border-left: 0 !important;
+}
+
+.bn-editor .bn-block-group .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group > .bn-block-outer::before,
+.bn-editor .bn-block-group .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group > .bn-block-outer::before {
+  content: none !important;
+  display: none !important;
+  border-left: 0 !important;
+}
+
+.bn-editor .bn-block-outer:has([data-content-type="syncedBlockSource"]) .bn-block-group .bn-block-outer::before,
+.bn-editor .bn-block-outer:has([data-content-type="syncedBlockMirror"]) .bn-block-group .bn-block-outer::before,
+.bn-synced-block .bn-block-group .bn-block-outer::before,
+.bn-synced-block-inner .bn-block-group .bn-block-outer::before {
+  content: none !important;
+  display: none !important;
+  border-left: 0 !important;
+}
+
+.bn-editor .bn-block-outer:has([data-content-type="syncedBlockSource"]) .bn-block-group,
+.bn-editor .bn-block-outer:has([data-content-type="syncedBlockMirror"]) .bn-block-group,
+.bn-synced-block .bn-block-group,
+.bn-synced-block-inner .bn-block-group {
+  border-left: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group::after {
+  content: '';
+  position: absolute;
+  inset: -2px 0;
+  border: 2px solid rgba(189, 130, 70, 0.22);
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within > .bn-block-group::after {
+  opacity: 1;
+}
+
+.bn-synced-block-mirror {
+  position: relative;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: inset 0 0 0 0 rgba(189, 130, 70, 0);
+  transition: box-shadow 0.12s ease;
+}
+
+.bn-synced-block-mirror:focus-within,
+.bn-synced-block-mirror.is-saving,
+.bn-synced-block-mirror.is-error,
+.bn-synced-block-mirror.is-broken {
+  box-shadow: inset 0 0 0 2px rgba(189, 130, 70, 0.22);
+}
+
+.bn-synced-block-header {
+  display: flex;
+  position: absolute;
+  right: 0;
+  top: -36px;
+  z-index: 20;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 80px));
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(55, 53, 47, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  white-space: nowrap;
+}
+
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover .bn-synced-block-header,
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within .bn-synced-block-header,
+.bn-synced-block-mirror:hover > .bn-synced-block-header,
+.bn-synced-block-mirror:focus-within > .bn-synced-block-header,
+.bn-synced-block-mirror.is-saving > .bn-synced-block-header,
+.bn-synced-block-mirror.is-error > .bn-synced-block-header,
+.bn-synced-block-mirror.is-broken > .bn-synced-block-header {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.bn-synced-block-title,
+.bn-synced-block-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.bn-synced-block-title {
+  font-weight: 500;
+  color: rgba(55, 53, 47, 0.72);
+}
+
+.bn-synced-block-muted,
+.bn-synced-block-status,
+.bn-synced-block-source-title {
+  font-weight: 400;
+  color: rgba(55, 53, 47, 0.58);
+}
+
+.bn-synced-block-source-title {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bn-synced-block-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.58);
+  cursor: pointer;
+}
+
+.bn-synced-block-icon-btn:hover {
+  background: rgba(55, 53, 47, 0.08);
+}
+
+.bn-synced-block-inner {
+  padding: 0;
+}
+
+.bn-synced-block-inner .bn-container,
+.bn-synced-block-inner .bn-editor {
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.bn-synced-block-inner .bn-editor > .bn-block-group {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.bn-synced-block-inner .bn-editor > .bn-block-group::before,
+.bn-synced-block-inner .bn-editor > .bn-block-group > .bn-block-outer::before,
+.bn-synced-block-inner .bn-editor > .bn-block-group > .bn-block-outer:first-child::before {
+  content: none !important;
+  display: none !important;
+  border-left: 0 !important;
+}
+
+.bn-synced-block-inner .bn-editor > .bn-block-group > .bn-block-outer {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.bn-synced-block-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  color: rgba(55, 53, 47, 0.62);
+  font-size: 13px;
+}
+
+.sync-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 15, 15, 0.18);
+}
+
+.sync-dialog {
+  width: min(440px, calc(100vw - 32px));
+  border-radius: 8px;
+  background: #fffdf7;
+  border: 1px solid rgba(150, 111, 28, 0.28);
+  box-shadow: 0 16px 40px rgba(15, 15, 15, 0.18);
+  padding: 14px;
+}
+
+.sync-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #3b321d;
+}
+
+.sync-dialog-body {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: rgba(55, 53, 47, 0.72);
+}
+
+.sync-dialog-preview {
+  margin: 12px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: #fbf1cf;
+  color: #5d4516;
+  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+}
+
+.sync-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.sync-dialog-actions button,
+.sync-delete-options button {
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.sync-dialog-secondary {
+  background: rgba(55, 53, 47, 0.08);
+  color: #37352f;
+  padding: 7px 10px;
+}
+
+.sync-dialog-primary {
+  background: #d59b25;
+  color: white;
+  padding: 7px 10px;
+}
+
+.sync-delete-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.sync-delete-options button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px;
+  background: #fbf1cf;
+  color: #3b321d;
+  text-align: left;
+}
+
+.sync-delete-options button:hover {
+  background: #f7e6b3;
+}
+
+.sync-delete-options span {
+  color: rgba(55, 53, 47, 0.64);
+  font-size: 12px;
 }
 
 .bn-file-content-block {

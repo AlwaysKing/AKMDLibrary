@@ -18,12 +18,15 @@ import { TextSelection, NodeSelection } from '@tiptap/pm/state';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Extension } from '@tiptap/core';
-import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction } from './blockClipboardState';
+import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction, setPendingSyncedPaste, getPendingSyncedPaste, clearPendingSyncedPaste, type PendingSyncedPaste } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import { MarkBlockSpec } from './MarkBlock';
 import { FileContentBlockSpec } from './FileContentBlock';
+import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec } from './SyncedBlock';
+import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
+import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
 import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
@@ -34,6 +37,7 @@ import { getBlockDragData, markDragHandled } from './blockDragState';
 import { pageMetaCache } from './PageMetaCache';
 import { mentionMetaCache } from './MentionMetaCache';
 import { pagesApi } from '../../api/pages';
+import { syncedBlocksApi } from '../../api/syncedBlocks';
 import { uploadApi } from '../../api/upload';
 import { writeSpaceFile } from '../../api/files';
 import { createMirror } from '../../services/mirrorStore';
@@ -116,11 +120,72 @@ function createEditorSchema(codeTheme: CodeThemeValue) {
       column_list: ColumnListBlockSpec(),
       column: ColumnBlockSpec(),
       fileContent: FileContentBlockSpec(),
+      syncedBlockSource: SyncedBlockSourceSpec(),
+      syncedBlockMirror: SyncedBlockMirrorSpec(),
     },
   });
 }
 
 const URL_RE = /^https?:\/\/.+/;
+
+function newSyncId(): string {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
+function flattenBlocks(blocks: any[]): any[] {
+  const out: any[] = [];
+  for (const block of blocks || []) {
+    out.push(block);
+    if (block.children?.length) out.push(...flattenBlocks(block.children));
+  }
+  return out;
+}
+
+function blocksForIds(editor: any, ids: string[]): any[] {
+  const idSet = new Set(ids);
+  return flattenBlocks(editor.document).filter((block) => idSet.has(block.id));
+}
+
+function hasSyncedBlock(blocks: any[]): boolean {
+  return blocks.some((block) => block.type === 'syncedBlockSource' || block.type === 'syncedBlockMirror');
+}
+
+function parseQuotedCount(block: any): number {
+  try {
+    const quoted = JSON.parse(block?.props?.quoted || '[]');
+    return Array.isArray(quoted) ? quoted.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getDomSelectedBlockIds(container: HTMLElement, editor: any): string[] {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return [];
+  const range = selection.getRangeAt(0);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const editorIds = new Set(flattenBlocks(editor.document).map((b) => b.id));
+  container.querySelectorAll('.bn-block-outer').forEach((outer) => {
+    if (!range.intersectsNode(outer)) return;
+    const blockEl = outer.querySelector('[data-id]');
+    const id = blockEl?.getAttribute('data-id') || '';
+    if (!id || seen.has(id) || !editorIds.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  });
+  return ids;
+}
+
+function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
+  const selected = getSelectedBlockIds();
+  if (selected.length > 0) return selected;
+  const domIds = getDomSelectedBlockIds(container, editor);
+  if (domIds.length > 0) return domIds;
+  const bnSelection = editor.getSelection?.();
+  const bnIds = bnSelection?.blocks?.map((b: any) => b.id).filter(Boolean) || [];
+  return bnIds;
+}
 
 function resolvePageAssetUrl(rawUrl: string | undefined, spaceSlug?: string, pageId?: string): string {
   const url = String(rawUrl || '').trim();
@@ -337,6 +402,59 @@ function getCustomSlashMenuItems(editor: any) {
         }
         const nextBlock = editor.getTextCursorPosition().nextBlock;
         if (nextBlock) editor.setTextCursorPosition(nextBlock, 'end');
+      },
+    },
+    {
+      title: '同步块',
+      subtext: '创建可被其他页面引用的同步内容',
+      key: 'syncedBlockSource',
+      aliases: ['sync', 'synced', '同步块', '同步'],
+      group: '高级区块',
+      icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', stroke: 'currentColor', strokeWidth: 1.45 }}><path d="M5.2 6.2h6.4a3 3 0 0 1 0 6H10" /><path d="M12.8 11.8H6.4a3 3 0 0 1 0-6H8" /><path d="M7 3.8 8.8 5.6 7 7.4" /><path d="M11 10.6 9.2 12.4 11 14.2" /></svg>,
+      onItemClick: () => {
+        const currentBlock = editor.getTextCursorPosition().block;
+        const blockContent = currentBlock.content;
+        const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
+          blockContent[0].type === 'text' && blockContent[0].text === '/';
+        const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
+        const newBlock = {
+          type: 'syncedBlockSource',
+          props: { syncId: newSyncId(), quoted: '[]' },
+          children: [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }],
+        };
+        if (isSlashOnly || isEmpty) {
+          editor.replaceBlocks([currentBlock], [newBlock as any]);
+        } else {
+          editor.insertBlocks([newBlock as any], currentBlock, 'after');
+        }
+      },
+    },
+    {
+      title: '同步块引用',
+      subtext: '引用其他页面的同步块',
+      key: 'syncedBlockMirror',
+      aliases: ['sync ref', 'synced ref', '同步引用'],
+      group: '高级区块',
+      icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', stroke: 'currentColor', strokeWidth: 1.45 }}><path d="M4.5 4.2h6.5a2.5 2.5 0 0 1 0 5H9.5" /><path d="M13.5 13.8H7a2.5 2.5 0 0 1 0-5h1.5" /><path d="M12.5 2.8h2.8v2.8" /><path d="m15.2 2.9-4.4 4.4" /></svg>,
+      onItemClick: () => {
+        const sourcePageId = window.prompt('源页面 ID');
+        if (!sourcePageId) return;
+        const sourceBlockId = window.prompt('源同步块 ID');
+        if (!sourceBlockId) return;
+        const currentBlock = editor.getTextCursorPosition().block;
+        const blockContent = currentBlock.content;
+        const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
+          blockContent[0].type === 'text' && blockContent[0].text === '/';
+        const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
+        const newBlock = {
+          type: 'syncedBlockMirror',
+          props: { syncId: newSyncId(), sourcePageId, sourceBlockId },
+        };
+        if (isSlashOnly || isEmpty) {
+          editor.updateBlock(currentBlock, newBlock as any);
+        } else {
+          editor.insertBlocks([newBlock as any], currentBlock, 'after');
+        }
       },
     },
     {
@@ -1844,6 +1962,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     url: string;
     position: { x: number; y: number };
   } | null>(null);
+  const [syncedPaste, setSyncedPaste] = useState<PendingSyncedPaste | null>(null);
+  const [syncedDelete, setSyncedDelete] = useState<{ block: any; quotedCount: number } | null>(null);
   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
   const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string; type?: 'image' | 'video' } | null>(null);
   const imageReplaceInputRef = useRef<HTMLInputElement | null>(null);
@@ -4482,12 +4602,100 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     return () => container.removeEventListener('copy', handleCopy, true);
   }, [readOnly]);
 
+  const persistEditorNow = useCallback(async () => {
+    const { spaceSlug, pageId } = identityRef.current;
+    await persistFileContentBlocks(editor.document, spaceSlug);
+    const markdown = blocksToMarkdown(editor.document);
+    await createMirror(spaceSlug, pageId, markdown);
+    hasChangesRef.current = false;
+    await flushSync();
+    await useSpaceStore.getState().refreshAll();
+  }, [editor, persistFileContentBlocks]);
+
+  const insertBlocksAtCursor = useCallback((blocks: any[]) => {
+    const currentBlock = editor.getTextCursorPosition().block;
+    const blocksToInsert = blocks.map((b: any) => {
+      const { id, ...rest } = b;
+      return rest;
+    });
+    const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+    if (isEmpty) {
+      editor.replaceBlocks([currentBlock], blocksToInsert as any);
+    } else {
+      editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+    }
+    editor.focus();
+  }, [editor]);
+
+  const handleNormalSyncedPaste = useCallback(async () => {
+    if (!syncedPaste) return;
+    insertBlocksAtCursor(syncedPaste.blocks);
+    clearPendingSyncedPaste();
+    setSyncedPaste(null);
+    await persistEditorNow();
+  }, [insertBlocksAtCursor, persistEditorNow, syncedPaste]);
+
+  const handleCreateSyncedPaste = useCallback(async () => {
+    if (!syncedPaste) return;
+    const { spaceSlug, pageId } = identityRef.current;
+    const sourceBlockId = newSyncId();
+    const mirrorSyncId = newSyncId();
+    try {
+      const wrapped = await syncedBlocksApi.wrapSource(spaceSlug, {
+        sourcePageId: syncedPaste.sourcePageId,
+        sourceMd: syncedPaste.sourceMarkdown,
+        newSyncId: sourceBlockId,
+        mirrorPageId: pageId,
+        mirrorSyncId,
+      });
+      insertBlocksAtCursor([{
+        type: 'syncedBlockMirror',
+        props: {
+          syncId: mirrorSyncId,
+          sourcePageId: wrapped.sourcePageId,
+          sourceBlockId: wrapped.sourceBlockId,
+          pageId,
+        },
+      }]);
+      clearPendingSyncedPaste();
+      setSyncedPaste(null);
+      await persistEditorNow();
+    } catch (err) {
+      console.error('[syncedBlock] wrap source failed:', err);
+      showToast('无法创建同步块：源内容已变化');
+    }
+  }, [insertBlocksAtCursor, persistEditorNow, syncedPaste]);
+
+  const handleSyncedDeleteStrategy = useCallback(async (strategy: 'cascade' | 'placeholder' | 'inline') => {
+    if (!syncedDelete?.block) return;
+    const { spaceSlug, pageId } = identityRef.current;
+    const block = syncedDelete.block;
+    setSyncedDelete(null);
+    try {
+      await syncedBlocksApi.delete(spaceSlug, pageId, block.props?.syncId, strategy);
+      removeBlocksEnhanced(editor, [{ id: block.id } as any]);
+      await persistEditorNow();
+    } catch (err) {
+      console.error('[syncedBlock] delete failed:', err);
+      showToast('删除同步块失败');
+    }
+  }, [editor, persistEditorNow, syncedDelete]);
+
   // Paste handler — capture phase to intercept before BlockNote/ProseMirror processes
   useEffect(() => {
     const container = editorRef.current;
     if (!container || readOnly) return;
 
     const handlePaste = (e: ClipboardEvent) => {
+      const pending = getPendingSyncedPaste();
+      const { spaceSlug, pageId } = identityRef.current;
+      if (pending && pending.sourceSpaceSlug === spaceSlug && pending.sourcePageId !== pageId) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSyncedPaste(pending);
+        return;
+      }
+
       const text = e.clipboardData?.getData('text/plain')?.trim();
       if (!text) return;
 
@@ -4766,7 +4974,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
       if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
-        const ids = getSelectedBlockIds();
+        const ids = getCopyCandidateIds(container, editor);
         if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -4774,11 +4982,22 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const isCut = e.key === 'x';
 
         // Collect selected block data (deep clone to avoid references to editor blocks)
-        const selectedBlocks = JSON.parse(JSON.stringify(
-          editor.document.filter((b: any) => ids.includes(b.id))
-        ));
+        const selectedBlocks = JSON.parse(JSON.stringify(blocksForIds(editor, ids)));
+        if (selectedBlocks.length === 0) return;
         const markdown = blocksToMarkdown(selectedBlocks as any);
         setClipboardData(selectedBlocks, markdown, isCut);
+        if (!isCut && !hasSyncedBlock(selectedBlocks)) {
+          const { spaceSlug, pageId } = identityRef.current;
+          setPendingSyncedPaste({
+            sourceSpaceSlug: spaceSlug,
+            sourcePageId: pageId,
+            sourceBlockIds: selectedBlocks.map((b: any) => b.id),
+            sourceMarkdown: markdown,
+            blocks: selectedBlocks,
+          });
+        } else {
+          clearPendingSyncedPaste();
+        }
 
         // Also write to system clipboard for external paste
         navigator.clipboard.writeText(markdown).catch(() => {});
@@ -4796,6 +5015,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       // Cmd+V: paste blocks from internal clipboard
       if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        const pending = getPendingSyncedPaste();
+        const { spaceSlug, pageId } = identityRef.current;
+        if (pending && pending.sourceSpaceSlug === spaceSlug && pending.sourcePageId !== pageId) {
+          return;
+        }
         const clipData = getClipboardData();
         if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
 
@@ -4894,6 +5118,20 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (e.key === 'Escape' && hasOpenMenu) return;
 
       const ids = getSelectedBlockIds();
+      if ((e.key === 'Backspace' || e.key === 'Delete') && ids.length <= 1) {
+        const candidate = ids.length === 1
+          ? blocksForIds(editor, ids)[0]
+          : editor.getTextCursorPosition?.().block;
+        if (candidate?.type === 'syncedBlockSource') {
+          const quotedCount = parseQuotedCount(candidate);
+          if (quotedCount > 0) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            setSyncedDelete({ block: candidate, quotedCount });
+            return;
+          }
+        }
+      }
       if (ids.length > 0) {
         if (e.key === 'Escape') {
           e.preventDefault();
@@ -5323,9 +5561,174 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const container = editorRef.current;
     if (!container) return;
 
+    const clearSyncSourceSideMenuMode = () => {
+      document.body.classList.remove('sync-source-side-menu-mode');
+    };
+
+    const isSyncedBlockSourceOuter = (element: Element) => {
+      return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource');
+    };
+
+    const findSyncedBlockSourceOuter = (element: Element | null): HTMLElement | null => {
+      let current: Element | null = element;
+      while (current) {
+        if (current.classList?.contains('bn-block-outer') && isSyncedBlockSourceOuter(current)) {
+          return current as HTMLElement;
+        }
+        current = current.parentElement;
+      }
+      return null;
+    };
+
+    const selectionIsInside = (element: HTMLElement | null) => {
+      if (!element) return false;
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return false;
+      const anchor = selection.anchorNode;
+      const focus = selection.focusNode;
+      return !!((anchor && element.contains(anchor)) || (focus && element.contains(focus)));
+    };
+
+    const setSyncSourceActive = (syncSourceOuter: HTMLElement, active: boolean) => {
+      if (active) syncSourceOuter.dataset.syncSourceActive = 'true';
+      else delete syncSourceOuter.dataset.syncSourceActive;
+    };
+
+    const syncSourceMenu = document.createElement('div');
+    syncSourceMenu.className = 'bn-sync-source-floating-menu';
+    document.body.appendChild(syncSourceMenu);
+
+    let hoveredSyncSourceOuter: HTMLElement | null = null;
+
+    const getBlockIdFromOuter = (outer: HTMLElement | null) => {
+      return outer?.querySelector(':scope > .bn-block')?.getAttribute('data-id') || null;
+    };
+
+    const syncSourceMenuHasButtons = () => {
+      return !!syncSourceMenu.querySelector('.bn-side-menu .bn-button');
+    };
+
+    const cloneNativeSideMenu = () => {
+      const nativeSideMenu = document.querySelector(
+        '[data-floating-ui-focusable] > .bn-side-menu'
+      ) as HTMLElement | null;
+      if (!nativeSideMenu) return false;
+
+      const clone = nativeSideMenu.cloneNode(true) as HTMLElement;
+      clone.setAttribute('data-sync-source-menu', 'true');
+      clone.querySelectorAll('button').forEach((button) => {
+        button.setAttribute('type', 'button');
+      });
+      syncSourceMenu.replaceChildren(clone);
+      return true;
+    };
+
+    const showSyncSourceMenu = (syncSourceOuter: HTMLElement) => {
+      const editorBlockGroup = container.querySelector(':scope .bn-editor > .bn-block-group') as HTMLElement | null;
+      const firstChildBlock = syncSourceOuter.querySelector(
+        ':scope > .bn-block > .bn-block-group > .bn-block-outer > .bn-block'
+      ) as HTMLElement | null;
+      const firstChildContent = firstChildBlock?.querySelector(
+        ':scope > .bn-block-content, :scope > .react-renderer'
+      ) as HTMLElement | null;
+      if (!editorBlockGroup || !firstChildBlock) {
+        hideSyncSourceMenu();
+        return;
+      }
+      if (!syncSourceMenuHasButtons()) cloneNativeSideMenu();
+
+      const blockRect = firstChildBlock.getBoundingClientRect();
+      const firstRect = (firstChildContent || firstChildBlock).getBoundingClientRect();
+      const menuRect = syncSourceMenu.getBoundingClientRect();
+      const menuWidth = menuRect.width || 42;
+      hoveredSyncSourceOuter = syncSourceOuter;
+      document.body.classList.add('sync-source-side-menu-mode');
+      document.body.classList.remove('side-menu-visible');
+      syncSourceMenu.style.left = `${blockRect.left - menuWidth - 14}px`;
+      syncSourceMenu.style.top = `${firstRect.top}px`;
+      syncSourceMenu.dataset.visible = 'true';
+    };
+
+    function hideSyncSourceMenu() {
+      hoveredSyncSourceOuter = null;
+      syncSourceMenu.dataset.visible = 'false';
+      clearSyncSourceSideMenuMode();
+    }
+
+    const syncSourceMenuMouseDown = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const syncSourceMenuClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const target = event.target as HTMLElement | null;
+      const button = target?.closest('button');
+      const blockId = getBlockIdFromOuter(hoveredSyncSourceOuter);
+      if (!button || !blockId) return;
+
+      if (button.getAttribute('draggable') === 'true') {
+        setBlockSelection([blockId]);
+        return;
+      }
+
+      const inserted = editor.insertBlocks([{ type: 'paragraph' }], blockId, 'after');
+      if (inserted?.[0]) {
+        editor.focus();
+        editor.setTextCursorPosition(inserted[0], 'end');
+        setTimeout(() => {
+          try {
+            (editor as any).suggestionMenu?.openSuggestionMenu?.('/');
+          } catch {
+            // fallback noop
+          }
+        }, 50);
+      }
+    };
+    syncSourceMenu.addEventListener('mousedown', syncSourceMenuMouseDown);
+    syncSourceMenu.addEventListener('click', syncSourceMenuClick);
+
     const handleSideMenuZone = (e: MouseEvent) => {
       // When drag menu is open, keep side menu visible regardless of mouse position
       if (isDragMenuOpen()) return;
+
+      const syncSourceMenuRect = syncSourceMenu.getBoundingClientRect();
+      if (
+        syncSourceMenu.dataset.visible === 'true' &&
+        e.clientX >= syncSourceMenuRect.left &&
+        e.clientX <= syncSourceMenuRect.right &&
+        e.clientY >= syncSourceMenuRect.top &&
+        e.clientY <= syncSourceMenuRect.bottom
+      ) {
+        return;
+      }
+
+      const pointedSyncSourceOuter = (() => {
+        const elements = document.elementsFromPoint(e.clientX, e.clientY);
+        for (const element of elements) {
+          if (!container.contains(element)) continue;
+          const blockOuter = (element as HTMLElement).closest('.bn-block-outer');
+          const syncOuter = findSyncedBlockSourceOuter(blockOuter);
+          if (syncOuter) return syncOuter;
+        }
+        return null;
+      })();
+      const activeElementAtPoint = document.activeElement;
+      const pointedSyncSourceIsActive = !!(
+        pointedSyncSourceOuter &&
+        (selectionIsInside(pointedSyncSourceOuter) ||
+          (activeElementAtPoint && pointedSyncSourceOuter.contains(activeElementAtPoint)))
+      );
+
+      if (pointedSyncSourceOuter) {
+        setSyncSourceActive(pointedSyncSourceOuter, pointedSyncSourceIsActive);
+      }
+
+      if (pointedSyncSourceOuter && !pointedSyncSourceIsActive) {
+        showSyncSourceMenu(pointedSyncSourceOuter);
+        return;
+      }
 
       // If mouse is over the side menu floating element, keep it visible
       const floatingMenu = container.querySelector('[data-floating-ui-focusable]:has(> .bn-side-menu)') as HTMLElement | null;
@@ -5368,8 +5771,35 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       if (!hoveredOuter) {
         document.body.classList.remove('side-menu-visible');
+        clearSyncSourceSideMenuMode();
         return;
       }
+
+      const syncSourceOuter = findSyncedBlockSourceOuter(hoveredOuter);
+      const activeElement = document.activeElement;
+      const syncSourceIsActive = !!(
+        syncSourceOuter &&
+        (selectionIsInside(syncSourceOuter) || (activeElement && syncSourceOuter.contains(activeElement)))
+      );
+
+      if (syncSourceOuter) {
+        setSyncSourceActive(syncSourceOuter, syncSourceIsActive);
+      }
+
+      if (syncSourceOuter && !syncSourceIsActive) {
+        const firstChildBlock = syncSourceOuter.querySelector(':scope > .bn-block > .bn-block-group > .bn-block-outer > .bn-block') as HTMLElement | null;
+        const syncRect = (firstChildBlock || syncSourceOuter).getBoundingClientRect();
+        const leftBound = syncRect.left - 150;
+        const rightBound = syncRect.left + syncRect.width * 0.7;
+        const verticalHit = e.clientY >= syncRect.top && e.clientY <= syncRect.bottom;
+
+        if (verticalHit && e.clientX >= leftBound && e.clientX <= rightBound) {
+          showSyncSourceMenu(syncSourceOuter);
+          return;
+        }
+      }
+
+      hideSyncSourceMenu();
 
       // Get block content boundaries
       const blockContent = hoveredOuter.querySelector('[data-id]') || hoveredOuter;
@@ -5388,7 +5818,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     document.addEventListener('mousemove', handleSideMenuZone);
 
-    return () => document.removeEventListener('mousemove', handleSideMenuZone);
+    return () => {
+      document.removeEventListener('mousemove', handleSideMenuZone);
+      syncSourceMenu.removeEventListener('mousedown', syncSourceMenuMouseDown);
+      syncSourceMenu.removeEventListener('click', syncSourceMenuClick);
+      syncSourceMenu.remove();
+      hideSyncSourceMenu();
+    };
   }, [editor, readOnly]);
 
   useEffect(() => {
@@ -5866,6 +6302,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           onInsertBookmark={handleInsertBookmark}
           onInsertMention={handleInsertMention}
           onClose={() => setPasteMenu(null)}
+        />
+      )}
+      {syncedPaste && (
+        <SyncedBlockPasteDialog
+          sourceMarkdown={syncedPaste.sourceMarkdown}
+          onCreateSynced={handleCreateSyncedPaste}
+          onPasteNormal={handleNormalSyncedPaste}
+          onClose={() => setSyncedPaste(null)}
+        />
+      )}
+      {syncedDelete && (
+        <SyncedBlockDeleteDialog
+          quotedCount={syncedDelete.quotedCount}
+          onSelect={handleSyncedDeleteStrategy}
+          onClose={() => setSyncedDelete(null)}
         />
       )}
       <input

@@ -45,6 +45,10 @@ func (s *PageService) markGitDirty(spaceSlug string) {
 	s.gitSync.MarkDirty(spaceSlug)
 }
 
+func (s *PageService) MarkGitDirty(spaceSlug string) {
+	s.markGitDirty(spaceSlug)
+}
+
 // resolveSpaceDir finds the actual directory for a space slug.
 // Returns the full path and the actual directory name.
 func (s *PageService) resolveSpaceDir(spaceSlug string) (string, string) {
@@ -1897,4 +1901,3 @@ func (s *PageService) checkCacheNeedsMigration(db *sql.DB) (bool, error) {
 	}
 	return false, nil
 }
-

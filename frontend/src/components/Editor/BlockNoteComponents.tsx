@@ -129,6 +129,62 @@ export function clearBlockSelection() {
   setBlockSelection(null);
 }
 
+function getBlockIdFromOuter(blockOuter: Element | null): string | null {
+  if (!blockOuter) return null;
+  const blockContainer = blockOuter.querySelector(':scope > [data-node-type="blockContainer"]') ||
+    blockOuter.querySelector(':scope > .bn-block') ||
+    blockOuter.querySelector('[data-node-type="blockContainer"]') ||
+    blockOuter;
+  return blockContainer.getAttribute('data-id') || blockOuter.getAttribute('data-id');
+}
+
+function isSyncedBlockSourceOuter(element: Element): boolean {
+  return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource');
+}
+
+function findSyncedBlockSourceOuter(element: Element | null): Element | null {
+  let current: Element | null = element;
+  while (current) {
+    if (current.classList?.contains('bn-block-outer') && isSyncedBlockSourceOuter(current)) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function getInactiveSyncedSourceOuter(blockOuter: Element | null): Element | null {
+  if (!blockOuter) return null;
+  const syncOuter = findSyncedBlockSourceOuter(blockOuter);
+  if (!syncOuter) return null;
+  const active = document.activeElement;
+  if (active && syncOuter.contains(active)) return null;
+  return syncOuter;
+}
+
+function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
+  const sideMenu = button.closest('.bn-side-menu');
+  if (!sideMenu) return null;
+
+  const localOuter = sideMenu.closest('.bn-block-outer');
+  const localSyncOuter = getInactiveSyncedSourceOuter(localOuter);
+  if (localSyncOuter) return getBlockIdFromOuter(localSyncOuter);
+  const localId = getBlockIdFromOuter(localOuter);
+  if (localId) return localId;
+
+  const wrapper = sideMenu.closest('[data-floating-ui-focusable]');
+  if (!wrapper) return null;
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const elements = document.elementsFromPoint(wrapperRect.right + 20, wrapperRect.top + 2);
+  for (const el of elements) {
+    const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
+    if (!blockOuter) continue;
+    const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
+    return getBlockIdFromOuter(syncOuter || blockOuter);
+  }
+  return null;
+}
+
 const SideMenuButton: React.FC<{
   className?: string;
   onClick?: (e: React.MouseEvent) => void;
@@ -161,12 +217,7 @@ const SideMenuButton: React.FC<{
       e.stopPropagation();
 
       // Find the block this side menu belongs to
-      const sideMenu = buttonRef.current?.closest('.bn-side-menu');
-      const blockOuter = sideMenu?.closest('.bn-block-outer');
-      if (!blockOuter) return;
-
-      const blockContainer = blockOuter.querySelector('[data-node-type="blockContainer"]') || blockOuter;
-      const blockId = blockContainer.getAttribute('data-id') || blockOuter.getAttribute('data-id');
+      const blockId = buttonRef.current ? resolveSideMenuTargetBlockId(buttonRef.current) : null;
       if (!blockId) return;
 
       // Insert a new empty paragraph block after the current block
@@ -199,21 +250,7 @@ const SideMenuButton: React.FC<{
       const sideMenu = btn.closest('.bn-side-menu');
       if (!sideMenu) return;
 
-      const wrapper = sideMenu.closest('[data-floating-ui-focusable]');
-      if (!wrapper) return;
-
-      const wrapperRect = wrapper.getBoundingClientRect();
-      const elements = document.elementsFromPoint(wrapperRect.right + 20, wrapperRect.top + 2);
-      let targetBlockId: string | null = null;
-      for (const el of elements) {
-        const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
-        if (blockOuter) {
-          const bc = blockOuter.querySelector('[data-node-type="blockContainer"]') || blockOuter;
-          targetBlockId = bc.getAttribute('data-id') || blockOuter.getAttribute('data-id');
-          break;
-        }
-      }
-
+      const targetBlockId = resolveSideMenuTargetBlockId(btn);
       if (!targetBlockId) return;
 
       // Don't override multi-selection if block is already selected
@@ -231,21 +268,7 @@ const SideMenuButton: React.FC<{
       multiDragRef.current = null;
 
       // Find block ID the same way as handleNativeClick (side menu is in a floating portal)
-      const sideMenu = btn.closest('.bn-side-menu');
-      if (!sideMenu) return;
-      const wrapper = sideMenu.closest('[data-floating-ui-focusable]');
-      if (!wrapper) return;
-      const wrapperRect = wrapper.getBoundingClientRect();
-      const elements = document.elementsFromPoint(wrapperRect.right + 20, wrapperRect.top + 2);
-      let blockId: string | null = null;
-      for (const el of elements) {
-        const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
-        if (blockOuter) {
-          const bc = blockOuter.querySelector('[data-node-type="blockContainer"]') || blockOuter;
-          blockId = bc.getAttribute('data-id') || blockOuter.getAttribute('data-id');
-          break;
-        }
-      }
+      const blockId = resolveSideMenuTargetBlockId(btn);
       if (!blockId) return;
 
       // ★ Always save block data for sidebar drop detection (single & multi block)
