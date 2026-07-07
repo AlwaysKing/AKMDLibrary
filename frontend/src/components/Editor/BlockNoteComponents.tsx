@@ -60,6 +60,10 @@ const SideMenuRoot: React.FC<{ className?: string; children?: ReactNode; [key: s
 let blockSelectionStyleEl: HTMLStyleElement | null = null;
 let currentSelectedIds: string[] = [];
 let dragMenuOpen = false;
+let syntheticDragHandleTarget: {
+  blockId: string;
+  rect: { left: number; right: number; top: number; bottom: number; width: number; height: number };
+} | null = null;
 
 export function isDragMenuOpen(): boolean {
   return dragMenuOpen;
@@ -67,6 +71,13 @@ export function isDragMenuOpen(): boolean {
 
 export function getSelectedBlockIds(): string[] {
   return [...currentSelectedIds];
+}
+
+export function setSyntheticDragHandleTarget(
+  blockId: string,
+  rect: { left: number; right: number; top: number; bottom: number; width: number; height: number }
+) {
+  syntheticDragHandleTarget = { blockId, rect };
 }
 
 function setBlockSelection(blockIds: string[] | null) {
@@ -534,6 +545,7 @@ const GenericMenuRoot: React.FC<{
       document.body.classList.add('drag-menu-open');
     } else {
       document.body.classList.remove('drag-menu-open');
+      syntheticDragHandleTarget = null;
     }
     onOpenChange?.(open);
   }, [onOpenChange]);
@@ -581,19 +593,22 @@ const GenericMenuDropdown: React.FC<{ className?: string; children?: ReactNode; 
   const dragHandleStyle = useMemo(() => {
     if (!isOpen || sub) return null;
 
-    // Find the currently visible drag handle button
-    const allHandles = document.querySelectorAll('[aria-label="打开菜单"]');
-    let dragHandle: HTMLElement | null = null;
-    for (const h of allHandles) {
-      const r = h.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) {
-        dragHandle = h as HTMLElement;
-        break;
+    let handleRect = syntheticDragHandleTarget?.rect || null;
+    if (!handleRect) {
+      // Find the currently visible drag handle button
+      const allHandles = document.querySelectorAll('[aria-label="打开菜单"]');
+      let dragHandle: HTMLElement | null = null;
+      for (const h of allHandles) {
+        if ((h as HTMLElement).closest('[data-sync-source-menu="true"]')) continue;
+        const r = h.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          dragHandle = h as HTMLElement;
+          break;
+        }
       }
+      if (!dragHandle) return null;
+      handleRect = dragHandle.getBoundingClientRect();
     }
-    if (!dragHandle) return null;
-
-    const handleRect = dragHandle.getBoundingClientRect();
     const menuWidth = 220; // drag handle menu width (matches CSS min-width)
     const gap = 4;
 
@@ -1727,8 +1742,11 @@ export function findBlockDeep(document: any[], blockId: string): any {
 }
 
 function getDragHandleBlockId(): string | null {
+  if (syntheticDragHandleTarget) return syntheticDragHandleTarget.blockId;
+
   const allHandles = document.querySelectorAll('[aria-label="打开菜单"]');
   for (const h of allHandles) {
+    if ((h as HTMLElement).closest('[data-sync-source-menu="true"]')) continue;
     const r = h.getBoundingClientRect();
     if (r.width > 0 && r.height > 0) {
       const wrapper = h.closest('[data-floating-ui-focusable]');

@@ -708,12 +708,6 @@ body.sync-source-side-menu-mode [data-floating-ui-focusable]:has(> .bn-side-menu
   left: var(--bn-image-side-menu-left, -14px) !important;
 }
 
-body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
-  opacity: 1 !important;
-  pointer-events: auto !important;
-  transition: none !important;
-}
-
 .bn-side-menu {
   display: flex !important;
   align-items: center !important;
@@ -3264,7 +3258,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   padding: 0 !important;
 }
 
-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) {
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]),
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) {
   position: relative;
   padding: 0 !important;
 }
@@ -3339,7 +3334,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   border-left: 0 !important;
 }
 
-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group::after {
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"])::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after {
   content: '';
   position: absolute;
   inset: -2px 0;
@@ -3350,7 +3346,10 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   transition: opacity 0.12s ease;
 }
 
-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within > .bn-block-group::after {
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover::after,
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after {
   opacity: 1;
 }
 

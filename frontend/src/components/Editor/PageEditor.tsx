@@ -11,7 +11,7 @@ import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
-import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, GROUP_ORDER, ColorListContent, findBlockDeep, SLASH_MENU_ENGLISH } from './BlockNoteComponents';
+import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, setSyntheticDragHandleTarget, GROUP_ORDER, ColorListContent, findBlockDeep, SLASH_MENU_ENGLISH } from './BlockNoteComponents';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection, NodeSelection } from '@tiptap/pm/state';
@@ -5608,6 +5608,66 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       return !!syncSourceMenu.querySelector('.bn-side-menu .bn-button');
     };
 
+    const rectContainsPoint = (
+      rect: { left: number; right: number; top: number; bottom: number } | null,
+      x: number,
+      y: number
+    ) => {
+      return !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    };
+
+    const getSyncSourceMenuRect = () => {
+      const sideMenu = syncSourceMenu.querySelector('.bn-side-menu') as HTMLElement | null;
+      const rect = (sideMenu || syncSourceMenu).getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 ? rect : null;
+    };
+
+    type SyncHoverRect = {
+      left: number;
+      right: number;
+      top: number;
+      bottom: number;
+      width: number;
+      height: number;
+    };
+
+    const getSyncSourceHoverRect = (syncSourceOuter: HTMLElement | null): SyncHoverRect | null => {
+      if (!syncSourceOuter) return null;
+      const childOuters = Array.from(
+        syncSourceOuter.querySelectorAll(':scope > .bn-block > .bn-block-group > .bn-block-outer')
+      ) as HTMLElement[];
+      const rects = childOuters
+        .map((childOuter) => {
+          const childBlock = childOuter.querySelector(':scope > .bn-block') as HTMLElement | null;
+          const visibleContent = childBlock?.querySelector(
+            ':scope > .bn-block-content, :scope > .react-renderer > .bn-block-content'
+          ) as HTMLElement | null;
+          return (visibleContent || childBlock || childOuter).getBoundingClientRect();
+        })
+        .filter((rect) => rect.width > 0 && rect.height > 0) as DOMRect[];
+
+      if (!rects.length) return null;
+      const initial = rects[0];
+      return rects.slice(1).reduce<SyncHoverRect>(
+        (acc, rect) => ({
+          left: Math.min(acc.left, rect.left),
+          right: Math.max(acc.right, rect.right),
+          top: Math.min(acc.top, rect.top),
+          bottom: Math.max(acc.bottom, rect.bottom),
+          width: Math.max(acc.right, rect.right) - Math.min(acc.left, rect.left),
+          height: Math.max(acc.bottom, rect.bottom) - Math.min(acc.top, rect.top),
+        }),
+        {
+          left: initial.left,
+          right: initial.right,
+          top: initial.top,
+          bottom: initial.bottom,
+          width: initial.width,
+          height: initial.height,
+        }
+      );
+    };
+
     const cloneNativeSideMenu = () => {
       const nativeSideMenu = document.querySelector(
         '[data-floating-ui-focusable] > .bn-side-menu'
@@ -5625,13 +5685,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     const showSyncSourceMenu = (syncSourceOuter: HTMLElement) => {
       const editorBlockGroup = container.querySelector(':scope .bn-editor > .bn-block-group') as HTMLElement | null;
+      const hoverRect = getSyncSourceHoverRect(syncSourceOuter);
       const firstChildBlock = syncSourceOuter.querySelector(
         ':scope > .bn-block > .bn-block-group > .bn-block-outer > .bn-block'
       ) as HTMLElement | null;
       const firstChildContent = firstChildBlock?.querySelector(
         ':scope > .bn-block-content, :scope > .react-renderer'
       ) as HTMLElement | null;
-      if (!editorBlockGroup || !firstChildBlock) {
+      if (!editorBlockGroup || !firstChildBlock || !hoverRect) {
         hideSyncSourceMenu();
         return;
       }
@@ -5670,6 +5731,19 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       if (button.getAttribute('draggable') === 'true') {
         setBlockSelection([blockId]);
+        const buttonRect = button.getBoundingClientRect();
+        setSyntheticDragHandleTarget(blockId, {
+          left: buttonRect.left,
+          right: buttonRect.right,
+          top: buttonRect.top,
+          bottom: buttonRect.bottom,
+          width: buttonRect.width,
+          height: buttonRect.height,
+        });
+        const nativeDragHandle = Array.from(document.querySelectorAll('[aria-label="打开菜单"]')).find((handle) => {
+          return !(handle as HTMLElement).closest('[data-sync-source-menu="true"]');
+        }) as HTMLElement | undefined;
+        nativeDragHandle?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         return;
       }
 
@@ -5693,24 +5767,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // When drag menu is open, keep side menu visible regardless of mouse position
       if (isDragMenuOpen()) return;
 
-      const syncSourceMenuRect = syncSourceMenu.getBoundingClientRect();
-      if (
-        syncSourceMenu.dataset.visible === 'true' &&
-        e.clientX >= syncSourceMenuRect.left &&
-        e.clientX <= syncSourceMenuRect.right &&
-        e.clientY >= syncSourceMenuRect.top &&
-        e.clientY <= syncSourceMenuRect.bottom
-      ) {
-        return;
-      }
-
       const pointedSyncSourceOuter = (() => {
         const elements = document.elementsFromPoint(e.clientX, e.clientY);
         for (const element of elements) {
           if (!container.contains(element)) continue;
           const blockOuter = (element as HTMLElement).closest('.bn-block-outer');
           const syncOuter = findSyncedBlockSourceOuter(blockOuter);
-          if (syncOuter) return syncOuter;
+          const hoverRect = getSyncSourceHoverRect(syncOuter);
+          if (
+            syncOuter &&
+            hoverRect &&
+            e.clientX >= hoverRect.left &&
+            e.clientX <= hoverRect.right &&
+            e.clientY >= hoverRect.top &&
+            e.clientY <= hoverRect.bottom
+          ) {
+            return syncOuter;
+          }
         }
         return null;
       })();
@@ -5730,13 +5803,27 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         return;
       }
 
-      // If mouse is over the side menu floating element, keep it visible
-      const floatingMenu = container.querySelector('[data-floating-ui-focusable]:has(> .bn-side-menu)') as HTMLElement | null;
-      if (floatingMenu) {
-        const menuRect = floatingMenu.getBoundingClientRect();
-        if (e.clientX >= menuRect.left && e.clientX <= menuRect.right &&
-            e.clientY >= menuRect.top && e.clientY <= menuRect.bottom) {
-          document.body.classList.add('side-menu-visible');
+      if (syncSourceMenu.dataset.visible === 'true') {
+        const activeOuterRect = getSyncSourceHoverRect(hoveredSyncSourceOuter);
+        const menuRect = getSyncSourceMenuRect();
+        const bridgeRect = activeOuterRect && menuRect
+          ? {
+              left: Math.min(menuRect.left, activeOuterRect.left),
+              right: Math.max(menuRect.right, activeOuterRect.left),
+              top: menuRect.top - 4,
+              bottom: menuRect.bottom + 4,
+            }
+          : null;
+        const overActiveOuter = rectContainsPoint(activeOuterRect, e.clientX, e.clientY);
+        const overSyncMenu = rectContainsPoint(menuRect, e.clientX, e.clientY);
+        const overMenuBridge = rectContainsPoint(bridgeRect, e.clientX, e.clientY);
+        if (overSyncMenu || overMenuBridge) {
+          document.body.classList.remove('side-menu-visible');
+          return;
+        }
+        if (!overActiveOuter) {
+          hideSyncSourceMenu();
+          document.body.classList.remove('side-menu-visible');
           return;
         }
       }
@@ -5787,16 +5874,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
 
       if (syncSourceOuter && !syncSourceIsActive) {
-        const firstChildBlock = syncSourceOuter.querySelector(':scope > .bn-block > .bn-block-group > .bn-block-outer > .bn-block') as HTMLElement | null;
-        const syncRect = (firstChildBlock || syncSourceOuter).getBoundingClientRect();
-        const leftBound = syncRect.left - 150;
-        const rightBound = syncRect.left + syncRect.width * 0.7;
-        const verticalHit = e.clientY >= syncRect.top && e.clientY <= syncRect.bottom;
-
-        if (verticalHit && e.clientX >= leftBound && e.clientX <= rightBound) {
-          showSyncSourceMenu(syncSourceOuter);
-          return;
-        }
+        hideSyncSourceMenu();
+        document.body.classList.remove('side-menu-visible');
+        return;
       }
 
       hideSyncSourceMenu();
@@ -5808,8 +5888,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // Notion's hover zone: left boundary = blockLeft - 150px, right boundary = blockLeft + blockWidth * 0.7
       const leftBound = contentRect.left - 150;
       const rightBound = contentRect.left + contentRect.width * 0.7;
+      const verticalHit = e.clientY >= contentRect.top && e.clientY <= contentRect.bottom;
 
-      if (e.clientX >= leftBound && e.clientX <= rightBound) {
+      if (verticalHit && e.clientX >= leftBound && e.clientX <= rightBound) {
         document.body.classList.add('side-menu-visible');
       } else {
         document.body.classList.remove('side-menu-visible');
