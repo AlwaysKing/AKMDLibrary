@@ -313,7 +313,7 @@ h4[contenteditable],
   display: block;
   width: 100%;
   border-left: 3px solid rgba(55, 53, 47, 0.35);
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   background: rgba(55, 53, 47, 0.06);
   padding: 10px 14px;
@@ -680,6 +680,12 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu) {
 }
 
 body.sync-source-side-menu-mode [data-floating-ui-focusable]:has(> .bn-side-menu) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+
+body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-block-type="syncedBlockSource"]) {
   opacity: 0 !important;
   pointer-events: none !important;
   transition: none !important;
@@ -2969,7 +2975,7 @@ a.is-internal-link {
 
 .bn-image-lightbox {
   position: fixed;
-  inset: 0;
+  inset: -0.5px -0.5px -0.5px -0.5px;
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -3226,6 +3232,14 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   margin-left: 0 !important;
 }
 
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource) {
+  pointer-events: none !important;
+}
+
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource) > .bn-block > .bn-block-group > .bn-block-outer {
+  pointer-events: auto !important;
+}
+
 .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)::before,
 .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)::before {
   content: none !important;
@@ -3338,8 +3352,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after {
   content: '';
   position: absolute;
-  inset: -2px 0;
-  border: 2px solid rgba(189, 130, 70, 0.22);
+  inset: -0.5px -0.5px 0 -0.5px;
+  border: 2px solid rgba(189, 130, 70, 0.36);
   border-radius: 8px;
   pointer-events: none;
   opacity: 0;
@@ -3349,7 +3363,9 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover::after,
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover::after,
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within::after,
-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after {
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource[data-sync-source-active="true"])::after,
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"][data-sync-source-active="true"])::after {
   opacity: 1;
 }
 
@@ -3395,7 +3411,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 }
 
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover .bn-synced-block-header,
-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within .bn-synced-block-header,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover .bn-synced-block-header,
 .bn-synced-block-mirror:hover > .bn-synced-block-header,
 .bn-synced-block-mirror:focus-within > .bn-synced-block-header,
 .bn-synced-block-mirror.is-saving > .bn-synced-block-header,

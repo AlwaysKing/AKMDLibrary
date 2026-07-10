@@ -168,6 +168,7 @@ function getInactiveSyncedSourceOuter(blockOuter: Element | null): Element | nul
   if (!blockOuter) return null;
   const syncOuter = findSyncedBlockSourceOuter(blockOuter);
   if (!syncOuter) return null;
+  if (syncOuter.querySelector('.react-renderer.node-syncedBlockSource[data-sync-source-active="true"]')) return null;
   const active = document.activeElement;
   if (active && syncOuter.contains(active)) return null;
   return syncOuter;
@@ -1756,8 +1757,10 @@ function getDragHandleBlockId(): string | null {
       for (const el of elements) {
         const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
         if (blockOuter) {
-          const bc = blockOuter.querySelector('[data-node-type="blockContainer"]') || blockOuter;
-          return bc.getAttribute('data-id') || blockOuter.getAttribute('data-id') || null;
+          const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
+          const targetOuter = syncOuter || blockOuter;
+          const bc = targetOuter.querySelector('[data-node-type="blockContainer"]') || targetOuter;
+          return bc.getAttribute('data-id') || targetOuter.getAttribute('data-id') || null;
         }
       }
     }
