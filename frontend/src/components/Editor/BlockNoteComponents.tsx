@@ -100,6 +100,10 @@ function setBlockSelection(blockIds: string[] | null) {
         border-radius: 4px;
         pointer-events: none;
       }
+      .bn-block-outer:has(> [data-id="${id}"] > .react-renderer.node-syncedBlockSource) > [data-id="${id}"]::after,
+      .bn-block-outer:has(> [data-id="${id}"] > .react-renderer.node-syncedBlockMirror) > [data-id="${id}"]::after {
+        opacity: 1;
+      }
       .bn-block-outer:has(> [data-id="${id}"] [data-content-type="image"]) [data-content-type="image"] .bn-file-block-content-wrapper::after,
       .bn-block-outer:has(> [data-id="${id}"] [data-content-type="video"]) [data-content-type="video"] .bn-file-block-content-wrapper::after {
         content: '' !important;
@@ -153,10 +157,18 @@ function isSyncedBlockSourceOuter(element: Element): boolean {
   return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource');
 }
 
-function findSyncedBlockSourceOuter(element: Element | null): Element | null {
+function isSyncedBlockMirrorOuter(element: Element): boolean {
+  return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockMirror');
+}
+
+function isSyncedBlockOuter(element: Element): boolean {
+  return isSyncedBlockSourceOuter(element) || isSyncedBlockMirrorOuter(element);
+}
+
+function findSyncedBlockOuter(element: Element | null): Element | null {
   let current: Element | null = element;
   while (current) {
-    if (current.classList?.contains('bn-block-outer') && isSyncedBlockSourceOuter(current)) {
+    if (current.classList?.contains('bn-block-outer') && isSyncedBlockOuter(current)) {
       return current;
     }
     current = current.parentElement;
@@ -164,25 +176,28 @@ function findSyncedBlockSourceOuter(element: Element | null): Element | null {
   return null;
 }
 
-function getInactiveSyncedSourceOuter(blockOuter: Element | null): Element | null {
+function getInactiveSyncedBlockOuter(blockOuter: Element | null): Element | null {
   if (!blockOuter) return null;
-  const syncOuter = findSyncedBlockSourceOuter(blockOuter);
+  const syncOuter = findSyncedBlockOuter(blockOuter);
   if (!syncOuter) return null;
-  if (syncOuter.querySelector('.react-renderer.node-syncedBlockSource[data-sync-source-active="true"]')) return null;
+  if (syncOuter.querySelector('.react-renderer.node-syncedBlockSource[data-sync-source-active="true"], .react-renderer.node-syncedBlockMirror[data-sync-source-active="true"]')) return null;
   const active = document.activeElement;
   if (active && syncOuter.contains(active)) return null;
   return syncOuter;
 }
 
-function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
+function resolveSideMenuTarget(button: HTMLElement): { blockId: string; usesInactiveSyncBlock: boolean } | null {
   const sideMenu = button.closest('.bn-side-menu');
   if (!sideMenu) return null;
 
   const localOuter = sideMenu.closest('.bn-block-outer');
-  const localSyncOuter = getInactiveSyncedSourceOuter(localOuter);
-  if (localSyncOuter) return getBlockIdFromOuter(localSyncOuter);
+  const localSyncOuter = getInactiveSyncedBlockOuter(localOuter);
+  if (localSyncOuter) {
+    const blockId = getBlockIdFromOuter(localSyncOuter);
+    return blockId ? { blockId, usesInactiveSyncBlock: true } : null;
+  }
   const localId = getBlockIdFromOuter(localOuter);
-  if (localId) return localId;
+  if (localId) return { blockId: localId, usesInactiveSyncBlock: false };
 
   const wrapper = sideMenu.closest('[data-floating-ui-focusable]');
   if (!wrapper) return null;
@@ -191,11 +206,18 @@ function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
   for (const el of elements) {
     const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
     if (!blockOuter) continue;
-    const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
-    return getBlockIdFromOuter(syncOuter || blockOuter);
+    const syncOuter = getInactiveSyncedBlockOuter(blockOuter);
+    const blockId = getBlockIdFromOuter(syncOuter || blockOuter);
+    return blockId ? { blockId, usesInactiveSyncBlock: !!syncOuter } : null;
   }
   return null;
 }
+
+function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
+  return resolveSideMenuTarget(button)?.blockId || null;
+}
+
+let lastAddButtonInsert: { blockId: string; at: number } | null = null;
 
 const SideMenuButton: React.FC<{
   className?: string;
@@ -220,31 +242,28 @@ const SideMenuButton: React.FC<{
   } | null>(null);
   const multiDragGhostRef = useRef<{ ghost: HTMLDivElement; moveGhost: (de: DragEvent) => void } | null>(null);
 
-  // Intercept "+" button click: insert empty block and open slash menu
+  // Intercept "+" button click: insert one empty block without opening slash menu.
   const handleClick = useCallback((e: React.MouseEvent) => {
     // Detect if this is the "+" add button (not the drag handle)
     const isAddButton = !draggable;
     if (isAddButton && editor) {
+      const target = buttonRef.current ? resolveSideMenuTarget(buttonRef.current) : null;
+      if (!target) return;
       e.preventDefault();
       e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
 
-      // Find the block this side menu belongs to
-      const blockId = buttonRef.current ? resolveSideMenuTargetBlockId(buttonRef.current) : null;
-      if (!blockId) return;
+      const blockId = target.blockId;
+      const now = performance.now();
+      if (lastAddButtonInsert?.blockId === blockId && now - lastAddButtonInsert.at < 250) return;
+      lastAddButtonInsert = { blockId, at: now };
 
       // Insert a new empty paragraph block after the current block
       const newBlocks = editor.insertBlocks([{ type: 'paragraph' }], blockId, 'after');
       if (newBlocks.length > 0) {
         // Focus the new block
         editor.focus();
-        // Open slash menu so user can pick block type
-        setTimeout(() => {
-          try {
-            (editor as any).suggestionMenu?.openSuggestionMenu?.('/');
-          } catch {
-            // fallback: try dispatching "/" key
-          }
-        }, 50);
+        editor.setTextCursorPosition(newBlocks[0], 'end');
       }
       return;
     }
@@ -515,7 +534,8 @@ const SideMenuButton: React.FC<{
     <button
       ref={buttonRef}
       className={className}
-      onClick={handleClick}
+      onClick={draggable ? handleClick : undefined}
+      onClickCapture={!draggable ? handleClick : undefined}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -1757,7 +1777,7 @@ function getDragHandleBlockId(): string | null {
       for (const el of elements) {
         const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
         if (blockOuter) {
-          const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
+          const syncOuter = getInactiveSyncedBlockOuter(blockOuter);
           const targetOuter = syncOuter || blockOuter;
           const bc = targetOuter.querySelector('[data-node-type="blockContainer"]') || targetOuter;
           return bc.getAttribute('data-id') || targetOuter.getAttribute('data-id') || null;

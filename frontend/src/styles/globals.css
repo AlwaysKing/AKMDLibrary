@@ -691,6 +691,12 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   transition: none !important;
 }
 
+body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-block-type="syncedBlockMirror"]) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+
 .bn-sync-source-floating-menu {
   position: fixed;
   z-index: calc(var(--bn-ui-base-z-index, 0) + 21);
@@ -3223,10 +3229,6 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   position: relative !important;
 }
 
-.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
-  padding: 0 !important;
-}
-
 .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource),
 .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
   margin-left: 0 !important;
@@ -3267,18 +3269,21 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   pointer-events: none;
 }
 
-.bn-editor .bn-block-outer:has(.react-renderer [data-content-type="syncedBlockSource"]) {
+.bn-editor .bn-block-outer:has(.react-renderer [data-content-type="syncedBlockSource"]),
+.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
   margin: 0 !important;
   padding: 0 !important;
 }
 
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]),
-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) {
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource),
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) {
   position: relative;
   padding: 0 !important;
 }
 
-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .react-renderer {
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .react-renderer,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .react-renderer {
   position: absolute;
   inset: 0 auto auto 0;
   width: 100%;
@@ -3288,6 +3293,12 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   pointer-events: auto;
 }
 
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror:has(.bn-synced-block-mirror.is-broken)) > .react-renderer {
+  position: relative;
+  height: auto;
+  overflow: visible;
+}
+
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group {
   position: relative;
   margin-left: 0 !important;
@@ -3295,7 +3306,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   border-left: 0 !important;
 }
 
-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group {
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group {
   position: relative;
   margin-left: 0 !important;
   padding-left: 0 !important;
@@ -3306,7 +3318,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   margin-left: 0 !important;
 }
 
-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group > .bn-block-outer {
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group > .bn-block-outer,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group > .bn-block-outer {
   margin-left: 0 !important;
 }
 
@@ -3349,7 +3362,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 }
 
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"])::after,
-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after {
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror)::after {
   content: '';
   position: absolute;
   inset: -0.5px -0.5px 0 -0.5px;
@@ -3362,26 +3376,34 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover::after,
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):hover::after,
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within::after,
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):focus-within::after,
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource[data-sync-source-active="true"])::after,
-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"][data-sync-source-active="true"])::after {
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror[data-sync-source-active="true"])::after,
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"][data-sync-source-active="true"])::after,
+.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockMirror"][data-sync-source-active="true"])::after {
   opacity: 1;
 }
 
 .bn-synced-block-mirror {
   position: relative;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
-  box-shadow: inset 0 0 0 0 rgba(189, 130, 70, 0);
-  transition: box-shadow 0.12s ease;
+}
+
+.bn-synced-block-mirror:not(.is-broken) {
+  height: 0;
+  min-height: 0;
+  overflow: visible;
 }
 
 .bn-synced-block-mirror:focus-within,
 .bn-synced-block-mirror.is-saving,
 .bn-synced-block-mirror.is-error,
 .bn-synced-block-mirror.is-broken {
-  box-shadow: inset 0 0 0 2px rgba(189, 130, 70, 0.22);
+  box-shadow: none;
 }
 
 .bn-synced-block-header {
@@ -3412,8 +3434,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 
 .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover .bn-synced-block-header,
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover .bn-synced-block-header,
-.bn-synced-block-mirror:hover > .bn-synced-block-header,
-.bn-synced-block-mirror:focus-within > .bn-synced-block-header,
+.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):hover .bn-synced-block-header,
 .bn-synced-block-mirror.is-saving > .bn-synced-block-header,
 .bn-synced-block-mirror.is-error > .bn-synced-block-header,
 .bn-synced-block-mirror.is-broken > .bn-synced-block-header {
@@ -3495,8 +3516,6 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 
 .bn-synced-block-inner .bn-editor > .bn-block-group > .bn-block-outer {
   margin-left: 0 !important;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
 }
 
 .bn-synced-block-placeholder {

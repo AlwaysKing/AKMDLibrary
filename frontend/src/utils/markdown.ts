@@ -908,6 +908,14 @@ function serializeBlock(block: any): string {
     return renderSyncedSourceMarkdown(syncId, quoted, childrenMd);
   }
 
+  if (block.type === 'syncedBlockMirror') {
+    const syncId = block.props?.syncId || '';
+    const sourcePageId = block.props?.sourcePageId || '';
+    const sourceBlockId = block.props?.sourceBlockId || '';
+    if (!syncId || !sourcePageId || !sourceBlockId) return '';
+    return `<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`;
+  }
+
   // Column list — skip if all columns are empty (content was deleted)
   if (block.type === 'column_list') {
     const columns = (block.children || []).filter((col: any) =>
@@ -1007,14 +1015,6 @@ function serializeRegularBlock(block: any): string {
       const language = block.props?.language || 'text';
       if (!path) return '';
       return `<content file="${escapeHtmlAttribute(path)}" lang="${escapeHtmlAttribute(language)}" />`;
-    }
-
-    case 'syncedBlockMirror': {
-      const syncId = block.props?.syncId || '';
-      const sourcePageId = block.props?.sourcePageId || '';
-      const sourceBlockId = block.props?.sourceBlockId || '';
-      if (!syncId || !sourcePageId || !sourceBlockId) return '';
-      return `<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`;
     }
 
     case 'quote': {

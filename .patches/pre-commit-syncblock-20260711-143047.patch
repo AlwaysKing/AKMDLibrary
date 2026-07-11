@@ -1,0 +1,986 @@
+diff --git a/frontend/src/components/Editor/BlockNoteComponents.tsx b/frontend/src/components/Editor/BlockNoteComponents.tsx
+index f694627..331cb38 100644
+--- a/frontend/src/components/Editor/BlockNoteComponents.tsx
++++ b/frontend/src/components/Editor/BlockNoteComponents.tsx
+@@ -100,6 +100,10 @@ function setBlockSelection(blockIds: string[] | null) {
+         border-radius: 4px;
+         pointer-events: none;
+       }
++      .bn-block-outer:has(> [data-id="${id}"] > .react-renderer.node-syncedBlockSource) > [data-id="${id}"]::after,
++      .bn-block-outer:has(> [data-id="${id}"] > .react-renderer.node-syncedBlockMirror) > [data-id="${id}"]::after {
++        opacity: 1;
++      }
+       .bn-block-outer:has(> [data-id="${id}"] [data-content-type="image"]) [data-content-type="image"] .bn-file-block-content-wrapper::after,
+       .bn-block-outer:has(> [data-id="${id}"] [data-content-type="video"]) [data-content-type="video"] .bn-file-block-content-wrapper::after {
+         content: '' !important;
+@@ -153,10 +157,18 @@ function isSyncedBlockSourceOuter(element: Element): boolean {
+   return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource');
+ }
+ 
+-function findSyncedBlockSourceOuter(element: Element | null): Element | null {
++function isSyncedBlockMirrorOuter(element: Element): boolean {
++  return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockMirror');
++}
++
++function isSyncedBlockOuter(element: Element): boolean {
++  return isSyncedBlockSourceOuter(element) || isSyncedBlockMirrorOuter(element);
++}
++
++function findSyncedBlockOuter(element: Element | null): Element | null {
+   let current: Element | null = element;
+   while (current) {
+-    if (current.classList?.contains('bn-block-outer') && isSyncedBlockSourceOuter(current)) {
++    if (current.classList?.contains('bn-block-outer') && isSyncedBlockOuter(current)) {
+       return current;
+     }
+     current = current.parentElement;
+@@ -164,25 +176,28 @@ function findSyncedBlockSourceOuter(element: Element | null): Element | null {
+   return null;
+ }
+ 
+-function getInactiveSyncedSourceOuter(blockOuter: Element | null): Element | null {
++function getInactiveSyncedBlockOuter(blockOuter: Element | null): Element | null {
+   if (!blockOuter) return null;
+-  const syncOuter = findSyncedBlockSourceOuter(blockOuter);
++  const syncOuter = findSyncedBlockOuter(blockOuter);
+   if (!syncOuter) return null;
+-  if (syncOuter.querySelector('.react-renderer.node-syncedBlockSource[data-sync-source-active="true"]')) return null;
++  if (syncOuter.querySelector('.react-renderer.node-syncedBlockSource[data-sync-source-active="true"], .react-renderer.node-syncedBlockMirror[data-sync-source-active="true"]')) return null;
+   const active = document.activeElement;
+   if (active && syncOuter.contains(active)) return null;
+   return syncOuter;
+ }
+ 
+-function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
++function resolveSideMenuTarget(button: HTMLElement): { blockId: string; usesInactiveSyncBlock: boolean } | null {
+   const sideMenu = button.closest('.bn-side-menu');
+   if (!sideMenu) return null;
+ 
+   const localOuter = sideMenu.closest('.bn-block-outer');
+-  const localSyncOuter = getInactiveSyncedSourceOuter(localOuter);
+-  if (localSyncOuter) return getBlockIdFromOuter(localSyncOuter);
++  const localSyncOuter = getInactiveSyncedBlockOuter(localOuter);
++  if (localSyncOuter) {
++    const blockId = getBlockIdFromOuter(localSyncOuter);
++    return blockId ? { blockId, usesInactiveSyncBlock: true } : null;
++  }
+   const localId = getBlockIdFromOuter(localOuter);
+-  if (localId) return localId;
++  if (localId) return { blockId: localId, usesInactiveSyncBlock: false };
+ 
+   const wrapper = sideMenu.closest('[data-floating-ui-focusable]');
+   if (!wrapper) return null;
+@@ -191,12 +206,19 @@ function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
+   for (const el of elements) {
+     const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
+     if (!blockOuter) continue;
+-    const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
+-    return getBlockIdFromOuter(syncOuter || blockOuter);
++    const syncOuter = getInactiveSyncedBlockOuter(blockOuter);
++    const blockId = getBlockIdFromOuter(syncOuter || blockOuter);
++    return blockId ? { blockId, usesInactiveSyncBlock: !!syncOuter } : null;
+   }
+   return null;
+ }
+ 
++function resolveSideMenuTargetBlockId(button: HTMLElement): string | null {
++  return resolveSideMenuTarget(button)?.blockId || null;
++}
++
++let lastAddButtonInsert: { blockId: string; at: number } | null = null;
++
+ const SideMenuButton: React.FC<{
+   className?: string;
+   onClick?: (e: React.MouseEvent) => void;
+@@ -220,31 +242,28 @@ const SideMenuButton: React.FC<{
+   } | null>(null);
+   const multiDragGhostRef = useRef<{ ghost: HTMLDivElement; moveGhost: (de: DragEvent) => void } | null>(null);
+ 
+-  // Intercept "+" button click: insert empty block and open slash menu
++  // Intercept "+" button click: insert one empty block without opening slash menu.
+   const handleClick = useCallback((e: React.MouseEvent) => {
+     // Detect if this is the "+" add button (not the drag handle)
+     const isAddButton = !draggable;
+     if (isAddButton && editor) {
++      const target = buttonRef.current ? resolveSideMenuTarget(buttonRef.current) : null;
++      if (!target) return;
+       e.preventDefault();
+       e.stopPropagation();
++      e.nativeEvent.stopImmediatePropagation();
+ 
+-      // Find the block this side menu belongs to
+-      const blockId = buttonRef.current ? resolveSideMenuTargetBlockId(buttonRef.current) : null;
+-      if (!blockId) return;
++      const blockId = target.blockId;
++      const now = performance.now();
++      if (lastAddButtonInsert?.blockId === blockId && now - lastAddButtonInsert.at < 250) return;
++      lastAddButtonInsert = { blockId, at: now };
+ 
+       // Insert a new empty paragraph block after the current block
+       const newBlocks = editor.insertBlocks([{ type: 'paragraph' }], blockId, 'after');
+       if (newBlocks.length > 0) {
+         // Focus the new block
+         editor.focus();
+-        // Open slash menu so user can pick block type
+-        setTimeout(() => {
+-          try {
+-            (editor as any).suggestionMenu?.openSuggestionMenu?.('/');
+-          } catch {
+-            // fallback: try dispatching "/" key
+-          }
+-        }, 50);
++        editor.setTextCursorPosition(newBlocks[0], 'end');
+       }
+       return;
+     }
+@@ -515,7 +534,8 @@ const SideMenuButton: React.FC<{
+     <button
+       ref={buttonRef}
+       className={className}
+-      onClick={handleClick}
++      onClick={draggable ? handleClick : undefined}
++      onClickCapture={!draggable ? handleClick : undefined}
+       draggable={draggable}
+       onDragStart={onDragStart}
+       onDragEnd={onDragEnd}
+@@ -1757,7 +1777,7 @@ function getDragHandleBlockId(): string | null {
+       for (const el of elements) {
+         const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
+         if (blockOuter) {
+-          const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
++          const syncOuter = getInactiveSyncedBlockOuter(blockOuter);
+           const targetOuter = syncOuter || blockOuter;
+           const bc = targetOuter.querySelector('[data-node-type="blockContainer"]') || targetOuter;
+           return bc.getAttribute('data-id') || targetOuter.getAttribute('data-id') || null;
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index d03ceb5..dbacb30 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -24,7 +24,7 @@ import { SubpageBlockSpec } from './SubpageBlock';
+ import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
+ import { MarkBlockSpec } from './MarkBlock';
+ import { FileContentBlockSpec } from './FileContentBlock';
+-import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec } from './SyncedBlock';
++import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves } from './SyncedBlock';
+ import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
+ import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
+ import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
+@@ -141,6 +141,35 @@ function flattenBlocks(blocks: any[]): any[] {
+   return out;
+ }
+ 
++function findBlockPath(blocks: any[], blockId: string, path: any[] = []): any[] | null {
++  for (const block of blocks || []) {
++    const nextPath = [...path, block];
++    if (block.id === blockId) return nextPath;
++    if (block.children?.length) {
++      const childPath = findBlockPath(block.children, blockId, nextPath);
++      if (childPath) return childPath;
++    }
++  }
++  return null;
++}
++
++function isEmptyTextBlock(block: any): boolean {
++  const content = block?.content;
++  return !content || (Array.isArray(content) && content.length === 0);
++}
++
++function getSyncedBlockChildDeleteTarget(blocks: any[], blockId: string) {
++  const path = findBlockPath(blocks, blockId);
++  if (!path || path.length < 2) return null;
++  const parent = path[path.length - 2];
++  if (parent?.type !== 'syncedBlockSource' && parent?.type !== 'syncedBlockMirror') return null;
++  const siblings = Array.isArray(parent.children) ? parent.children : [];
++  const index = siblings.findIndex((block: any) => block.id === blockId);
++  if (index < 0) return null;
++  const focusBlock = siblings[index - 1] || siblings[index + 1] || null;
++  return { parent, block: path[path.length - 1], focusBlock };
++}
++
+ function blocksForIds(editor: any, ids: string[]): any[] {
+   const idSet = new Set(ids);
+   return flattenBlocks(editor.document).filter((block) => idSet.has(block.id));
+@@ -150,6 +179,47 @@ function hasSyncedBlock(blocks: any[]): boolean {
+   return blocks.some((block) => block.type === 'syncedBlockSource' || block.type === 'syncedBlockMirror');
+ }
+ 
++async function flushSyncedBlockMirrorsFromDocument(blocks: any[], spaceSlug: string, pageId: string) {
++  if (!spaceSlug) return;
++
++  const mirrorsBySource = new Map<string, { sourcePageId: string; sourceBlockId: string; markdown: string; quotes: Map<string, { pageId: string; syncId: string }> }>();
++
++  for (const block of flattenBlocks(blocks)) {
++    if (block.type !== 'syncedBlockMirror') continue;
++
++    const sourcePageId = String(block.props?.sourcePageId || '');
++    const sourceBlockId = String(block.props?.sourceBlockId || '');
++    const syncId = String(block.props?.syncId || '');
++    if (!sourcePageId || !sourceBlockId) continue;
++    if (block.props?.syncLoaded !== 'true') continue;
++
++    const key = `${sourcePageId}:${sourceBlockId}`;
++    const quotes = mirrorsBySource.get(key)?.quotes || new Map<string, { pageId: string; syncId: string }>();
++    if (pageId && syncId) {
++      quotes.set(`${pageId}:${syncId}`, { pageId, syncId });
++    }
++
++    mirrorsBySource.set(key, {
++      sourcePageId,
++      sourceBlockId,
++      markdown: blocksToMarkdown((block.children || []) as any[]),
++      quotes,
++    });
++  }
++
++  for (const mirror of mirrorsBySource.values()) {
++    await syncedBlocksApi.update(spaceSlug, mirror.sourcePageId, mirror.sourceBlockId, {
++      markdown: mirror.markdown,
++      addQuoted: Array.from(mirror.quotes.values()),
++    });
++  }
++}
++
++async function flushAllSyncedBlockSaves(blocks: any[], spaceSlug: string, pageId: string) {
++  await flushPendingSyncedBlockSaves();
++  await flushSyncedBlockMirrorsFromDocument(blocks, spaceSlug, pageId);
++}
++
+ function parseQuotedCount(block: any): number {
+   try {
+     const quoted = JSON.parse(block?.props?.quoted || '[]');
+@@ -159,28 +229,27 @@ function parseQuotedCount(block: any): number {
+   }
+ }
+ 
+-function getDomSelectedBlockIds(container: HTMLElement, editor: any): string[] {
++function getDomSelectedBlockIds(container: HTMLElement): string[] {
+   const selection = window.getSelection();
+   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return [];
+   const range = selection.getRangeAt(0);
+   const ids: string[] = [];
+   const seen = new Set<string>();
+-  const editorIds = new Set(flattenBlocks(editor.document).map((b) => b.id));
+   container.querySelectorAll('.bn-block-outer').forEach((outer) => {
+     if (!range.intersectsNode(outer)) return;
+     const blockEl = outer.querySelector('[data-id]');
+     const id = blockEl?.getAttribute('data-id') || '';
+-    if (!id || seen.has(id) || !editorIds.has(id)) return;
++    if (!id || seen.has(id)) return;
+     seen.add(id);
+     ids.push(id);
+   });
+-  return normalizeSyncedSourceSelection(ids, container);
++  return normalizeSyncedBlockSelection(ids, container);
+ }
+ 
+ function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
+   const selected = getSelectedBlockIds();
+   if (selected.length > 0) return selected;
+-  const domIds = getDomSelectedBlockIds(container, editor);
++  const domIds = getDomSelectedBlockIds(container);
+   if (domIds.length > 0) return domIds;
+   const bnSelection = editor.getSelection?.();
+   const bnIds = bnSelection?.blocks?.map((b: any) => b.id).filter(Boolean) || [];
+@@ -198,13 +267,16 @@ function getSelectedDescendantIds(containerOuter: Element): string[] {
+     .filter((id): id is string => !!id);
+ }
+ 
+-function normalizeSyncedSourceSelection(ids: string[], container: HTMLElement): string[] {
++function normalizeSyncedBlockSelection(ids: string[], container: HTMLElement): string[] {
+   if (ids.length <= 1) return ids;
+ 
+   const uniqueIds = Array.from(new Set(ids));
+   const selected = new Set(uniqueIds);
+   const syncOuters = Array.from(
+-    container.querySelectorAll('.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)')
++    container.querySelectorAll([
++      '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)',
++      '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)',
++    ].join(', '))
+   );
+ 
+   for (const syncOuter of syncOuters) {
+@@ -4389,11 +4461,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+ 
+     const currentBlocks = editor.document;
+     const { spaceSlug, pageId } = identityRef.current;
++    await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
+     // Push fileContent edits to the backend first so files are up to date
+     // before syncModule ships the page markdown that references them.
+     await persistFileContentBlocks(currentBlocks, spaceSlug);
+     const markdown = blocksToMarkdown(currentBlocks);
+-    createMirror(spaceSlug, pageId, markdown);
++    await createMirror(spaceSlug, pageId, markdown);
+ 
+     hasChangesRef.current = false;
+     onSyncStatusChangeRef.current?.('syncing');
+@@ -4408,15 +4481,24 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+ 
+         const currentBlocks = editor.document;
+         const { spaceSlug, pageId } = identityRef.current;
+-        // Persist fileContent edits before serializing markdown so files
+-        // and page stay consistent on the backend.
+-        persistFileContentBlocks(currentBlocks, spaceSlug).finally(() => {
+-          const markdown = blocksToMarkdown(editor.document);
+-          createMirror(spaceSlug, pageId, markdown);
+-          hasChangesRef.current = false;
+-          onSyncStatusChangeRef.current?.('syncing');
+-          flushSync();
+-        });
++        void (async () => {
++          try {
++            await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
++            // Persist fileContent edits before serializing markdown so files
++            // and page stay consistent on the backend.
++            await persistFileContentBlocks(currentBlocks, spaceSlug);
++            const markdown = blocksToMarkdown(editor.document);
++            await createMirror(spaceSlug, pageId, markdown);
++            hasChangesRef.current = false;
++            onSyncStatusChangeRef.current?.('syncing');
++            await flushSync();
++          } catch (err) {
++            hasChangesRef.current = true;
++            onSyncStatusChangeRef.current?.('unsaved');
++            console.error('[PageEditor] Save failed:', err);
++            showToast('保存失败，请稍后重试');
++          }
++        })();
+       }
+     };
+     document.addEventListener('keydown', handleSaveShortcut);
+@@ -4552,7 +4634,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     }
+ 
+     saveTimeoutRef.current = setTimeout(() => {
+-      triggerMirror();
++      triggerMirror().catch((err) => {
++        hasChangesRef.current = true;
++        onSyncStatusChangeRef.current?.('unsaved');
++        console.error('[PageEditor] Auto save failed:', err);
++      });
+     }, 1000);
+   }, [triggerMirror]);
+ 
+@@ -4648,6 +4734,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+ 
+   const persistEditorNow = useCallback(async () => {
+     const { spaceSlug, pageId } = identityRef.current;
++    await flushAllSyncedBlockSaves(editor.document, spaceSlug, pageId);
+     await persistFileContentBlocks(editor.document, spaceSlug);
+     const markdown = blocksToMarkdown(editor.document);
+     await createMirror(spaceSlug, pageId, markdown);
+@@ -5183,6 +5270,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+           updateSelection([]);
+           setBlockSelection(null);
+         } else if (e.key === 'Backspace' || e.key === 'Delete') {
++          if (ids.length === 1) {
++            const syncChildTarget = getSyncedBlockChildDeleteTarget(editor.document, ids[0]);
++            if (syncChildTarget) {
++              e.preventDefault();
++              e.stopImmediatePropagation();
++              const nextFocusId = syncChildTarget.focusBlock?.id;
++              removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
++              updateSelection([]);
++              setBlockSelection(null);
++              editor.focus();
++              if (nextFocusId) {
++                requestAnimationFrame(() => {
++                  try {
++                    editor.setTextCursorPosition(nextFocusId as any, 'end');
++                  } catch {
++                    // The target may have been removed by a concurrent editor transaction.
++                  }
++                });
++              }
++              return;
++            }
++          }
+           e.preventDefault();
+           e.stopImmediatePropagation();
+           removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+@@ -5200,11 +5309,30 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         // Exit editing mode — blur editor to hide cursor
+         const pmEl = container?.querySelector('.ProseMirror') as HTMLElement;
+         if (pmEl) pmEl.blur();
+-      } else if (e.key === 'Backspace') {
++      } else if (e.key === 'Backspace' || e.key === 'Delete') {
++        const currentBlock = editor.getTextCursorPosition().block;
++        const syncChildTarget = getSyncedBlockChildDeleteTarget(editor.document, currentBlock.id as string);
++        if (syncChildTarget && isEmptyTextBlock(currentBlock)) {
++          e.preventDefault();
++          e.stopImmediatePropagation();
++          const nextFocusId = syncChildTarget.focusBlock?.id;
++          if (nextFocusId) {
++            removeBlocksEnhanced(editor, [{ id: currentBlock.id } as any]);
++            editor.focus();
++            requestAnimationFrame(() => {
++              try {
++                editor.setTextCursorPosition(nextFocusId as any, 'end');
++              } catch {
++                // The target may have been removed by a concurrent editor transaction.
++              }
++            });
++          }
++          return;
++        }
++        if (e.key !== 'Backspace') return;
+         // Allow deleting empty first block (BlockNote default doesn't support this)
+         const blocks = editor.document;
+         if (blocks.length > 1) {
+-          const currentBlock = editor.getTextCursorPosition().block;
+           const isFirstBlock = blocks[0].id === currentBlock.id;
+           const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+           if (isFirstBlock && isEmpty) {
+@@ -5396,7 +5524,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       // Process outermost toggles first (lower depth = more outer)
+       toggleInfoList.sort((a, b) => a.depth - b.depth);
+ 
+-      const result = normalizeSyncedSourceSelection(intersecting, container);
++      const result = normalizeSyncedBlockSelection(intersecting, container);
+       for (const { id: toggleId, outer: toggleOuter, descendantIds } of toggleInfoList) {
+         // Skip if toggle already removed from result (by a parent's Case B)
+         if (!result.includes(toggleId)) continue;
+@@ -5613,10 +5741,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource');
+     };
+ 
+-    const findSyncedBlockSourceOuter = (element: Element | null): HTMLElement | null => {
++    const isSyncedBlockMirrorOuter = (element: Element) => {
++      return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockMirror');
++    };
++
++    const isSyncedBlockOuter = (element: Element) => {
++      return isSyncedBlockSourceOuter(element) || isSyncedBlockMirrorOuter(element);
++    };
++
++    const findSyncedBlockOuter = (element: Element | null): HTMLElement | null => {
+       let current: Element | null = element;
+       while (current) {
+-        if (current.classList?.contains('bn-block-outer') && isSyncedBlockSourceOuter(current)) {
++        if (current.classList?.contains('bn-block-outer') && isSyncedBlockOuter(current)) {
+           return current as HTMLElement;
+         }
+         current = current.parentElement;
+@@ -5638,12 +5774,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     const setSyncSourceActiveMarker = (syncSourceOuter: HTMLElement, active: boolean) => {
+       const sourceRenderer = syncSourceOuter.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource') as HTMLElement | null;
+       const sourceContent = sourceRenderer?.querySelector('[data-content-type="syncedBlockSource"]') as HTMLElement | null;
++      const mirrorRenderer = syncSourceOuter.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockMirror') as HTMLElement | null;
++      const mirrorContent = mirrorRenderer?.querySelector('[data-content-type="syncedBlockMirror"]') as HTMLElement | null;
+       if (active) {
+         if (sourceRenderer) sourceRenderer.dataset.syncSourceActive = 'true';
+         if (sourceContent) sourceContent.dataset.syncSourceActive = 'true';
++        if (mirrorRenderer) mirrorRenderer.dataset.syncSourceActive = 'true';
++        if (mirrorContent) mirrorContent.dataset.syncSourceActive = 'true';
+       } else {
+         if (sourceRenderer) delete sourceRenderer.dataset.syncSourceActive;
+         if (sourceContent) delete sourceContent.dataset.syncSourceActive;
++        if (mirrorRenderer) delete mirrorRenderer.dataset.syncSourceActive;
++        if (mirrorContent) delete mirrorContent.dataset.syncSourceActive;
+       }
+     };
+ 
+@@ -5720,12 +5862,24 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       return (block?.closest('.bn-block-outer') as HTMLElement | null) || null;
+     };
+ 
++    const syncSourceHasSelectedChildBlock = (syncSourceOuter: HTMLElement | null) => {
++      if (!syncSourceOuter) return false;
++      return getSelectedBlockIds().some((blockId) => {
++        const blockOuter = getBlockOuterById(blockId);
++        return blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter);
++      });
++    };
++
++    const syncSourceHasActiveChildBlock = (syncSourceOuter: HTMLElement | null) => {
++      return syncSourceHasEditableChildFocus(syncSourceOuter) || syncSourceHasSelectedChildBlock(syncSourceOuter);
++    };
++
+     const refreshActiveSyncSources = () => {
+       const nextOuters = new Set<HTMLElement>();
+ 
+       const selectedOuter = getSelectedBlockOuter();
+       if (selectedOuter) {
+-        const syncSourceOuter = findSyncedBlockSourceOuter(selectedOuter);
++        const syncSourceOuter = findSyncedBlockOuter(selectedOuter);
+         if (blockOuterIsSyncSourceChild(selectedOuter, syncSourceOuter)) {
+           nextOuters.add(syncSourceOuter!);
+         }
+@@ -5733,7 +5887,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+ 
+       for (const blockId of getSelectedBlockIds()) {
+         const blockOuter = getBlockOuterById(blockId);
+-        const syncSourceOuter = findSyncedBlockSourceOuter(blockOuter);
++        const syncSourceOuter = findSyncedBlockOuter(blockOuter);
+         if (!syncSourceOuter) continue;
+         if (blockOuter === syncSourceOuter || blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter)) {
+           nextOuters.add(syncSourceOuter);
+@@ -5900,13 +6054,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       if (inserted?.[0]) {
+         editor.focus();
+         editor.setTextCursorPosition(inserted[0], 'end');
+-        setTimeout(() => {
+-          try {
+-            (editor as any).suggestionMenu?.openSuggestionMenu?.('/');
+-          } catch {
+-            // fallback noop
+-          }
+-        }, 50);
+       }
+     };
+     syncSourceMenu.addEventListener('mousedown', syncSourceMenuMouseDown);
+@@ -5943,15 +6090,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         nativeSideMenuFrame = requestAnimationFrame(() => {
+           nativeSideMenuFrame = null;
+           const expectedRect = nativeSideMenuTargetRect;
+-          const nativeSideMenu = document.querySelector(
+-            '[data-floating-ui-focusable] > .bn-side-menu'
+-          ) as HTMLElement | null;
+-          const wrapper = nativeSideMenu?.closest('[data-floating-ui-focusable]') as HTMLElement | null;
+-          if (!expectedRect || !nativeSideMenu || !wrapper) {
++          if (!expectedRect) {
+             document.body.classList.remove('side-menu-visible');
+             return;
+           }
+-          if (nativeSideMenu.dataset.blockType === 'syncedBlockSource') {
++          const nativeSideMenus = Array.from(
++            document.querySelectorAll('[data-floating-ui-focusable] > .bn-side-menu')
++          ) as HTMLElement[];
++          const nativeSideMenu = nativeSideMenus
++            .filter((menu) => menu.dataset.blockType !== 'syncedBlockSource' && menu.dataset.blockType !== 'syncedBlockMirror')
++            .map((menu) => {
++              const wrapper = menu.closest('[data-floating-ui-focusable]') as HTMLElement | null;
++              const rect = wrapper?.getBoundingClientRect();
++              return { menu, wrapper, rect, distance: rect ? Math.abs(rect.top - expectedRect.top) : Infinity };
++            })
++            .sort((a, b) => a.distance - b.distance)[0]?.menu || null;
++          const wrapper = nativeSideMenu?.closest('[data-floating-ui-focusable]') as HTMLElement | null;
++          if (!nativeSideMenu || !wrapper) {
+             document.body.classList.remove('side-menu-visible');
+             return;
+           }
+@@ -5977,7 +6132,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         for (const element of elements) {
+           if (!container.contains(element)) continue;
+           const blockOuter = (element as HTMLElement).closest('.bn-block-outer');
+-          const syncOuter = findSyncedBlockSourceOuter(blockOuter);
++          const syncOuter = findSyncedBlockOuter(blockOuter);
+           const hoverRect = getSyncSourceHoverRect(syncOuter);
+           if (
+             syncOuter &&
+@@ -5995,7 +6150,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const activeElementAtPoint = document.activeElement;
+       const pointedSyncSourceIsActive = !!(
+         pointedSyncSourceOuter &&
+-        (syncSourceHasEditableChildFocus(pointedSyncSourceOuter) ||
++        (syncSourceHasActiveChildBlock(pointedSyncSourceOuter) ||
+           selectionIsInside(pointedSyncSourceOuter) ||
+           (activeElementAtPoint && pointedSyncSourceOuter.contains(activeElementAtPoint)))
+       );
+@@ -6020,9 +6175,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         const overActiveOuter = rectContainsPoint(activeOuterRect, e.clientX, e.clientY);
+         const overSyncMenu = rectContainsPoint(menuRect, e.clientX, e.clientY);
+         const overMenuBridge = rectContainsPoint(bridgeRect, e.clientX, e.clientY);
+-        if (syncSourceHasEditableChildFocus(hoveredSyncSourceOuter)) {
++        if (syncSourceHasActiveChildBlock(hoveredSyncSourceOuter)) {
+           hideSyncSourceMenu();
+-          hideNativeSideMenu();
+         } else if (overSyncMenu || overMenuBridge) {
+           hideNativeSideMenu();
+           return;
+@@ -6045,7 +6199,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       let bestDist = Infinity;
+       let fallbackOuter: HTMLElement | null = null;
+       for (const outer of blockOuters) {
+-        if (outer === activePointedSyncSourceOuter || isSyncedBlockSourceOuter(outer)) continue;
++        if (outer === activePointedSyncSourceOuter || isSyncedBlockOuter(outer)) continue;
+         const r = outer.getBoundingClientRect();
+         if (e.clientY >= r.top && e.clientY <= r.bottom) {
+           fallbackOuter = outer as HTMLElement;
+@@ -6073,11 +6227,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         return;
+       }
+ 
+-      const syncSourceOuter = findSyncedBlockSourceOuter(hoveredOuter);
++      const syncSourceOuter = findSyncedBlockOuter(hoveredOuter);
+       const activeElement = document.activeElement;
+       const syncSourceIsActive = !!(
+         syncSourceOuter &&
+-        (syncSourceHasEditableChildFocus(syncSourceOuter) ||
++        (syncSourceHasActiveChildBlock(syncSourceOuter) ||
+           selectionIsInside(syncSourceOuter) ||
+           (activeElement && syncSourceOuter.contains(activeElement)))
+       );
+@@ -6288,8 +6442,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     const content = lastDocBlock.content;
+     const lastIsEmpty = !content || (Array.isArray(content) && content.length === 0);
+ 
+-    // Layout containers (column_list, column) cannot receive cursor — always insert after
+-    const isLayoutBlock = lastDocBlock.type === 'column_list' || lastDocBlock.type === 'column';
++    // Container blocks cannot receive a text cursor themselves — always insert after.
++    const isContainerBlock = (
++      lastDocBlock.type === 'column_list' ||
++      lastDocBlock.type === 'column' ||
++      lastDocBlock.type === 'syncedBlockSource' ||
++      lastDocBlock.type === 'syncedBlockMirror'
++    );
+ 
+     // Check if the last block is input-capable (has editable text)
+     // Non-input blocks like subpage, bookmark, pageReference can't receive cursor
+@@ -6298,7 +6457,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     const lastOuter = blockOuters?.[blockOuters.length - 1];
+     const lastIsInput = lastOuter ? isInputBlock(lastOuter as HTMLElement) : false;
+ 
+-    if (!isLayoutBlock && lastIsEmpty && lastIsInput) {
++    if (!isContainerBlock && lastIsEmpty && lastIsInput) {
+       editor.setTextCursorPosition(lastDocBlock, 'end');
+     } else {
+       // Last block is non-input (subpage, bookmark, etc.) or has content → insert new paragraph after it
+@@ -6342,6 +6501,29 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       if (clickedOuter) {
+         const contentType = clickedOuter.querySelector('[data-content-type]');
+         const type = contentType?.getAttribute('data-content-type');
++        const isSyncedBlockOuter = !!clickedOuter.querySelector(
++          ':scope > .bn-block > .react-renderer.node-syncedBlockSource, :scope > .bn-block > .react-renderer.node-syncedBlockMirror'
++        );
++        if (isSyncedBlockOuter) {
++          const contentBlocks = clickedOuter.querySelectorAll(':scope > .bn-block > .bn-block-group > .bn-block-outer');
++          let lowestContentBottom = 0;
++          contentBlocks.forEach(b => {
++            const r = b.getBoundingClientRect();
++            if (r.bottom > lowestContentBottom) lowestContentBottom = r.bottom;
++          });
++          if (contentBlocks.length > 0 && e.clientY >= lowestContentBottom - 5) {
++            const syncBlockEl = clickedOuter.querySelector(':scope > .bn-block[data-id]');
++            const syncBlockId = syncBlockEl?.getAttribute('data-id');
++            if (!syncBlockId) return;
++            const inserted = editor.insertBlocks([{ type: 'paragraph' } as any], syncBlockId as any, 'after');
++            if (inserted.length > 0) {
++              editor.setTextCursorPosition(inserted[0], 'start');
++              editor.focus();
++            }
++            return;
++          }
++          return;
++        }
+         if (type === 'column_list' || type === 'column') {
+           // column_list/column outer: check if click is below all content blocks
+           const contentBlocks = clickedOuter.querySelectorAll(':scope .bn-block-outer');
+diff --git a/frontend/src/components/Editor/SyncedBlock.tsx b/frontend/src/components/Editor/SyncedBlock.tsx
+index 843e423..1478424 100644
+--- a/frontend/src/components/Editor/SyncedBlock.tsx
++++ b/frontend/src/components/Editor/SyncedBlock.tsx
+@@ -1,10 +1,18 @@
+ import { useEffect, useMemo, useRef, useState } from 'react';
+-import { createReactBlockSpec, BlockNoteViewRaw, useCreateBlockNote } from '@blocknote/react';
++import { createReactBlockSpec } from '@blocknote/react';
+ import { AlertTriangle, ExternalLink, RefreshCw, Repeat2 } from 'lucide-react';
+ import { syncedBlocksApi, type SyncedBlockQuote } from '../../api/syncedBlocks';
+ import { useSpaceStore } from '../../stores/spaceStore';
+ import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
+ 
++const pendingSyncedBlockSaves = new Map<string, () => Promise<void>>();
++
++export async function flushPendingSyncedBlockSaves() {
++  const saves = Array.from(pendingSyncedBlockSaves.values());
++  if (saves.length === 0) return;
++  await Promise.all(saves.map((save) => save()));
++}
++
+ function shortId(id: string | undefined) {
+   return id ? id.slice(0, 8) : '未设置';
+ }
+@@ -52,12 +60,9 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+   const loadedRef = useRef(false);
+   const suppressChangeRef = useRef(false);
+   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+-
+-  const innerEditor = useCreateBlockNote({
+-    schema: outerEditor.schema,
+-    initialContent: [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }],
+-    trailingBlock: false,
+-  } as any);
++  const saveInFlightRef = useRef<Promise<void> | null>(null);
++  const blockChildrenKey = useMemo(() => JSON.stringify(block.children || []), [block.children]);
++  const registryKey = `${sourcePageId}:${sourceBlockId}:${syncId}`;
+ 
+   const load = () => {
+     if (!slug || !sourcePageId || !sourceBlockId) {
+@@ -69,7 +74,10 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+       .then((data) => {
+         const blocks = markdownToBlocks(data.markdown);
+         suppressChangeRef.current = true;
+-        innerEditor.replaceBlocks(innerEditor.document, blocks as any);
++        outerEditor.updateBlock(block.id, {
++          props: { ...block.props, syncLoaded: 'true' },
++          children: blocks,
++        } as any);
+         requestAnimationFrame(() => {
+           suppressChangeRef.current = false;
+           loadedRef.current = true;
+@@ -92,24 +100,46 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+     load();
+     return () => {
+       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
++      pendingSyncedBlockSaves.delete(registryKey);
+     };
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, [slug, sourcePageId, sourceBlockId]);
++  }, [slug, sourcePageId, sourceBlockId, block.id, registryKey]);
+ 
+-  const handleChange = () => {
++  useEffect(() => {
+     if (!loadedRef.current || suppressChangeRef.current || state === 'loading') return;
+     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+     setState('saving');
++    const save = async () => {
++      if (saveInFlightRef.current) return saveInFlightRef.current;
++      if (saveTimerRef.current) {
++        clearTimeout(saveTimerRef.current);
++        saveTimerRef.current = null;
++      }
++      saveInFlightRef.current = (async () => {
++        const liveBlock = outerEditor.getBlock(block.id);
++        const markdown = blocksToMarkdown((liveBlock?.children || []) as any[]);
++        await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
++          markdown,
++          addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
++        });
++        pendingSyncedBlockSaves.delete(registryKey);
++        setState('saved');
++      })();
++      try {
++        await saveInFlightRef.current;
++      } finally {
++        saveInFlightRef.current = null;
++      }
++    };
++    pendingSyncedBlockSaves.set(registryKey, save);
+     saveTimerRef.current = setTimeout(() => {
+-      const markdown = blocksToMarkdown(innerEditor.document);
+-      syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
+-        markdown,
+-        addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
+-      })
+-        .then(() => setState('saved'))
+-        .catch(() => setState('error'));
++      save().catch(() => setState('error'));
+     }, 1200);
+-  };
++    return () => {
++      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [blockChildrenKey]);
+ 
+   const statusText = {
+     loading: '加载中',
+@@ -154,9 +184,7 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+           <span>同步块源内容不存在</span>
+         </div>
+       ) : (
+-        <div className="bn-synced-block-inner">
+-          <BlockNoteViewRaw editor={innerEditor as any} editable={true} onChange={handleChange} theme="light" />
+-        </div>
++        null
+       )}
+     </div>
+   );
+@@ -182,6 +210,7 @@ export const SyncedBlockMirrorSpec = createReactBlockSpec(
+       sourcePageId: { default: '' },
+       sourceBlockId: { default: '' },
+       pageId: { default: '' },
++      syncLoaded: { default: 'false' },
+     },
+     content: 'none',
+   },
+diff --git a/frontend/src/styles/globals.css b/frontend/src/styles/globals.css
+index 8370471..04b29fc 100644
+--- a/frontend/src/styles/globals.css
++++ b/frontend/src/styles/globals.css
+@@ -691,6 +691,12 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   transition: none !important;
+ }
+ 
++body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-block-type="syncedBlockMirror"]) {
++  opacity: 0 !important;
++  pointer-events: none !important;
++  transition: none !important;
++}
++
+ .bn-sync-source-floating-menu {
+   position: fixed;
+   z-index: calc(var(--bn-ui-base-z-index, 0) + 21);
+@@ -3223,10 +3229,6 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   position: relative !important;
+ }
+ 
+-.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
+-  padding: 0 !important;
+-}
+-
+ .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource),
+ .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
+   margin-left: 0 !important;
+@@ -3267,18 +3269,21 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   pointer-events: none;
+ }
+ 
+-.bn-editor .bn-block-outer:has(.react-renderer [data-content-type="syncedBlockSource"]) {
++.bn-editor .bn-block-outer:has(.react-renderer [data-content-type="syncedBlockSource"]),
++.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror) {
+   margin: 0 !important;
+   padding: 0 !important;
+ }
+ 
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]),
+-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) {
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource),
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) {
+   position: relative;
+   padding: 0 !important;
+ }
+ 
+-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .react-renderer {
++.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .react-renderer,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .react-renderer {
+   position: absolute;
+   inset: 0 auto auto 0;
+   width: 100%;
+@@ -3288,6 +3293,12 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   pointer-events: auto;
+ }
+ 
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror:has(.bn-synced-block-mirror.is-broken)) > .react-renderer {
++  position: relative;
++  height: auto;
++  overflow: visible;
++}
++
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group {
+   position: relative;
+   margin-left: 0 !important;
+@@ -3295,7 +3306,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   border-left: 0 !important;
+ }
+ 
+-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group {
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group {
+   position: relative;
+   margin-left: 0 !important;
+   padding-left: 0 !important;
+@@ -3306,7 +3318,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   margin-left: 0 !important;
+ }
+ 
+-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group > .bn-block-outer {
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group > .bn-block-outer,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group > .bn-block-outer {
+   margin-left: 0 !important;
+ }
+ 
+@@ -3349,7 +3362,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ }
+ 
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"])::after,
+-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after {
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror)::after {
+   content: '';
+   position: absolute;
+   inset: -0.5px -0.5px 0 -0.5px;
+@@ -3362,26 +3376,34 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ 
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover::after,
+ .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover::after,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):hover::after,
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within::after,
+ .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):focus-within::after,
+ .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource[data-sync-source-active="true"])::after,
+-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"][data-sync-source-active="true"])::after {
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror[data-sync-source-active="true"])::after,
++.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"][data-sync-source-active="true"])::after,
++.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockMirror"][data-sync-source-active="true"])::after {
+   opacity: 1;
+ }
+ 
+ .bn-synced-block-mirror {
+   position: relative;
+-  border-radius: 7px;
++  border-radius: 8px;
+   background: transparent;
+-  box-shadow: inset 0 0 0 0 rgba(189, 130, 70, 0);
+-  transition: box-shadow 0.12s ease;
++}
++
++.bn-synced-block-mirror:not(.is-broken) {
++  height: 0;
++  min-height: 0;
++  overflow: visible;
+ }
+ 
+ .bn-synced-block-mirror:focus-within,
+ .bn-synced-block-mirror.is-saving,
+ .bn-synced-block-mirror.is-error,
+ .bn-synced-block-mirror.is-broken {
+-  box-shadow: inset 0 0 0 2px rgba(189, 130, 70, 0.22);
++  box-shadow: none;
+ }
+ 
+ .bn-synced-block-header {
+@@ -3412,8 +3434,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ 
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover .bn-synced-block-header,
+ .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover .bn-synced-block-header,
+-.bn-synced-block-mirror:hover > .bn-synced-block-header,
+-.bn-synced-block-mirror:focus-within > .bn-synced-block-header,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):hover .bn-synced-block-header,
+ .bn-synced-block-mirror.is-saving > .bn-synced-block-header,
+ .bn-synced-block-mirror.is-error > .bn-synced-block-header,
+ .bn-synced-block-mirror.is-broken > .bn-synced-block-header {
+@@ -3495,8 +3516,6 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ 
+ .bn-synced-block-inner .bn-editor > .bn-block-group > .bn-block-outer {
+   margin-left: 0 !important;
+-  padding-left: 0 !important;
+-  padding-right: 0 !important;
+ }
+ 
+ .bn-synced-block-placeholder {
+diff --git a/frontend/src/utils/markdown.ts b/frontend/src/utils/markdown.ts
+index 43f1ae1..fd2db43 100644
+--- a/frontend/src/utils/markdown.ts
++++ b/frontend/src/utils/markdown.ts
+@@ -908,6 +908,14 @@ function serializeBlock(block: any): string {
+     return renderSyncedSourceMarkdown(syncId, quoted, childrenMd);
+   }
+ 
++  if (block.type === 'syncedBlockMirror') {
++    const syncId = block.props?.syncId || '';
++    const sourcePageId = block.props?.sourcePageId || '';
++    const sourceBlockId = block.props?.sourceBlockId || '';
++    if (!syncId || !sourcePageId || !sourceBlockId) return '';
++    return `<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`;
++  }
++
+   // Column list — skip if all columns are empty (content was deleted)
+   if (block.type === 'column_list') {
+     const columns = (block.children || []).filter((col: any) =>
+@@ -1009,14 +1017,6 @@ function serializeRegularBlock(block: any): string {
+       return `<content file="${escapeHtmlAttribute(path)}" lang="${escapeHtmlAttribute(language)}" />`;
+     }
+ 
+-    case 'syncedBlockMirror': {
+-      const syncId = block.props?.syncId || '';
+-      const sourcePageId = block.props?.sourcePageId || '';
+-      const sourceBlockId = block.props?.sourceBlockId || '';
+-      if (!syncId || !sourcePageId || !sourceBlockId) return '';
+-      return `<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`;
+-    }
+-
+     case 'quote': {
+       const quoteText = getFormattedText(block.content);
+       return `> ${quoteText}`;

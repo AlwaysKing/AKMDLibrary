@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createReactBlockSpec, BlockNoteViewRaw, useCreateBlockNote } from '@blocknote/react';
+import { createReactBlockSpec } from '@blocknote/react';
 import { AlertTriangle, ExternalLink, RefreshCw, Repeat2 } from 'lucide-react';
 import { syncedBlocksApi, type SyncedBlockQuote } from '../../api/syncedBlocks';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
+
+const pendingSyncedBlockSaves = new Map<string, () => Promise<void>>();
+
+export async function flushPendingSyncedBlockSaves() {
+  const saves = Array.from(pendingSyncedBlockSaves.values());
+  if (saves.length === 0) return;
+  await Promise.all(saves.map((save) => save()));
+}
 
 function shortId(id: string | undefined) {
   return id ? id.slice(0, 8) : '未设置';
@@ -52,12 +60,9 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
   const loadedRef = useRef(false);
   const suppressChangeRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const innerEditor = useCreateBlockNote({
-    schema: outerEditor.schema,
-    initialContent: [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }],
-    trailingBlock: false,
-  } as any);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const blockChildrenKey = useMemo(() => JSON.stringify(block.children || []), [block.children]);
+  const registryKey = `${sourcePageId}:${sourceBlockId}:${syncId}`;
 
   const load = () => {
     if (!slug || !sourcePageId || !sourceBlockId) {
@@ -69,7 +74,10 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
       .then((data) => {
         const blocks = markdownToBlocks(data.markdown);
         suppressChangeRef.current = true;
-        innerEditor.replaceBlocks(innerEditor.document, blocks as any);
+        outerEditor.updateBlock(block.id, {
+          props: { ...block.props, syncLoaded: 'true' },
+          children: blocks,
+        } as any);
         requestAnimationFrame(() => {
           suppressChangeRef.current = false;
           loadedRef.current = true;
@@ -92,24 +100,46 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
     load();
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      pendingSyncedBlockSaves.delete(registryKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, sourcePageId, sourceBlockId]);
+  }, [slug, sourcePageId, sourceBlockId, block.id, registryKey]);
 
-  const handleChange = () => {
+  useEffect(() => {
     if (!loadedRef.current || suppressChangeRef.current || state === 'loading') return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setState('saving');
+    const save = async () => {
+      if (saveInFlightRef.current) return saveInFlightRef.current;
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      saveInFlightRef.current = (async () => {
+        const liveBlock = outerEditor.getBlock(block.id);
+        const markdown = blocksToMarkdown((liveBlock?.children || []) as any[]);
+        await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
+          markdown,
+          addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
+        });
+        pendingSyncedBlockSaves.delete(registryKey);
+        setState('saved');
+      })();
+      try {
+        await saveInFlightRef.current;
+      } finally {
+        saveInFlightRef.current = null;
+      }
+    };
+    pendingSyncedBlockSaves.set(registryKey, save);
     saveTimerRef.current = setTimeout(() => {
-      const markdown = blocksToMarkdown(innerEditor.document);
-      syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
-        markdown,
-        addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
-      })
-        .then(() => setState('saved'))
-        .catch(() => setState('error'));
+      save().catch(() => setState('error'));
     }, 1200);
-  };
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockChildrenKey]);
 
   const statusText = {
     loading: '加载中',
@@ -154,9 +184,7 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
           <span>同步块源内容不存在</span>
         </div>
       ) : (
-        <div className="bn-synced-block-inner">
-          <BlockNoteViewRaw editor={innerEditor as any} editable={true} onChange={handleChange} theme="light" />
-        </div>
+        null
       )}
     </div>
   );
@@ -182,6 +210,7 @@ export const SyncedBlockMirrorSpec = createReactBlockSpec(
       sourcePageId: { default: '' },
       sourceBlockId: { default: '' },
       pageId: { default: '' },
+      syncLoaded: { default: 'false' },
     },
     content: 'none',
   },

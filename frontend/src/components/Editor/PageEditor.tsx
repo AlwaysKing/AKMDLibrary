@@ -24,7 +24,7 @@ import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import { MarkBlockSpec } from './MarkBlock';
 import { FileContentBlockSpec } from './FileContentBlock';
-import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec } from './SyncedBlock';
+import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves } from './SyncedBlock';
 import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
 import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
 import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
@@ -141,6 +141,35 @@ function flattenBlocks(blocks: any[]): any[] {
   return out;
 }
 
+function findBlockPath(blocks: any[], blockId: string, path: any[] = []): any[] | null {
+  for (const block of blocks || []) {
+    const nextPath = [...path, block];
+    if (block.id === blockId) return nextPath;
+    if (block.children?.length) {
+      const childPath = findBlockPath(block.children, blockId, nextPath);
+      if (childPath) return childPath;
+    }
+  }
+  return null;
+}
+
+function isEmptyTextBlock(block: any): boolean {
+  const content = block?.content;
+  return !content || (Array.isArray(content) && content.length === 0);
+}
+
+function getSyncedBlockChildDeleteTarget(blocks: any[], blockId: string) {
+  const path = findBlockPath(blocks, blockId);
+  if (!path || path.length < 2) return null;
+  const parent = path[path.length - 2];
+  if (parent?.type !== 'syncedBlockSource' && parent?.type !== 'syncedBlockMirror') return null;
+  const siblings = Array.isArray(parent.children) ? parent.children : [];
+  const index = siblings.findIndex((block: any) => block.id === blockId);
+  if (index < 0) return null;
+  const focusBlock = siblings[index - 1] || siblings[index + 1] || null;
+  return { parent, block: path[path.length - 1], focusBlock };
+}
+
 function blocksForIds(editor: any, ids: string[]): any[] {
   const idSet = new Set(ids);
   return flattenBlocks(editor.document).filter((block) => idSet.has(block.id));
@@ -148,6 +177,47 @@ function blocksForIds(editor: any, ids: string[]): any[] {
 
 function hasSyncedBlock(blocks: any[]): boolean {
   return blocks.some((block) => block.type === 'syncedBlockSource' || block.type === 'syncedBlockMirror');
+}
+
+async function flushSyncedBlockMirrorsFromDocument(blocks: any[], spaceSlug: string, pageId: string) {
+  if (!spaceSlug) return;
+
+  const mirrorsBySource = new Map<string, { sourcePageId: string; sourceBlockId: string; markdown: string; quotes: Map<string, { pageId: string; syncId: string }> }>();
+
+  for (const block of flattenBlocks(blocks)) {
+    if (block.type !== 'syncedBlockMirror') continue;
+
+    const sourcePageId = String(block.props?.sourcePageId || '');
+    const sourceBlockId = String(block.props?.sourceBlockId || '');
+    const syncId = String(block.props?.syncId || '');
+    if (!sourcePageId || !sourceBlockId) continue;
+    if (block.props?.syncLoaded !== 'true') continue;
+
+    const key = `${sourcePageId}:${sourceBlockId}`;
+    const quotes = mirrorsBySource.get(key)?.quotes || new Map<string, { pageId: string; syncId: string }>();
+    if (pageId && syncId) {
+      quotes.set(`${pageId}:${syncId}`, { pageId, syncId });
+    }
+
+    mirrorsBySource.set(key, {
+      sourcePageId,
+      sourceBlockId,
+      markdown: blocksToMarkdown((block.children || []) as any[]),
+      quotes,
+    });
+  }
+
+  for (const mirror of mirrorsBySource.values()) {
+    await syncedBlocksApi.update(spaceSlug, mirror.sourcePageId, mirror.sourceBlockId, {
+      markdown: mirror.markdown,
+      addQuoted: Array.from(mirror.quotes.values()),
+    });
+  }
+}
+
+async function flushAllSyncedBlockSaves(blocks: any[], spaceSlug: string, pageId: string) {
+  await flushPendingSyncedBlockSaves();
+  await flushSyncedBlockMirrorsFromDocument(blocks, spaceSlug, pageId);
 }
 
 function parseQuotedCount(block: any): number {
@@ -159,28 +229,27 @@ function parseQuotedCount(block: any): number {
   }
 }
 
-function getDomSelectedBlockIds(container: HTMLElement, editor: any): string[] {
+function getDomSelectedBlockIds(container: HTMLElement): string[] {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return [];
   const range = selection.getRangeAt(0);
   const ids: string[] = [];
   const seen = new Set<string>();
-  const editorIds = new Set(flattenBlocks(editor.document).map((b) => b.id));
   container.querySelectorAll('.bn-block-outer').forEach((outer) => {
     if (!range.intersectsNode(outer)) return;
     const blockEl = outer.querySelector('[data-id]');
     const id = blockEl?.getAttribute('data-id') || '';
-    if (!id || seen.has(id) || !editorIds.has(id)) return;
+    if (!id || seen.has(id)) return;
     seen.add(id);
     ids.push(id);
   });
-  return normalizeSyncedSourceSelection(ids, container);
+  return normalizeSyncedBlockSelection(ids, container);
 }
 
 function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
   const selected = getSelectedBlockIds();
   if (selected.length > 0) return selected;
-  const domIds = getDomSelectedBlockIds(container, editor);
+  const domIds = getDomSelectedBlockIds(container);
   if (domIds.length > 0) return domIds;
   const bnSelection = editor.getSelection?.();
   const bnIds = bnSelection?.blocks?.map((b: any) => b.id).filter(Boolean) || [];
@@ -198,13 +267,16 @@ function getSelectedDescendantIds(containerOuter: Element): string[] {
     .filter((id): id is string => !!id);
 }
 
-function normalizeSyncedSourceSelection(ids: string[], container: HTMLElement): string[] {
+function normalizeSyncedBlockSelection(ids: string[], container: HTMLElement): string[] {
   if (ids.length <= 1) return ids;
 
   const uniqueIds = Array.from(new Set(ids));
   const selected = new Set(uniqueIds);
   const syncOuters = Array.from(
-    container.querySelectorAll('.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)')
+    container.querySelectorAll([
+      '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)',
+      '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)',
+    ].join(', '))
   );
 
   for (const syncOuter of syncOuters) {
@@ -4389,11 +4461,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     const currentBlocks = editor.document;
     const { spaceSlug, pageId } = identityRef.current;
+    await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
     // Push fileContent edits to the backend first so files are up to date
     // before syncModule ships the page markdown that references them.
     await persistFileContentBlocks(currentBlocks, spaceSlug);
     const markdown = blocksToMarkdown(currentBlocks);
-    createMirror(spaceSlug, pageId, markdown);
+    await createMirror(spaceSlug, pageId, markdown);
 
     hasChangesRef.current = false;
     onSyncStatusChangeRef.current?.('syncing');
@@ -4408,15 +4481,24 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
         const currentBlocks = editor.document;
         const { spaceSlug, pageId } = identityRef.current;
-        // Persist fileContent edits before serializing markdown so files
-        // and page stay consistent on the backend.
-        persistFileContentBlocks(currentBlocks, spaceSlug).finally(() => {
-          const markdown = blocksToMarkdown(editor.document);
-          createMirror(spaceSlug, pageId, markdown);
-          hasChangesRef.current = false;
-          onSyncStatusChangeRef.current?.('syncing');
-          flushSync();
-        });
+        void (async () => {
+          try {
+            await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
+            // Persist fileContent edits before serializing markdown so files
+            // and page stay consistent on the backend.
+            await persistFileContentBlocks(currentBlocks, spaceSlug);
+            const markdown = blocksToMarkdown(editor.document);
+            await createMirror(spaceSlug, pageId, markdown);
+            hasChangesRef.current = false;
+            onSyncStatusChangeRef.current?.('syncing');
+            await flushSync();
+          } catch (err) {
+            hasChangesRef.current = true;
+            onSyncStatusChangeRef.current?.('unsaved');
+            console.error('[PageEditor] Save failed:', err);
+            showToast('保存失败，请稍后重试');
+          }
+        })();
       }
     };
     document.addEventListener('keydown', handleSaveShortcut);
@@ -4552,7 +4634,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     }
 
     saveTimeoutRef.current = setTimeout(() => {
-      triggerMirror();
+      triggerMirror().catch((err) => {
+        hasChangesRef.current = true;
+        onSyncStatusChangeRef.current?.('unsaved');
+        console.error('[PageEditor] Auto save failed:', err);
+      });
     }, 1000);
   }, [triggerMirror]);
 
@@ -4648,6 +4734,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
   const persistEditorNow = useCallback(async () => {
     const { spaceSlug, pageId } = identityRef.current;
+    await flushAllSyncedBlockSaves(editor.document, spaceSlug, pageId);
     await persistFileContentBlocks(editor.document, spaceSlug);
     const markdown = blocksToMarkdown(editor.document);
     await createMirror(spaceSlug, pageId, markdown);
@@ -5183,6 +5270,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           updateSelection([]);
           setBlockSelection(null);
         } else if (e.key === 'Backspace' || e.key === 'Delete') {
+          if (ids.length === 1) {
+            const syncChildTarget = getSyncedBlockChildDeleteTarget(editor.document, ids[0]);
+            if (syncChildTarget) {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              const nextFocusId = syncChildTarget.focusBlock?.id;
+              removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+              updateSelection([]);
+              setBlockSelection(null);
+              editor.focus();
+              if (nextFocusId) {
+                requestAnimationFrame(() => {
+                  try {
+                    editor.setTextCursorPosition(nextFocusId as any, 'end');
+                  } catch {
+                    // The target may have been removed by a concurrent editor transaction.
+                  }
+                });
+              }
+              return;
+            }
+          }
           e.preventDefault();
           e.stopImmediatePropagation();
           removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
@@ -5200,11 +5309,30 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         // Exit editing mode — blur editor to hide cursor
         const pmEl = container?.querySelector('.ProseMirror') as HTMLElement;
         if (pmEl) pmEl.blur();
-      } else if (e.key === 'Backspace') {
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        const currentBlock = editor.getTextCursorPosition().block;
+        const syncChildTarget = getSyncedBlockChildDeleteTarget(editor.document, currentBlock.id as string);
+        if (syncChildTarget && isEmptyTextBlock(currentBlock)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          const nextFocusId = syncChildTarget.focusBlock?.id;
+          if (nextFocusId) {
+            removeBlocksEnhanced(editor, [{ id: currentBlock.id } as any]);
+            editor.focus();
+            requestAnimationFrame(() => {
+              try {
+                editor.setTextCursorPosition(nextFocusId as any, 'end');
+              } catch {
+                // The target may have been removed by a concurrent editor transaction.
+              }
+            });
+          }
+          return;
+        }
+        if (e.key !== 'Backspace') return;
         // Allow deleting empty first block (BlockNote default doesn't support this)
         const blocks = editor.document;
         if (blocks.length > 1) {
-          const currentBlock = editor.getTextCursorPosition().block;
           const isFirstBlock = blocks[0].id === currentBlock.id;
           const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
           if (isFirstBlock && isEmpty) {
@@ -5396,7 +5524,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // Process outermost toggles first (lower depth = more outer)
       toggleInfoList.sort((a, b) => a.depth - b.depth);
 
-      const result = normalizeSyncedSourceSelection(intersecting, container);
+      const result = normalizeSyncedBlockSelection(intersecting, container);
       for (const { id: toggleId, outer: toggleOuter, descendantIds } of toggleInfoList) {
         // Skip if toggle already removed from result (by a parent's Case B)
         if (!result.includes(toggleId)) continue;
@@ -5613,10 +5741,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource');
     };
 
-    const findSyncedBlockSourceOuter = (element: Element | null): HTMLElement | null => {
+    const isSyncedBlockMirrorOuter = (element: Element) => {
+      return !!element.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockMirror');
+    };
+
+    const isSyncedBlockOuter = (element: Element) => {
+      return isSyncedBlockSourceOuter(element) || isSyncedBlockMirrorOuter(element);
+    };
+
+    const findSyncedBlockOuter = (element: Element | null): HTMLElement | null => {
       let current: Element | null = element;
       while (current) {
-        if (current.classList?.contains('bn-block-outer') && isSyncedBlockSourceOuter(current)) {
+        if (current.classList?.contains('bn-block-outer') && isSyncedBlockOuter(current)) {
           return current as HTMLElement;
         }
         current = current.parentElement;
@@ -5638,12 +5774,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const setSyncSourceActiveMarker = (syncSourceOuter: HTMLElement, active: boolean) => {
       const sourceRenderer = syncSourceOuter.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource') as HTMLElement | null;
       const sourceContent = sourceRenderer?.querySelector('[data-content-type="syncedBlockSource"]') as HTMLElement | null;
+      const mirrorRenderer = syncSourceOuter.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockMirror') as HTMLElement | null;
+      const mirrorContent = mirrorRenderer?.querySelector('[data-content-type="syncedBlockMirror"]') as HTMLElement | null;
       if (active) {
         if (sourceRenderer) sourceRenderer.dataset.syncSourceActive = 'true';
         if (sourceContent) sourceContent.dataset.syncSourceActive = 'true';
+        if (mirrorRenderer) mirrorRenderer.dataset.syncSourceActive = 'true';
+        if (mirrorContent) mirrorContent.dataset.syncSourceActive = 'true';
       } else {
         if (sourceRenderer) delete sourceRenderer.dataset.syncSourceActive;
         if (sourceContent) delete sourceContent.dataset.syncSourceActive;
+        if (mirrorRenderer) delete mirrorRenderer.dataset.syncSourceActive;
+        if (mirrorContent) delete mirrorContent.dataset.syncSourceActive;
       }
     };
 
@@ -5720,12 +5862,24 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       return (block?.closest('.bn-block-outer') as HTMLElement | null) || null;
     };
 
+    const syncSourceHasSelectedChildBlock = (syncSourceOuter: HTMLElement | null) => {
+      if (!syncSourceOuter) return false;
+      return getSelectedBlockIds().some((blockId) => {
+        const blockOuter = getBlockOuterById(blockId);
+        return blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter);
+      });
+    };
+
+    const syncSourceHasActiveChildBlock = (syncSourceOuter: HTMLElement | null) => {
+      return syncSourceHasEditableChildFocus(syncSourceOuter) || syncSourceHasSelectedChildBlock(syncSourceOuter);
+    };
+
     const refreshActiveSyncSources = () => {
       const nextOuters = new Set<HTMLElement>();
 
       const selectedOuter = getSelectedBlockOuter();
       if (selectedOuter) {
-        const syncSourceOuter = findSyncedBlockSourceOuter(selectedOuter);
+        const syncSourceOuter = findSyncedBlockOuter(selectedOuter);
         if (blockOuterIsSyncSourceChild(selectedOuter, syncSourceOuter)) {
           nextOuters.add(syncSourceOuter!);
         }
@@ -5733,7 +5887,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       for (const blockId of getSelectedBlockIds()) {
         const blockOuter = getBlockOuterById(blockId);
-        const syncSourceOuter = findSyncedBlockSourceOuter(blockOuter);
+        const syncSourceOuter = findSyncedBlockOuter(blockOuter);
         if (!syncSourceOuter) continue;
         if (blockOuter === syncSourceOuter || blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter)) {
           nextOuters.add(syncSourceOuter);
@@ -5900,13 +6054,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (inserted?.[0]) {
         editor.focus();
         editor.setTextCursorPosition(inserted[0], 'end');
-        setTimeout(() => {
-          try {
-            (editor as any).suggestionMenu?.openSuggestionMenu?.('/');
-          } catch {
-            // fallback noop
-          }
-        }, 50);
       }
     };
     syncSourceMenu.addEventListener('mousedown', syncSourceMenuMouseDown);
@@ -5943,15 +6090,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         nativeSideMenuFrame = requestAnimationFrame(() => {
           nativeSideMenuFrame = null;
           const expectedRect = nativeSideMenuTargetRect;
-          const nativeSideMenu = document.querySelector(
-            '[data-floating-ui-focusable] > .bn-side-menu'
-          ) as HTMLElement | null;
-          const wrapper = nativeSideMenu?.closest('[data-floating-ui-focusable]') as HTMLElement | null;
-          if (!expectedRect || !nativeSideMenu || !wrapper) {
+          if (!expectedRect) {
             document.body.classList.remove('side-menu-visible');
             return;
           }
-          if (nativeSideMenu.dataset.blockType === 'syncedBlockSource') {
+          const nativeSideMenus = Array.from(
+            document.querySelectorAll('[data-floating-ui-focusable] > .bn-side-menu')
+          ) as HTMLElement[];
+          const nativeSideMenu = nativeSideMenus
+            .filter((menu) => menu.dataset.blockType !== 'syncedBlockSource' && menu.dataset.blockType !== 'syncedBlockMirror')
+            .map((menu) => {
+              const wrapper = menu.closest('[data-floating-ui-focusable]') as HTMLElement | null;
+              const rect = wrapper?.getBoundingClientRect();
+              return { menu, wrapper, rect, distance: rect ? Math.abs(rect.top - expectedRect.top) : Infinity };
+            })
+            .sort((a, b) => a.distance - b.distance)[0]?.menu || null;
+          const wrapper = nativeSideMenu?.closest('[data-floating-ui-focusable]') as HTMLElement | null;
+          if (!nativeSideMenu || !wrapper) {
             document.body.classList.remove('side-menu-visible');
             return;
           }
@@ -5977,7 +6132,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         for (const element of elements) {
           if (!container.contains(element)) continue;
           const blockOuter = (element as HTMLElement).closest('.bn-block-outer');
-          const syncOuter = findSyncedBlockSourceOuter(blockOuter);
+          const syncOuter = findSyncedBlockOuter(blockOuter);
           const hoverRect = getSyncSourceHoverRect(syncOuter);
           if (
             syncOuter &&
@@ -5995,7 +6150,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const activeElementAtPoint = document.activeElement;
       const pointedSyncSourceIsActive = !!(
         pointedSyncSourceOuter &&
-        (syncSourceHasEditableChildFocus(pointedSyncSourceOuter) ||
+        (syncSourceHasActiveChildBlock(pointedSyncSourceOuter) ||
           selectionIsInside(pointedSyncSourceOuter) ||
           (activeElementAtPoint && pointedSyncSourceOuter.contains(activeElementAtPoint)))
       );
@@ -6020,9 +6175,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const overActiveOuter = rectContainsPoint(activeOuterRect, e.clientX, e.clientY);
         const overSyncMenu = rectContainsPoint(menuRect, e.clientX, e.clientY);
         const overMenuBridge = rectContainsPoint(bridgeRect, e.clientX, e.clientY);
-        if (syncSourceHasEditableChildFocus(hoveredSyncSourceOuter)) {
+        if (syncSourceHasActiveChildBlock(hoveredSyncSourceOuter)) {
           hideSyncSourceMenu();
-          hideNativeSideMenu();
         } else if (overSyncMenu || overMenuBridge) {
           hideNativeSideMenu();
           return;
@@ -6045,7 +6199,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       let bestDist = Infinity;
       let fallbackOuter: HTMLElement | null = null;
       for (const outer of blockOuters) {
-        if (outer === activePointedSyncSourceOuter || isSyncedBlockSourceOuter(outer)) continue;
+        if (outer === activePointedSyncSourceOuter || isSyncedBlockOuter(outer)) continue;
         const r = outer.getBoundingClientRect();
         if (e.clientY >= r.top && e.clientY <= r.bottom) {
           fallbackOuter = outer as HTMLElement;
@@ -6073,11 +6227,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         return;
       }
 
-      const syncSourceOuter = findSyncedBlockSourceOuter(hoveredOuter);
+      const syncSourceOuter = findSyncedBlockOuter(hoveredOuter);
       const activeElement = document.activeElement;
       const syncSourceIsActive = !!(
         syncSourceOuter &&
-        (syncSourceHasEditableChildFocus(syncSourceOuter) ||
+        (syncSourceHasActiveChildBlock(syncSourceOuter) ||
           selectionIsInside(syncSourceOuter) ||
           (activeElement && syncSourceOuter.contains(activeElement)))
       );
@@ -6288,8 +6442,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const content = lastDocBlock.content;
     const lastIsEmpty = !content || (Array.isArray(content) && content.length === 0);
 
-    // Layout containers (column_list, column) cannot receive cursor — always insert after
-    const isLayoutBlock = lastDocBlock.type === 'column_list' || lastDocBlock.type === 'column';
+    // Container blocks cannot receive a text cursor themselves — always insert after.
+    const isContainerBlock = (
+      lastDocBlock.type === 'column_list' ||
+      lastDocBlock.type === 'column' ||
+      lastDocBlock.type === 'syncedBlockSource' ||
+      lastDocBlock.type === 'syncedBlockMirror'
+    );
 
     // Check if the last block is input-capable (has editable text)
     // Non-input blocks like subpage, bookmark, pageReference can't receive cursor
@@ -6298,7 +6457,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const lastOuter = blockOuters?.[blockOuters.length - 1];
     const lastIsInput = lastOuter ? isInputBlock(lastOuter as HTMLElement) : false;
 
-    if (!isLayoutBlock && lastIsEmpty && lastIsInput) {
+    if (!isContainerBlock && lastIsEmpty && lastIsInput) {
       editor.setTextCursorPosition(lastDocBlock, 'end');
     } else {
       // Last block is non-input (subpage, bookmark, etc.) or has content → insert new paragraph after it
@@ -6342,6 +6501,29 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (clickedOuter) {
         const contentType = clickedOuter.querySelector('[data-content-type]');
         const type = contentType?.getAttribute('data-content-type');
+        const isSyncedBlockOuter = !!clickedOuter.querySelector(
+          ':scope > .bn-block > .react-renderer.node-syncedBlockSource, :scope > .bn-block > .react-renderer.node-syncedBlockMirror'
+        );
+        if (isSyncedBlockOuter) {
+          const contentBlocks = clickedOuter.querySelectorAll(':scope > .bn-block > .bn-block-group > .bn-block-outer');
+          let lowestContentBottom = 0;
+          contentBlocks.forEach(b => {
+            const r = b.getBoundingClientRect();
+            if (r.bottom > lowestContentBottom) lowestContentBottom = r.bottom;
+          });
+          if (contentBlocks.length > 0 && e.clientY >= lowestContentBottom - 5) {
+            const syncBlockEl = clickedOuter.querySelector(':scope > .bn-block[data-id]');
+            const syncBlockId = syncBlockEl?.getAttribute('data-id');
+            if (!syncBlockId) return;
+            const inserted = editor.insertBlocks([{ type: 'paragraph' } as any], syncBlockId as any, 'after');
+            if (inserted.length > 0) {
+              editor.setTextCursorPosition(inserted[0], 'start');
+              editor.focus();
+            }
+            return;
+          }
+          return;
+        }
         if (type === 'column_list' || type === 'column') {
           // column_list/column outer: check if click is below all content blocks
           const contentBlocks = clickedOuter.querySelectorAll(':scope .bn-block-outer');
