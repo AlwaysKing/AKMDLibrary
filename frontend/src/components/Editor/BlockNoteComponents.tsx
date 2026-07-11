@@ -281,7 +281,7 @@ const SideMenuButton: React.FC<{
       const sideMenu = btn.closest('.bn-side-menu');
       if (!sideMenu) return;
 
-      const targetBlockId = resolveSideMenuTargetBlockId(btn);
+      const targetBlockId = syntheticDragHandleTarget?.blockId || resolveSideMenuTargetBlockId(btn);
       if (!targetBlockId) return;
 
       // Don't override multi-selection if block is already selected
@@ -556,9 +556,11 @@ const GenericMenuRoot: React.FC<{
 }> = (props) => {
   const { onOpenChange, position, children } = props;
   const [isOpen, setIsOpen] = useState(false);
+  const ownsOpenStateRef = useRef(false);
 
   const setOpen = useCallback((open: boolean) => {
     setIsOpen(open);
+    ownsOpenStateRef.current = open;
     dragMenuOpen = open;
     // Keep side menu visible and active while drag menu is open
     // Use body class so CSS selector `body.drag-menu-open` has enough specificity
@@ -570,6 +572,15 @@ const GenericMenuRoot: React.FC<{
     }
     onOpenChange?.(open);
   }, [onOpenChange]);
+
+  useEffect(() => {
+    return () => {
+      if (!ownsOpenStateRef.current) return;
+      dragMenuOpen = false;
+      syntheticDragHandleTarget = null;
+      document.body.classList.remove('drag-menu-open');
+    };
+  }, []);
 
   return (
     <MenuContext.Provider value={{ isOpen, setOpen, position }}>
@@ -1762,6 +1773,56 @@ export function findBlockDeep(document: any[], blockId: string): any {
   return undefined;
 }
 
+const PERMANENT_BLOCK_ANCHOR_PREFIX = 'akb_';
+
+function isPermanentBlockAnchorId(blockId: string | null | undefined): blockId is string {
+  return typeof blockId === 'string' && blockId.startsWith(PERMANENT_BLOCK_ANCHOR_PREFIX);
+}
+
+function createPermanentBlockAnchorId(): string {
+  const randomId = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return `${PERMANENT_BLOCK_ANCHOR_PREFIX}${randomId.replace(/-/g, '')}`;
+}
+
+function findPmBlockById(editor: any, blockId: string): { node: any; posBeforeNode: number } | null {
+  const doc = editor?._tiptapEditor?.state?.doc || editor?.prosemirrorView?.state?.doc;
+  if (!doc?.firstChild) return null;
+
+  let result: { node: any; posBeforeNode: number } | null = null;
+  doc.firstChild.descendants((node: any, pos: number) => {
+    if (result) return false;
+    if (!node.type?.isInGroup?.('bnBlock') || node.attrs?.id !== blockId) return true;
+    result = { node, posBeforeNode: pos + 1 };
+    return false;
+  });
+  return result;
+}
+
+function setPermanentBlockAnchorId(editor: any, blockId: string): string | null {
+  if (isPermanentBlockAnchorId(blockId)) return blockId;
+
+  const pmView = editor?.prosemirrorView || editor?._tiptapEditor?.view;
+  if (!pmView) return null;
+
+  let anchorId = createPermanentBlockAnchorId();
+  while (findBlockDeep(editor.document || [], anchorId) || findPmBlockById(editor, anchorId)) {
+    anchorId = createPermanentBlockAnchorId();
+  }
+
+  const blockInfo = findPmBlockById(editor, blockId);
+  if (!blockInfo) return null;
+
+  const tr = pmView.state.tr.setNodeMarkup(
+    blockInfo.posBeforeNode,
+    blockInfo.node.type,
+    { ...blockInfo.node.attrs, id: anchorId },
+    blockInfo.node.marks,
+  );
+  pmView.dispatch(tr);
+  return anchorId;
+}
+
 function getDragHandleBlockId(): string | null {
   if (syntheticDragHandleTarget) return syntheticDragHandleTarget.blockId;
 
@@ -1786,6 +1847,24 @@ function getDragHandleBlockId(): string | null {
     }
   }
   return null;
+}
+
+function getBlockOuterById(blockId: string | null): Element | null {
+  if (!blockId) return null;
+  return document
+    .querySelector(`.bn-block[data-id="${CSS.escape(blockId)}"]`)
+    ?.closest('.bn-block-outer') || null;
+}
+
+function getDragHandleLinkBlockId(): string | null {
+  const blockId = getDragHandleBlockId();
+  const blockOuter = getBlockOuterById(blockId);
+  const syncOuter = findSyncedBlockOuter(blockOuter);
+  if (syncOuter) {
+    const syncBlockId = getBlockIdFromOuter(syncOuter);
+    if (syncBlockId) return syncBlockId;
+  }
+  return blockId;
 }
 
 function getTableBlockElements(blockId: string): {
@@ -2185,8 +2264,15 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
   const blockId = getDragHandleBlockId();
 
   const handleCopyLink = async () => {
-    if (!blockId) return;
-    const hash = `#block-${blockId}`;
+    const linkBlockId = getDragHandleLinkBlockId();
+    if (!linkBlockId) return;
+    const permanentBlockId = setPermanentBlockAnchorId(editor, linkBlockId);
+    if (!permanentBlockId) {
+      showToast('拷贝失败');
+      onClose();
+      return;
+    }
+    const hash = `#${encodeURIComponent(permanentBlockId)}`;
     try {
       await navigator.clipboard.writeText(window.location.href.split('#')[0] + hash);
       showToast('已拷贝区块链接');
@@ -2210,9 +2296,9 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!blockId) return;
-    removeBlocksEnhanced(editor, [blockId]);
+    await removeBlocksEnhanced(editor, [blockId]);
     onClose();
   };
 

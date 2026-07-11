@@ -1,5 +1,12 @@
 import { PartialBlock } from '@blocknote/core';
 
+const BLOCK_ANCHOR_PREFIX = 'akb_';
+const BLOCK_ANCHOR_COMMENT_RE = /^<!--\s*ak-block-anchor:\s*id="?(akb_[a-zA-Z0-9_-]+)"?\s*-->$/;
+
+function isBlockAnchorId(id: any): id is string {
+  return typeof id === 'string' && id.startsWith(BLOCK_ANCHOR_PREFIX);
+}
+
 /**
  * Parse markdown and convert to BlockNote blocks
  */
@@ -10,10 +17,26 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
   const blocks: any[] = [];
   const lines = markdown.split('\n');
   let i = 0;
+  let pendingAnchorId: string | null = null;
+
+  const pushBlock = (block: any) => {
+    if (pendingAnchorId && !block.id) {
+      block.id = pendingAnchorId;
+    }
+    pendingAnchorId = null;
+    blocks.push(block);
+  };
 
   while (i < lines.length) {
     const line = lines[i];
     const trimmed = line.trim();
+
+    const anchorMatch = trimmed.match(BLOCK_ANCHOR_COMMENT_RE);
+    if (anchorMatch) {
+      pendingAnchorId = anchorMatch[1];
+      i++;
+      continue;
+    }
 
     // Empty line - skip (paragraph separator in markdown)
     if (!trimmed) {
@@ -23,7 +46,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
 
     // Zero-width space marker = preserved empty paragraph
     if (trimmed === '​') {
-      blocks.push({
+      pushBlock({
         type: 'paragraph',
         content: [{ type: 'text', text: '', styles: {} }],
       });
@@ -67,7 +90,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         if (contentText.trim()) {
           block.children = markdownToBlocks(contentText);
         }
-        blocks.push(block);
+        pushBlock(block);
       } else {
         // toggle-list
         const block: any = {
@@ -77,7 +100,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         if (contentText.trim()) {
           block.children = markdownToBlocks(contentText);
         }
-        blocks.push(block);
+        pushBlock(block);
       }
       continue;
     }
@@ -187,7 +210,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       }
 
       if (tableRows.length > 0) {
-        blocks.push({
+        pushBlock({
           type: 'table',
           content: {
             type: 'tableContent',
@@ -203,7 +226,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     const markLineMatch = trimmed.match(/^<mark(?:\s+([^>]*))?>([\s\S]*)<\/mark>$/);
     if (markLineMatch) {
       const attrs = parseTagAttributes(markLineMatch[1] || '');
-      blocks.push({
+      pushBlock({
         type: 'mark',
         props: {
           color: attrs.color || 'default',
@@ -236,7 +259,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       }
       i++; // Skip closing </mark>
 
-      blocks.push({
+      pushBlock({
         type: 'mark',
         props: {
           color: attrs.color || 'default',
@@ -251,7 +274,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     if (syncMirrorMatch) {
       const attrs = parseTagAttributes(syncMirrorMatch[1] || '');
       if (attrs.id && attrs['source-page'] && attrs['source-block']) {
-        blocks.push({
+        pushBlock({
           type: 'syncedBlockMirror',
           props: {
             syncId: attrs.id,
@@ -280,7 +303,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         const quotedText = extractTagContent(innerLines, 'quoted');
         const quoted = parseSyncedQuoted(quotedText);
         const contentText = extractTagContent(innerLines, 'content');
-        blocks.push({
+        pushBlock({
           type: 'syncedBlockSource',
           props: {
             syncId: attrs.id,
@@ -312,7 +335,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         while (i < lines.length && lines[i].trim() !== '</content>') i++;
         if (i < lines.length) i++;
       }
-      blocks.push({
+      pushBlock({
         type: 'fileContent',
         props: { path: refPath, language: lang },
         content: [{ type: 'text', text: '', styles: {} }],
@@ -342,7 +365,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       };
       const language = rawLang ? (langMap[rawLang.toLowerCase()] || rawLang.toLowerCase()) : undefined;
 
-      blocks.push({
+      pushBlock({
         type: 'codeBlock',
         props: { language: language || undefined },
         content: [{ type: 'text', text: code.trim(), styles: {} }],
@@ -355,7 +378,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     if (headingMatch) {
       const level = headingMatch[1].length;
       const text = headingMatch[2];
-      blocks.push({
+      pushBlock({
         type: 'heading',
         props: { level },
         content: [{ type: 'text', text, styles: {} }],
@@ -367,7 +390,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     // Blockquote
     if (trimmed.startsWith('>')) {
       const text = trimmed.slice(1).trim();
-      blocks.push({
+      pushBlock({
         type: 'quote',
         content: [{ type: 'text', text, styles: {} }],
       });
@@ -377,7 +400,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
 
     // Horizontal rule
     if (/^[-*]{3,}$/.test(trimmed)) {
-      blocks.push({
+      pushBlock({
         type: 'divider',
       });
       i++;
@@ -389,7 +412,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     if (checkboxMatch) {
       const checked = checkboxMatch[1] === 'x';
       const text = checkboxMatch[2];
-      blocks.push({
+      pushBlock({
         type: 'checkListItem',
         props: { checked },
         content: parseInlineFormatting(text),
@@ -402,7 +425,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     const numberedListMatch = line.match(/^(\d+)\.\s+(.+)$/);
     if (numberedListMatch) {
       const text = numberedListMatch[2];
-      blocks.push({
+      pushBlock({
         type: 'numberedListItem',
         content: parseInlineFormatting(text),
       });
@@ -413,7 +436,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     // Bullet list
     if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
       const text = trimmed.slice(2);
-      blocks.push({
+      pushBlock({
         type: 'bulletListItem',
         content: parseInlineFormatting(text),
       });
@@ -433,7 +456,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         const width = Number(videoTagAttrs.width);
         if (Number.isFinite(width) && width > 0) vProps.previewWidth = width;
       }
-      blocks.push({
+      pushBlock({
         type: 'video',
         props: vProps,
       });
@@ -456,7 +479,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       if (vSerializedWidth) {
         vProps.previewWidth = Number(vSerializedWidth);
       }
-      blocks.push({
+      pushBlock({
         type: 'video',
         props: vProps,
       });
@@ -476,7 +499,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         const width = Number(imageTagAttrs.width);
         if (Number.isFinite(width) && width > 0) props.previewWidth = width;
       }
-      blocks.push({
+      pushBlock({
         type: 'image',
         props,
       });
@@ -500,7 +523,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       if (serializedWidth) {
         props.previewWidth = Number(serializedWidth);
       }
-      blocks.push({
+      pushBlock({
         type: 'image',
         props,
       });
@@ -511,7 +534,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     // Audio: <audio-block url="..." name="..." caption="..." preview="..."></audio-block>
     const audioTagAttrs = matchSelfClosingTag(trimmed, 'audio-block');
     if (audioTagAttrs) {
-      blocks.push({
+      pushBlock({
         type: 'audio',
         props: {
           url: audioTagAttrs.url || '',
@@ -531,7 +554,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       const aSrc = audioMatch[2];
       const aCaption = audioMatch[3];
       const aShowPreview = audioMatch[4] !== 'false';
-      blocks.push({
+      pushBlock({
         type: 'audio',
         props: {
           url: aSrc,
@@ -547,7 +570,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     // File: <file-block url="..." name="..." caption="..."></file-block>
     const fileTagAttrs = matchSelfClosingTag(trimmed, 'file-block');
     if (fileTagAttrs) {
-      blocks.push({
+      pushBlock({
         type: 'file',
         props: {
           url: fileTagAttrs.url || '',
@@ -565,7 +588,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       const fName = fileMatch[1];
       const fSrc = fileMatch[2];
       const fCaption = fileMatch[3];
-      blocks.push({
+      pushBlock({
         type: 'file',
         props: {
           url: fSrc,
@@ -581,7 +604,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     const pagerefId = trimmed.match(/^<page-ref\s+data-id="([a-f0-9]{32})"\s*><\/page-ref>$/)?.[1]
       || trimmed.match(/^<!--\s*pageref:([a-f0-9]{32})\s*-->$/)?.[1];
     if (pagerefId) {
-      blocks.push({
+      pushBlock({
         type: 'pageReference',
         props: { pageId: pagerefId },
       });
@@ -593,7 +616,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     const bookmarkUrl = trimmed.match(/^<book-mark\s+data-url="([^"]+)"\s*><\/book-mark>$/)?.[1]
       || trimmed.match(/^<!--\s*bookmark:(https?:\/\/.+)\s*-->$/)?.[1];
     if (bookmarkUrl) {
-      blocks.push({
+      pushBlock({
         type: 'bookmark',
         props: { url: bookmarkUrl },
       });
@@ -605,7 +628,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     const subpageId = trimmed.match(/^<sub-page\s+data-id="([a-f0-9]{32})"\s*><\/sub-page>$/)?.[1]
       || trimmed.match(/^<!--\s*subpage:([a-f0-9]{32})\s*-->$/)?.[1];
     if (subpageId) {
-      blocks.push({
+      pushBlock({
         type: 'subpage',
         props: { pageId: subpageId },
       });
@@ -655,7 +678,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         }
       }
 
-      blocks.push({
+      pushBlock({
         type: 'column_list',
         props: { columnRatios: ratios },
         children: columnChildren,
@@ -664,7 +687,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     }
 
     // Paragraph with inline formatting
-    blocks.push({
+    pushBlock({
       type: 'paragraph',
       content: parseInlineFormatting(line),
     });
@@ -899,13 +922,18 @@ export function blocksToMarkdown(blocks: any[]): string {
  * Serialize a single block to markdown, handling toggle blocks and children recursively.
  */
 function serializeBlock(block: any): string {
+  const withBlockAnchor = (markdown: string) => {
+    if (!isBlockAnchorId(block.id) || !markdown) return markdown;
+    return `<!-- ak-block-anchor: id="${escapeHtmlAttribute(block.id)}" -->\n${markdown}`;
+  };
+
   if (block.type === 'syncedBlockSource') {
     const syncId = block.props?.syncId || '';
     const quoted = parseQuotedProp(block.props?.quoted);
     const childrenMd = block.children?.length
       ? block.children.map((c: any) => serializeBlock(c)).join('\n')
       : '';
-    return renderSyncedSourceMarkdown(syncId, quoted, childrenMd);
+    return withBlockAnchor(renderSyncedSourceMarkdown(syncId, quoted, childrenMd));
   }
 
   if (block.type === 'syncedBlockMirror') {
@@ -913,7 +941,7 @@ function serializeBlock(block: any): string {
     const sourcePageId = block.props?.sourcePageId || '';
     const sourceBlockId = block.props?.sourceBlockId || '';
     if (!syncId || !sourcePageId || !sourceBlockId) return '';
-    return `<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`;
+    return withBlockAnchor(`<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`);
   }
 
   // Column list — skip if all columns are empty (content was deleted)
@@ -929,7 +957,7 @@ function serializeBlock(block: any): string {
       const colContent = (col.children || []).map((c: any) => serializeBlock(c)).join('\n');
       return `<column ratio="${ratio}">\n${colContent}\n</column>`;
     }).join('\n');
-    return `<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`;
+    return withBlockAnchor(`<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`);
   }
 
   // Toggle heading
@@ -939,7 +967,7 @@ function serializeBlock(block: any): string {
     const childrenMd = block.children?.length
       ? block.children.map((c: any) => serializeBlock(c)).join('\n')
       : '';
-    return `<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`;
+    return withBlockAnchor(`<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
   }
 
   // Toggle list item
@@ -948,7 +976,7 @@ function serializeBlock(block: any): string {
     const childrenMd = block.children?.length
       ? block.children.map((c: any) => serializeBlock(c)).join('\n')
       : '';
-    return `<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`;
+    return withBlockAnchor(`<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
   }
 
   // Regular blocks
@@ -957,10 +985,10 @@ function serializeBlock(block: any): string {
   // If a regular block has children, append them
   if (block.children?.length) {
     const childrenMd = block.children.map((c: any) => serializeBlock(c)).join('\n');
-    return line + '\n' + childrenMd;
+    return withBlockAnchor(line + '\n' + childrenMd);
   }
 
-  return line;
+  return withBlockAnchor(line);
 }
 
 /**

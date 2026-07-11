@@ -6,6 +6,8 @@
 let clipboardBlocks: any[] | null = null;
 let clipboardMarkdown: string | null = null;
 let clipboardIsCut = false;
+let clipboardSourceSpaceSlug = '';
+let clipboardSourcePageId = '';
 
 export type PendingSyncedPaste = {
   sourceSpaceSlug: string;
@@ -19,21 +21,36 @@ export type PendingSyncedPaste = {
 let pendingSyncedPaste: PendingSyncedPaste | null = null;
 const PENDING_SYNCED_PASTE_TTL_MS = 5 * 60 * 1000;
 
-export function setClipboardData(blocks: any[], markdown: string, isCut: boolean): void {
+export function setClipboardData(
+  blocks: any[],
+  markdown: string,
+  isCut: boolean,
+  source?: { spaceSlug: string; pageId: string },
+): void {
   clipboardBlocks = blocks;
   clipboardMarkdown = markdown;
   clipboardIsCut = isCut;
+  clipboardSourceSpaceSlug = source?.spaceSlug || '';
+  clipboardSourcePageId = source?.pageId || '';
 }
 
-export function getClipboardData(): { blocks: any[]; markdown: string; isCut: boolean } | null {
+export function getClipboardData(): { blocks: any[]; markdown: string; isCut: boolean; sourceSpaceSlug: string; sourcePageId: string } | null {
   if (!clipboardBlocks || clipboardBlocks.length === 0) return null;
-  return { blocks: clipboardBlocks, markdown: clipboardMarkdown!, isCut: clipboardIsCut };
+  return {
+    blocks: clipboardBlocks,
+    markdown: clipboardMarkdown!,
+    isCut: clipboardIsCut,
+    sourceSpaceSlug: clipboardSourceSpaceSlug,
+    sourcePageId: clipboardSourcePageId,
+  };
 }
 
 export function clearClipboardData(): void {
   clipboardBlocks = null;
   clipboardMarkdown = null;
   clipboardIsCut = false;
+  clipboardSourceSpaceSlug = '';
+  clipboardSourcePageId = '';
 }
 
 export function setPendingSyncedPaste(data: Omit<PendingSyncedPaste, 'createdAt'>): void {

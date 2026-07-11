@@ -170,13 +170,21 @@ function getSyncedBlockChildDeleteTarget(blocks: any[], blockId: string) {
   return { parent, block: path[path.length - 1], focusBlock };
 }
 
+function getSyncedBlockChildEnterTarget(blocks: any[], blockId: string) {
+  const path = findBlockPath(blocks, blockId);
+  if (!path || path.length < 2) return null;
+  const parent = path[path.length - 2];
+  if (parent?.type !== 'syncedBlockSource' && parent?.type !== 'syncedBlockMirror') return null;
+  return { parent, block: path[path.length - 1] };
+}
+
 function blocksForIds(editor: any, ids: string[]): any[] {
   const idSet = new Set(ids);
   return flattenBlocks(editor.document).filter((block) => idSet.has(block.id));
 }
 
 function hasSyncedBlock(blocks: any[]): boolean {
-  return blocks.some((block) => block.type === 'syncedBlockSource' || block.type === 'syncedBlockMirror');
+  return flattenBlocks(blocks).some((block) => block.type === 'syncedBlockSource' || block.type === 'syncedBlockMirror');
 }
 
 async function flushSyncedBlockMirrorsFromDocument(blocks: any[], spaceSlug: string, pageId: string) {
@@ -192,6 +200,8 @@ async function flushSyncedBlockMirrorsFromDocument(blocks: any[], spaceSlug: str
     const syncId = String(block.props?.syncId || '');
     if (!sourcePageId || !sourceBlockId) continue;
     if (block.props?.syncLoaded !== 'true') continue;
+    if (block.props?.syncBroken === 'true') continue;
+    if (!Array.isArray(block.children)) continue;
 
     const key = `${sourcePageId}:${sourceBlockId}`;
     const quotes = mirrorsBySource.get(key)?.quotes || new Map<string, { pageId: string; syncId: string }>();
@@ -220,6 +230,83 @@ async function flushAllSyncedBlockSaves(blocks: any[], spaceSlug: string, pageId
   await flushSyncedBlockMirrorsFromDocument(blocks, spaceSlug, pageId);
 }
 
+type SyncedMirrorRegistration = {
+  sourcePageId: string;
+  sourceBlockId: string;
+  pageId: string;
+  syncId: string;
+};
+
+function createSyncedMirrorBlock(sourcePageId: string, sourceBlockId: string, pageId: string): { block: any; registration: SyncedMirrorRegistration } | null {
+  if (!sourcePageId || !sourceBlockId || !pageId) return null;
+  const syncId = newSyncId();
+  return {
+    block: {
+      type: 'syncedBlockMirror',
+      props: {
+        syncId,
+        sourcePageId,
+        sourceBlockId,
+        pageId,
+      },
+    },
+    registration: {
+      sourcePageId,
+      sourceBlockId,
+      pageId,
+      syncId,
+    },
+  };
+}
+
+function prepareCopiedBlocksForPaste(
+  blocks: any[],
+  sourcePageId: string,
+  targetPageId: string,
+): { blocks: any[]; mirrorRegistrations: SyncedMirrorRegistration[] } {
+  const mirrorRegistrations: SyncedMirrorRegistration[] = [];
+
+  const visit = (block: any): any => {
+    if (block?.type === 'syncedBlockSource') {
+      const mirror = createSyncedMirrorBlock(sourcePageId, String(block.props?.syncId || ''), targetPageId);
+      if (mirror) {
+        mirrorRegistrations.push(mirror.registration);
+        return mirror.block;
+      }
+    }
+
+    if (block?.type === 'syncedBlockMirror') {
+      const mirror = createSyncedMirrorBlock(
+        String(block.props?.sourcePageId || ''),
+        String(block.props?.sourceBlockId || ''),
+        targetPageId,
+      );
+      if (mirror) {
+        mirrorRegistrations.push(mirror.registration);
+        return mirror.block;
+      }
+    }
+
+    const next = { ...block };
+    if (Array.isArray(block?.children)) {
+      next.children = block.children.map(visit);
+    }
+    return next;
+  };
+
+  return { blocks: blocks.map(visit), mirrorRegistrations };
+}
+
+async function registerSyncedMirrorQuotes(spaceSlug: string, registrations: SyncedMirrorRegistration[]) {
+  for (const registration of registrations) {
+    const source = await syncedBlocksApi.get(spaceSlug, registration.sourcePageId, registration.sourceBlockId);
+    await syncedBlocksApi.update(spaceSlug, registration.sourcePageId, registration.sourceBlockId, {
+      markdown: source.markdown,
+      addQuoted: [{ pageId: registration.pageId, syncId: registration.syncId }],
+    });
+  }
+}
+
 function parseQuotedCount(block: any): number {
   try {
     const quoted = JSON.parse(block?.props?.quoted || '[]');
@@ -235,6 +322,7 @@ function getDomSelectedBlockIds(container: HTMLElement): string[] {
   const range = selection.getRangeAt(0);
   const ids: string[] = [];
   const seen = new Set<string>();
+  const forcedSyncedBlockIds = new Set<string>();
   container.querySelectorAll('.bn-block-outer').forEach((outer) => {
     if (!range.intersectsNode(outer)) return;
     const blockEl = outer.querySelector('[data-id]');
@@ -242,18 +330,24 @@ function getDomSelectedBlockIds(container: HTMLElement): string[] {
     if (!id || seen.has(id)) return;
     seen.add(id);
     ids.push(id);
+    const syncRenderer = outer.querySelector(
+      ':scope > .bn-block > .react-renderer.node-syncedBlockSource, :scope > .bn-block > .react-renderer.node-syncedBlockMirror'
+    );
+    if (syncRenderer && range.intersectsNode(syncRenderer)) {
+      forcedSyncedBlockIds.add(id);
+    }
   });
-  return normalizeSyncedBlockSelection(ids, container);
+  return normalizeSyncedBlockSelection(ids, container, forcedSyncedBlockIds);
 }
 
 function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
   const selected = getSelectedBlockIds();
-  if (selected.length > 0) return selected;
+  if (selected.length > 0) return normalizeSyncedBlockSelection(selected, container);
   const domIds = getDomSelectedBlockIds(container);
-  if (domIds.length > 0) return domIds;
+  if (domIds.length > 0) return normalizeSyncedBlockSelection(domIds, container);
   const bnSelection = editor.getSelection?.();
   const bnIds = bnSelection?.blocks?.map((b: any) => b.id).filter(Boolean) || [];
-  return bnIds;
+  return normalizeSyncedBlockSelection(bnIds, container);
 }
 
 function getDirectBlockId(outer: Element | null): string | null {
@@ -267,10 +361,39 @@ function getSelectedDescendantIds(containerOuter: Element): string[] {
     .filter((id): id is string => !!id);
 }
 
-function normalizeSyncedBlockSelection(ids: string[], container: HTMLElement): string[] {
-  if (ids.length <= 1) return ids;
+function getBlockOuterById(container: HTMLElement, blockId: string): Element | null {
+  return container.querySelector(`.bn-block[data-id="${CSS.escape(blockId)}"]`)?.closest('.bn-block-outer') || null;
+}
 
+function isSyncedBlockOuterActive(syncOuter: Element): boolean {
+  return !!syncOuter.querySelector(
+    '.react-renderer.node-syncedBlockSource[data-sync-source-active="true"], .react-renderer.node-syncedBlockMirror[data-sync-source-active="true"]'
+  );
+}
+
+function normalizeSyncedBlockSelection(
+  ids: string[],
+  container: HTMLElement,
+  forcedSyncedBlockIds: Set<string> = new Set(),
+): string[] {
   const uniqueIds = Array.from(new Set(ids));
+  if (uniqueIds.length === 1) {
+    const blockOuter = getBlockOuterById(container, uniqueIds[0]);
+    const syncOuter = blockOuter?.closest(
+      '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource), .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)'
+    );
+    if (
+      syncOuter &&
+      blockOuter &&
+      syncOuter !== blockOuter &&
+      !isSyncedBlockOuterActive(syncOuter)
+    ) {
+      const syncId = getDirectBlockId(syncOuter);
+      if (syncId) return [syncId];
+    }
+    return uniqueIds;
+  }
+
   const selected = new Set(uniqueIds);
   const syncOuters = Array.from(
     container.querySelectorAll([
@@ -292,7 +415,7 @@ function normalizeSyncedBlockSelection(ids: string[], container: HTMLElement): s
       (id) => id !== syncId && !descendantIdSet.has(id)
     );
 
-    if (hasSelectionOutsideThisSync) {
+    if (forcedSyncedBlockIds.has(syncId) || hasSelectionOutsideThisSync) {
       selected.add(syncId);
       for (const id of selectedDescendantIds) selected.delete(id);
     } else {
@@ -4642,6 +4765,50 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     }, 1000);
   }, [triggerMirror]);
 
+  useEffect(() => {
+    if (readOnly) return;
+
+    const waitForRemovedBlocks = async (blockIds: string[]) => {
+      if (blockIds.length === 0) return;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const allRemoved = blockIds.every((id) => !findBlockDeep(editor.document, id));
+        if (allRemoved) return;
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+    };
+
+    const handleBlocksRemoved = (event: Event) => {
+      const blockIds = ((event as CustomEvent<{ blockIds?: string[] }>).detail?.blockIds || [])
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      hasChangesRef.current = true;
+      onSyncStatusChangeRef.current?.('unsaved');
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      void (async () => {
+        await waitForRemovedBlocks(blockIds);
+        const currentBlocks = editor.document;
+        const { spaceSlug, pageId } = identityRef.current;
+        await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
+        await persistFileContentBlocks(currentBlocks, spaceSlug);
+        const markdown = blocksToMarkdown(currentBlocks);
+        await createMirror(spaceSlug, pageId, markdown);
+        hasChangesRef.current = false;
+        onSyncStatusChangeRef.current?.('syncing');
+        await flushSync();
+        await useSpaceStore.getState().refreshAll();
+      })().catch((err) => {
+        hasChangesRef.current = true;
+        onSyncStatusChangeRef.current?.('unsaved');
+        console.error('[PageEditor] Delete save failed:', err);
+      });
+    };
+
+    document.addEventListener('ak-blocks-removed', handleBlocksRemoved);
+    return () => document.removeEventListener('ak-blocks-removed', handleBlocksRemoved);
+  }, [editor, persistFileContentBlocks, readOnly]);
+
   // Undo/redo compensation for subpage blocks
   // Detects when undo/redo adds/removes subpage blocks and compensates with backend API calls
   useEffect(() => {
@@ -5045,7 +5212,49 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // 注意：本 handler 注册在 capture 阶段，会先于 React 合成事件，
       // 不放行的话会拦截掉标题的 Cmd+A / Enter 等。
       const targetEl = e.target as HTMLElement | null;
-      if (!targetEl?.closest('[data-page-editor="true"]')) return;
+      const selectedIdsAtStart = getSelectedBlockIds();
+      const targetInsideEditor = !!targetEl?.closest('[data-page-editor="true"]');
+      const targetInsideSideMenu = !!targetEl?.closest('.bn-side-menu, [data-floating-ui-focusable]');
+      const selectedBlockShortcut =
+        selectedIdsAtStart.length > 0 &&
+        (
+          e.key === 'Escape' ||
+          e.key === 'Backspace' ||
+          e.key === 'Delete' ||
+          ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey)
+        );
+      if (!targetInsideEditor && !(targetInsideSideMenu && selectedBlockShortcut)) return;
+
+      if (
+        e.key === 'Enter' &&
+        !e.altKey &&
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !isDragMenuOpen() &&
+        !document.getElementById('bn-suggestion-menu')
+      ) {
+        const currentBlock = editor.getTextCursorPosition?.().block;
+        const syncChildTarget = currentBlock
+          ? getSyncedBlockChildEnterTarget(editor.document, currentBlock.id as string)
+          : null;
+        if (syncChildTarget && isEmptyTextBlock(currentBlock)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          const inserted = editor.insertBlocks([{ type: 'paragraph' } as any], currentBlock, 'after');
+          if (inserted.length > 0) {
+            editor.focus();
+            requestAnimationFrame(() => {
+              try {
+                editor.setTextCursorPosition(inserted[0], 'start');
+              } catch {
+                // The inserted block may have been changed by a concurrent editor transaction.
+              }
+            });
+          }
+          return;
+        }
+      }
 
       // Cmd+A / Ctrl+A: two-step select all (block text → all blocks)
       if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.altKey) {
@@ -5116,9 +5325,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const selectedBlocks = JSON.parse(JSON.stringify(blocksForIds(editor, ids)));
         if (selectedBlocks.length === 0) return;
         const markdown = blocksToMarkdown(selectedBlocks as any);
-        setClipboardData(selectedBlocks, markdown, isCut);
+        const { spaceSlug, pageId } = identityRef.current;
+        setClipboardData(selectedBlocks, markdown, isCut, { spaceSlug, pageId });
         if (!isCut && !hasSyncedBlock(selectedBlocks)) {
-          const { spaceSlug, pageId } = identityRef.current;
           setPendingSyncedPaste({
             sourceSpaceSlug: spaceSlug,
             sourcePageId: pageId,
@@ -5170,9 +5379,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         // Handle async: duplicate subpage pages for copy, then insert blocks
         (async () => {
           const { spaceSlug, pageId: currentPageId } = identityRef.current;
+          let pasteBlocks = JSON.parse(JSON.stringify(clipData.blocks));
+          let mirrorRegistrations: SyncedMirrorRegistration[] = [];
+          if (!clipData.isCut && (!clipData.sourceSpaceSlug || clipData.sourceSpaceSlug === spaceSlug)) {
+            const prepared = prepareCopiedBlocksForPaste(
+              pasteBlocks,
+              clipData.sourcePageId || currentPageId,
+              currentPageId,
+            );
+            pasteBlocks = prepared.blocks;
+            mirrorRegistrations = prepared.mirrorRegistrations;
+          }
+
           // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
           if (!clipData.isCut) {
-            const subpageBlocks = clipData.blocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
+            const subpageBlocks = pasteBlocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
             for (const block of subpageBlocks) {
               try {
                 const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
@@ -5187,7 +5408,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
 
           // Strip block IDs so BlockNote creates fresh ones
-          const blocksToInsert = clipData.blocks.map((b: any) => {
+          const blocksToInsert = pasteBlocks.map((b: any) => {
             const { id, ...rest } = b;
             return rest;
           });
@@ -5199,10 +5420,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           editor.focus();
 
           // Record undo actions for pasted subpage blocks (undo should delete them)
-          for (const block of clipData.blocks) {
+          for (const block of pasteBlocks) {
             if (block.type === 'subpage' && block.props?.pageId) {
               setSubpageUndoAction(block.props.pageId, { action: 'delete' });
             }
+          }
+
+          if (mirrorRegistrations.length > 0) {
+            await registerSyncedMirrorQuotes(spaceSlug, mirrorRegistrations);
           }
 
           // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
@@ -5248,7 +5473,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const hasOpenMenu = isDragMenuOpen() || !!document.getElementById('bn-suggestion-menu');
       if (e.key === 'Escape' && hasOpenMenu) return;
 
-      const ids = getSelectedBlockIds();
+      const ids = normalizeSyncedBlockSelection(getSelectedBlockIds(), container);
       if ((e.key === 'Backspace' || e.key === 'Delete') && ids.length <= 1) {
         const candidate = ids.length === 1
           ? blocksForIds(editor, ids)[0]
@@ -5446,6 +5671,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const blockOuters = container.querySelectorAll('.bn-block-outer');
       const intersecting: string[] = [];
       const blockOuterMap = new Map<string, Element>();
+      const forcedSyncedBlockIds = new Set<string>();
 
       blockOuters.forEach(outer => {
         const blockEl = outer.querySelector('[data-id]');
@@ -5463,6 +5689,24 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         if (rectDocLeft < bRight && rectDocRight > bLeft &&
             rectDocTop < bBottom && rectDocBottom > bTop) {
           intersecting.push(id);
+          const syncRenderer = outer.querySelector(
+            ':scope > .bn-block > .react-renderer.node-syncedBlockSource, :scope > .bn-block > .react-renderer.node-syncedBlockMirror'
+          );
+          if (syncRenderer) {
+            const syncRect = syncRenderer.getBoundingClientRect();
+            const syncLeft = syncRect.left + sLeft;
+            const syncRight = syncRect.right + sLeft;
+            const syncTop = syncRect.top + sTop;
+            const syncBottom = syncRect.bottom + sTop;
+            if (
+              rectDocLeft < syncRight &&
+              rectDocRight > syncLeft &&
+              rectDocTop < syncBottom &&
+              rectDocBottom > syncTop
+            ) {
+              forcedSyncedBlockIds.add(id);
+            }
+          }
         }
       });
 
@@ -5524,7 +5768,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // Process outermost toggles first (lower depth = more outer)
       toggleInfoList.sort((a, b) => a.depth - b.depth);
 
-      const result = normalizeSyncedBlockSelection(intersecting, container);
+      const result = normalizeSyncedBlockSelection(intersecting, container, forcedSyncedBlockIds);
       for (const { id: toggleId, outer: toggleOuter, descendantIds } of toggleInfoList) {
         // Skip if toggle already removed from result (by a parent's Case B)
         if (!result.includes(toggleId)) continue;
@@ -5770,6 +6014,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
 
     let activeSyncSourceOuters = new Set<HTMLElement>();
+    let hoveredSyncSourceOuter: HTMLElement | null = null;
 
     const setSyncSourceActiveMarker = (syncSourceOuter: HTMLElement, active: boolean) => {
       const sourceRenderer = syncSourceOuter.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource') as HTMLElement | null;
@@ -5799,6 +6044,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         setSyncSourceActiveMarker(outer, true);
       }
       activeSyncSourceOuters = nextOuters;
+      if (hoveredSyncSourceOuter && nextOuters.has(hoveredSyncSourceOuter)) {
+        hideSyncSourceMenu();
+      }
     };
 
     const blockOuterIsSyncSourceChild = (blockOuter: HTMLElement | null, syncSourceOuter: HTMLElement | null) => {
@@ -5889,7 +6137,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const blockOuter = getBlockOuterById(blockId);
         const syncSourceOuter = findSyncedBlockOuter(blockOuter);
         if (!syncSourceOuter) continue;
-        if (blockOuter === syncSourceOuter || blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter)) {
+        if (blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter)) {
           nextOuters.add(syncSourceOuter);
         }
       }
@@ -5900,8 +6148,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const syncSourceMenu = document.createElement('div');
     syncSourceMenu.className = 'bn-sync-source-floating-menu';
     document.body.appendChild(syncSourceMenu);
-
-    let hoveredSyncSourceOuter: HTMLElement | null = null;
+    let sideMenuVisibilityToken = 0;
 
     const getBlockIdFromOuter = (outer: HTMLElement | null) => {
       return outer?.querySelector(':scope > .bn-block')?.getAttribute('data-id') || null;
@@ -5949,7 +6196,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         })
         .filter((rect) => rect.width > 0 && rect.height > 0) as DOMRect[];
 
-      if (!rects.length) return null;
+      if (!rects.length) {
+        const brokenMirrorContent = syncSourceOuter.querySelector(
+          ':scope > .bn-block > .react-renderer.node-syncedBlockMirror > .bn-block-content[data-content-type="syncedBlockMirror"][data-sync-broken="true"]'
+        ) as HTMLElement | null;
+        const brokenRect = brokenMirrorContent?.getBoundingClientRect();
+        if (!brokenRect || brokenRect.width <= 0 || brokenRect.height <= 0) return null;
+        return {
+          left: brokenRect.left,
+          right: brokenRect.right,
+          top: brokenRect.top,
+          bottom: brokenRect.bottom,
+          width: brokenRect.width,
+          height: brokenRect.height,
+        };
+      }
       const initial = rects[0];
       return rects.slice(1).reduce<SyncHoverRect>(
         (acc, rect) => ({
@@ -5995,27 +6256,37 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const firstChildContent = firstChildBlock?.querySelector(
         ':scope > .bn-block-content, :scope > .react-renderer'
       ) as HTMLElement | null;
-      if (!editorBlockGroup || !firstChildBlock || !hoverRect) {
+      const brokenMirrorContent = syncSourceOuter.querySelector(
+        ':scope > .bn-block > .react-renderer.node-syncedBlockMirror > .bn-block-content[data-content-type="syncedBlockMirror"][data-sync-broken="true"]'
+      ) as HTMLElement | null;
+      const anchorBlock = firstChildBlock || (brokenMirrorContent?.closest('.bn-block') as HTMLElement | null);
+      const anchorContent = firstChildContent || brokenMirrorContent;
+      if (!editorBlockGroup || !anchorBlock || !hoverRect) {
         hideSyncSourceMenu();
         return;
       }
       if (!syncSourceMenuHasButtons()) cloneNativeSideMenu();
 
-      const blockRect = firstChildBlock.getBoundingClientRect();
-      const firstRect = (firstChildContent || firstChildBlock).getBoundingClientRect();
+      const blockRect = anchorBlock.getBoundingClientRect();
+      const firstRect = (anchorContent || anchorBlock).getBoundingClientRect();
       const menuRect = syncSourceMenu.getBoundingClientRect();
       const menuWidth = menuRect.width || 42;
+      const menuHeight = menuRect.height || 28;
       hoveredSyncSourceOuter = syncSourceOuter;
       document.body.classList.add('sync-source-side-menu-mode');
       document.body.classList.remove('side-menu-visible');
       syncSourceMenu.style.left = `${blockRect.left - menuWidth - 14}px`;
-      syncSourceMenu.style.top = `${firstRect.top}px`;
+      syncSourceMenu.style.top = brokenMirrorContent && !firstChildBlock
+        ? `${firstRect.top + (firstRect.height - menuHeight) / 2}px`
+        : `${firstRect.top}px`;
       syncSourceMenu.dataset.visible = 'true';
     };
 
     function hideSyncSourceMenu() {
       hoveredSyncSourceOuter = null;
       syncSourceMenu.dataset.visible = 'false';
+      syncSourceMenu.replaceChildren();
+      sideMenuVisibilityToken += 1;
       clearSyncSourceSideMenuMode();
     }
 
@@ -6033,6 +6304,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (!button || !blockId) return;
 
       if (button.getAttribute('draggable') === 'true') {
+        const wasDragMenuOpen = isDragMenuOpen();
         setBlockSelection([blockId]);
         const buttonRect = button.getBoundingClientRect();
         setSyntheticDragHandleTarget(blockId, {
@@ -6046,7 +6318,16 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const nativeDragHandle = Array.from(document.querySelectorAll('[aria-label="打开菜单"]')).find((handle) => {
           return !(handle as HTMLElement).closest('[data-sync-source-menu="true"]');
         }) as HTMLElement | undefined;
-        nativeDragHandle?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        if (!nativeDragHandle) {
+          hideSyncSourceMenu();
+          return;
+        }
+        nativeDragHandle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        if (wasDragMenuOpen) {
+          requestAnimationFrame(() => {
+            hideSyncSourceMenu();
+          });
+        }
         return;
       }
 
@@ -6064,6 +6345,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     let nativeSideMenuTargetTop: number | null = null;
 
     const hideNativeSideMenu = () => {
+      sideMenuVisibilityToken += 1;
       if (nativeSideMenuFrame !== null) {
         cancelAnimationFrame(nativeSideMenuFrame);
         nativeSideMenuFrame = null;
@@ -6074,6 +6356,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
 
     const showNativeSideMenuWhenReady = (targetRect: DOMRect) => {
+      const visibilityToken = sideMenuVisibilityToken;
       const targetTop = Math.round(targetRect.top);
       if (nativeSideMenuFrame !== null && nativeSideMenuTargetTop === targetTop) {
         nativeSideMenuTargetRect = targetRect;
@@ -6087,8 +6370,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       nativeSideMenuTargetTop = targetTop;
       if (nativeSideMenuFrame !== null) cancelAnimationFrame(nativeSideMenuFrame);
       nativeSideMenuFrame = requestAnimationFrame(() => {
+        if (visibilityToken !== sideMenuVisibilityToken) {
+          nativeSideMenuFrame = null;
+          return;
+        }
         nativeSideMenuFrame = requestAnimationFrame(() => {
           nativeSideMenuFrame = null;
+          if (visibilityToken !== sideMenuVisibilityToken) return;
           const expectedRect = nativeSideMenuTargetRect;
           if (!expectedRect) {
             document.body.classList.remove('side-menu-visible');
@@ -6141,6 +6429,26 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             e.clientX <= hoverRect.right &&
             e.clientY >= hoverRect.top &&
             e.clientY <= hoverRect.bottom
+          ) {
+            return syncOuter;
+          }
+        }
+        const syncOuters = Array.from(
+          container.querySelectorAll([
+            '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)',
+            '.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)',
+          ].join(', '))
+        ) as HTMLElement[];
+        for (const syncOuter of syncOuters) {
+          const hoverRect = getSyncSourceHoverRect(syncOuter);
+          if (!hoverRect) continue;
+          const leftBound = hoverRect.left - 150;
+          const rightBound = hoverRect.left + hoverRect.width * 0.7;
+          if (
+            e.clientY >= hoverRect.top &&
+            e.clientY <= hoverRect.bottom &&
+            e.clientX >= leftBound &&
+            e.clientX <= rightBound
           ) {
             return syncOuter;
           }

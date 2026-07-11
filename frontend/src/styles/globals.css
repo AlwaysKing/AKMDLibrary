@@ -782,6 +782,12 @@ body.drag-menu-open [data-floating-ui-focusable]:has(> .bn-side-menu) {
   opacity: 1 !important;
   pointer-events: auto !important;
 }
+
+body.drag-menu-open.sync-source-side-menu-mode [data-floating-ui-focusable]:has(> .bn-side-menu) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 /* While drag menu is open: only the drag handle button gets active background */
 body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   background: rgba(42, 28, 0, 0.07) !important;
@@ -3293,9 +3299,11 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   pointer-events: auto;
 }
 
-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror:has(.bn-synced-block-mirror.is-broken)) > .react-renderer {
+.bn-editor .bn-block:has(> .react-renderer > .bn-block-content[data-content-type="syncedBlockMirror"][data-sync-broken="true"]) > .react-renderer.node-syncedBlockMirror {
   position: relative;
+  inset: auto;
   height: auto;
+  min-height: 42px;
   overflow: visible;
 }
 
@@ -3330,6 +3338,15 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 .bn-editor .bn-block-group .bn-block:has(> .react-renderer.node-syncedBlockSource) > .bn-block-group,
 .bn-editor .bn-block-group .bn-block:has(> .react-renderer.node-syncedBlockMirror) > .bn-block-group {
   margin-left: 0 !important;
+}
+
+.bn-editor .bn-block:has(> .react-renderer > .bn-block-content[data-content-type="syncedBlockMirror"][data-sync-broken="true"]) > .bn-block-group > .bn-block-outer {
+  display: none !important;
+}
+
+.bn-editor .react-renderer.node-syncedBlockMirror > .bn-block-content[data-content-type="syncedBlockMirror"][data-sync-broken="true"] {
+  display: block;
+  min-height: 42px;
 }
 
 .bn-editor .bn-block-group .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]) > .bn-block-group > .bn-block-outer::before {
@@ -3436,8 +3453,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover .bn-synced-block-header,
 .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockMirror):hover .bn-synced-block-header,
 .bn-synced-block-mirror.is-saving > .bn-synced-block-header,
-.bn-synced-block-mirror.is-error > .bn-synced-block-header,
-.bn-synced-block-mirror.is-broken > .bn-synced-block-header {
+.bn-synced-block-mirror.is-error > .bn-synced-block-header {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
@@ -3520,9 +3536,13 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 
 .bn-synced-block-placeholder {
   display: flex;
+  position: static;
   align-items: center;
   gap: 8px;
-  padding: 14px 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 0 8px 8px;
   color: rgba(55, 53, 47, 0.62);
   font-size: 13px;
 }

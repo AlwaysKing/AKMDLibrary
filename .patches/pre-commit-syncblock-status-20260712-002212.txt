@@ -1,0 +1,9 @@
+ .../src/components/Editor/BlockNoteComponents.tsx  |  96 +++++-
+ frontend/src/components/Editor/PageEditor.tsx      | 358 +++++++++++++++++++--
+ frontend/src/components/Editor/SyncedBlock.tsx     |  41 ++-
+ .../src/components/Editor/blockClipboardState.ts   |  23 +-
+ frontend/src/components/Editor/blockHelpers.ts     | 107 +++++-
+ frontend/src/pages/PageViewPage.tsx                |  79 ++++-
+ frontend/src/styles/globals.css                    |  28 +-
+ frontend/src/utils/markdown.ts                     | 100 +++---
+ 8 files changed, 747 insertions(+), 85 deletions(-)

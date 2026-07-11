@@ -84,7 +84,7 @@ export default function PageViewPage() {
     refreshGit();
   }, [refreshGit]);
 
-  // Scroll to a block referenced by `#block-<uuid>` in the URL.
+  // Scroll to a block referenced by a permanent block id in the URL.
   // BlockNote renders blocks synchronously on mount, but large pages take a
   // few frames to commit; poll for up to 2s, then give up silently (stale
   // link, block deleted, etc.). scrollIntoView walks up to the nearest
@@ -92,18 +92,83 @@ export default function PageViewPage() {
   // the container manually.
   const scrollToBlockHash = useCallback(() => {
     const hash = window.location.hash;
-    if (!hash.startsWith('#block-')) return;
-    const blockId = decodeURIComponent(hash.slice('#block-'.length));
+    if (!hash) return;
+    const rawBlockId = hash.slice(1);
+    const blockId = decodeURIComponent(rawBlockId);
+    if (!blockId.startsWith('akb_')) return;
     if (!blockId) return;
     const deadline = Date.now() + 2000;
     let raf = 0;
+    let highlightTimer = 0;
+    let settleTimer = 0;
+
+    const flashBlock = (blockOuter: HTMLElement) => {
+      const rect = blockOuter.getBoundingClientRect();
+      document.querySelectorAll('.bn-block-link-flash-overlay').forEach((node) => node.remove());
+      const overlay = document.createElement('div');
+      overlay.className = 'bn-block-link-flash-overlay';
+      overlay.setAttribute('aria-hidden', 'true');
+      overlay.style.position = 'fixed';
+      overlay.style.left = `${rect.left}px`;
+      overlay.style.top = `${rect.top}px`;
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+      overlay.style.boxSizing = 'border-box';
+      overlay.style.border = '0';
+      overlay.style.background = 'rgba(35, 131, 226, 0)';
+      overlay.style.borderRadius = '4px';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.zIndex = '10000';
+      document.body.appendChild(overlay);
+      overlay.animate([
+        { background: 'rgba(35, 131, 226, 0)' },
+        { background: 'rgba(35, 131, 226, 0.06)', offset: 0.12 },
+        { background: 'rgba(35, 131, 226, 0.01)', offset: 0.28 },
+        { background: 'rgba(35, 131, 226, 0.06)', offset: 0.42 },
+        { background: 'rgba(35, 131, 226, 0.025)', offset: 0.68 },
+        { background: 'rgba(35, 131, 226, 0)' },
+      ], { duration: 1200, easing: 'ease-out' });
+      highlightTimer = window.setTimeout(() => {
+        overlay.remove();
+      }, 1300);
+    };
+
+    const findScrollParent = (element: HTMLElement): HTMLElement | Window => {
+      let parent = element.parentElement;
+      while (parent) {
+        const style = window.getComputedStyle(parent);
+        const overflowY = style.overflowY;
+        if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && parent.scrollHeight > parent.clientHeight) {
+          return parent;
+        }
+        parent = parent.parentElement;
+      }
+      return window;
+    };
+
+    const flashAfterScrollSettles = (blockOuter: HTMLElement, scrollParent: HTMLElement | Window) => {
+      let flashed = false;
+      const flashOnce = () => {
+        if (flashed) return;
+        flashed = true;
+        window.clearTimeout(settleTimer);
+        requestAnimationFrame(() => requestAnimationFrame(() => flashBlock(blockOuter)));
+      };
+
+      scrollParent.addEventListener('scrollend', flashOnce, { once: true });
+      settleTimer = window.setTimeout(flashOnce, 650);
+    };
+
     const tryScroll = () => {
       // CSS.escape guards against characters that would break the attribute
       // selector (e.g. brackets). BlockNote UUIDs are plain hex+dash so this
       // is belt-and-braces.
       const el = document.querySelector(`[data-id="${CSS.escape(blockId)}"]`) as HTMLElement | null;
       if (el) {
+        const scrollParent = findScrollParent(el);
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const blockOuter = (el.closest('.bn-block-outer') as HTMLElement | null) || el;
+        flashAfterScrollSettles(blockOuter, scrollParent);
         return;
       }
       if (Date.now() < deadline) {
@@ -111,7 +176,11 @@ export default function PageViewPage() {
       }
     };
     tryScroll();
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(highlightTimer);
+      window.clearTimeout(settleTimer);
+    };
   }, []);
 
   // Cross-page navigation: fetchPage resolves → currentPage.id changes →
@@ -123,7 +192,7 @@ export default function PageViewPage() {
     return () => clearTimeout(id);
   }, [currentPage?.id, scrollToBlockHash]);
 
-  // Same-page clicks on a `#block-...` link don't change the route — React
+  // Same-page clicks on a hash link don't change the route — React
   // Router doesn't re-render, so we need a hashchange listener.
   useEffect(() => {
     window.addEventListener('hashchange', scrollToBlockHash);

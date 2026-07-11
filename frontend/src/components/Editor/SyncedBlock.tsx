@@ -66,6 +66,18 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
 
   const load = () => {
     if (!slug || !sourcePageId || !sourceBlockId) {
+      suppressChangeRef.current = true;
+      try {
+        outerEditor.updateBlock(block.id, {
+          props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
+        } as any);
+      } catch {
+        // If the block disappeared while loading, there is nothing to mark.
+      }
+      requestAnimationFrame(() => {
+        suppressChangeRef.current = false;
+        loadedRef.current = false;
+      });
       setState('broken');
       return;
     }
@@ -75,7 +87,7 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
         const blocks = markdownToBlocks(data.markdown);
         suppressChangeRef.current = true;
         outerEditor.updateBlock(block.id, {
-          props: { ...block.props, syncLoaded: 'true' },
+          props: { ...block.props, syncLoaded: 'true', syncBroken: 'false' },
           children: blocks,
         } as any);
         requestAnimationFrame(() => {
@@ -90,8 +102,23 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
         }).catch(() => {});
       })
       .catch((err) => {
-        if (err?.response?.status === 404) setState('broken');
-        else setState('error');
+        if (err?.response?.status === 404) {
+          suppressChangeRef.current = true;
+          try {
+            outerEditor.updateBlock(block.id, {
+              props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
+            } as any);
+          } catch {
+            // If the block disappeared while loading, there is nothing to mark.
+          }
+          requestAnimationFrame(() => {
+            suppressChangeRef.current = false;
+            loadedRef.current = false;
+          });
+          setState('broken');
+        } else {
+          setState('error');
+        }
       });
   };
 
@@ -117,7 +144,12 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
       }
       saveInFlightRef.current = (async () => {
         const liveBlock = outerEditor.getBlock(block.id);
-        const markdown = blocksToMarkdown((liveBlock?.children || []) as any[]);
+        const children = liveBlock?.children || [];
+        if (liveBlock?.props?.syncLoaded !== 'true' || liveBlock?.props?.syncBroken === 'true') {
+          pendingSyncedBlockSaves.delete(registryKey);
+          return;
+        }
+        const markdown = blocksToMarkdown(children as any[]);
         await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
           markdown,
           addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
@@ -211,6 +243,7 @@ export const SyncedBlockMirrorSpec = createReactBlockSpec(
       sourceBlockId: { default: '' },
       pageId: { default: '' },
       syncLoaded: { default: 'false' },
+      syncBroken: { default: 'false' },
     },
     content: 'none',
   },
