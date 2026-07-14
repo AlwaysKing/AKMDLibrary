@@ -915,7 +915,11 @@ function parseInlineFormatting(text: string): any[] {
  * Convert BlockNote blocks to markdown
  */
 export function blocksToMarkdown(blocks: any[]): string {
-  return blocks.map(block => serializeBlock(block)).join('\n');
+  // 用 '\n\n' 拼接符合标准 markdown 段落分隔。
+  // 之前用单 '\n' 会让外部消费者（Notion、BlockNote 默认 paste handler 等）
+  // 把多个 paragraph 当成同一段内的软换行，从而塌成 1 个 block。
+  // markdownToBlocks 解析时空行被跳过，对单 '\n' 和 '\n\n' 都兼容，无回环风险。
+  return blocks.map(block => serializeBlock(block)).join('\n\n');
 }
 
 /**
