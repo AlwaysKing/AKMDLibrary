@@ -4,11 +4,11 @@
  */
 
 .find-match {
-  background: rgba(255, 213, 79, 0.5);
+  background: rgba(255, 213, 79, 0.3);
   border-radius: 2px;
 }
 
 .find-match-current {
-  background: #ffe664;
+  background: #ffc400;
   border-radius: 2px;
 }

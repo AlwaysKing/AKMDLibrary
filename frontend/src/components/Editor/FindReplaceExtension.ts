@@ -1,5 +1,5 @@
 import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 /**
@@ -97,18 +97,68 @@ function recompute(state: FindReplaceState, doc: any, keepNearPos?: number): Fin
 }
 
 /**
- * Move the DOM selection to the match and scroll it into view.
- * Setting the ProseMirror text selection to the match range makes the
- * editor's built-in scrollIntoView kick in.
+ * Scroll the current match into view.
+ *
+ * This only scrolls — it deliberately does NOT touch the ProseMirror
+ * selection. Setting a text selection on the match range would trigger
+ * BlockNote's FormattingToolbarController (any non-empty text selection
+ * pops the `bn-formatting-toolbar`), which is undesirable while the user
+ * is navigating search results. Highlighting is handled separately by
+ * ProseMirror Decorations (`find-match-current` class).
+ *
+ * Implementation strategy:
+ *   1. Use `view.coordsAtPos(match.from)` to get the exact viewport
+ *      coordinates of the match position.
+ *   2. Compute the delta needed to bring those coords inside the scroll
+ *      container's visible rect and call `scrollBy` on the container.
+ *
+ * Why we can't use ProseMirror's `tr.scrollIntoView()`:
+ *   Under the BlockNote → TipTap → ProseMirror wrapper stack, with the
+ *   editor unfocused (the search input holds focus during Cmd+F) and the
+ *   real scroll container being the outer `.overflow-y-auto`, ProseMirror's
+ *   own scroll-into-view does not reliably reach the visible scroll parent.
+ *
+ * Why we can't use native `leaf.scrollIntoView({ block: 'nearest' })` on
+ * the DOM at the match position:
+ *   For `codeBlock`, `view.domAtPos()` returns a text node whose parent
+ *   is the single `<code>` element wrapping ALL of the code (newlines are
+ *   characters, not separate block elements). `<code>` is then taller
+ *   than the viewport, and `scrollIntoView({ block: 'nearest' })` on it
+ *   scrolls so the element's TOP lands at the viewport top — i.e. it
+ *   scrolls to the start of the code block, not the matched line.
+ *
+ * `coordsAtPos` is computed by ProseMirror independently of the DOM
+ * hierarchy, so it gives the correct y-coordinate of the matched line
+ * regardless of whether `domAtPos` would return the line's text node or
+ * the whole `<code>` wrapper.
  */
 function scrollMatchIntoView(editor: any, match: FindMatch) {
   try {
-    const { state, view } = editor;
-    const sel = TextSelection.create(state.doc, match.from, match.to);
-    const tr = state.tr.setSelection(sel).scrollIntoView();
-    view.dispatch(tr);
+    const { view } = editor;
+    const coords = view.coordsAtPos(match.from);
+    // The editor's vertical scroll container. Matches the pattern used
+    // elsewhere in this codebase (PageEditor.tsx ~L5298, L6840).
+    const container = (view.dom.closest?.('.overflow-y-auto') as HTMLElement | null) ?? null;
+    if (container) {
+      const cRect = container.getBoundingClientRect();
+      const margin = 8;
+      if (coords.top < cRect.top + margin) {
+        // Match is above the visible area — scroll up.
+        container.scrollBy({ top: coords.top - cRect.top - margin, behavior: 'smooth' });
+      } else if (coords.bottom > cRect.bottom - margin) {
+        // Match is below the visible area — scroll down.
+        container.scrollBy({ top: coords.bottom - cRect.bottom + margin, behavior: 'smooth' });
+      }
+      return;
+    }
+    // Fallback: no `.overflow-y-auto` ancestor — use native scrollIntoView
+    // on the leaf element. Less precise for code blocks but still better
+    // than nothing.
+    const { node } = view.domAtPos(match.from);
+    const leaf = node instanceof HTMLElement ? node : node.parentElement;
+    leaf?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } catch {
-    // Selection update is best-effort; never throw during search nav.
+    // Scroll is best-effort; never throw during search nav.
   }
 }
 
