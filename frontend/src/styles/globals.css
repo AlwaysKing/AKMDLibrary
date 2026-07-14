@@ -3558,10 +3558,10 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 }
 
 .sync-dialog {
-  width: min(440px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - 32px));
   border-radius: 8px;
-  background: #fffdf7;
-  border: 1px solid rgba(150, 111, 28, 0.28);
+  background: #fff;
+  border: 1px solid rgba(55, 53, 47, 0.14);
   box-shadow: 0 16px 40px rgba(15, 15, 15, 0.18);
   padding: 14px;
 }
@@ -3571,7 +3571,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #3b321d;
+  color: #37352f;
 }
 
 .sync-dialog-body {
@@ -3621,7 +3621,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
 }
 
 .sync-delete-options {
-  display: grid;
+  display: flex;
   gap: 8px;
   margin-top: 14px;
 }
@@ -3631,19 +3631,29 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  padding: 10px;
-  background: #fbf1cf;
-  color: #3b321d;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 9px 10px;
+  background: #fff;
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  color: #37352f;
   text-align: left;
 }
 
 .sync-delete-options button:hover {
-  background: #f7e6b3;
+  background: rgba(55, 53, 47, 0.06);
 }
 
 .sync-delete-options span {
   color: rgba(55, 53, 47, 0.64);
   font-size: 12px;
+  line-height: 16px;
+}
+
+@media (max-width: 520px) {
+  .sync-delete-options {
+    flex-direction: column;
+  }
 }
 
 .bn-file-content-block {

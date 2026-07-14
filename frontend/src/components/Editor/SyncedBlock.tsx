@@ -13,6 +13,20 @@ export async function flushPendingSyncedBlockSaves() {
   await Promise.all(saves.map((save) => save()));
 }
 
+// 模块级 hydrate 抑制标志：mirror 的 load() 调 updateBlock 期间，
+// 通过计数器告知 PageEditor 这次变更是系统 hydrate 触发，不应视为用户编辑。
+// 用计数器而非布尔，支持同页多 mirror 并发 hydrate。
+let pageChangeSuppressCount = 0;
+export function beginPageChangeSuppress() {
+  pageChangeSuppressCount += 1;
+}
+export function endPageChangeSuppress() {
+  pageChangeSuppressCount = Math.max(0, pageChangeSuppressCount - 1);
+}
+export function isPageChangeSuppressed() {
+  return pageChangeSuppressCount > 0;
+}
+
 function shortId(id: string | undefined) {
   return id ? id.slice(0, 8) : '未设置';
 }
@@ -64,21 +78,28 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
   const blockChildrenKey = useMemo(() => JSON.stringify(block.children || []), [block.children]);
   const registryKey = `${sourcePageId}:${sourceBlockId}:${syncId}`;
 
+  const markBroken = () => {
+    suppressChangeRef.current = true;
+    beginPageChangeSuppress();
+    try {
+      outerEditor.updateBlock(block.id, {
+        props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
+      } as any);
+    } catch {
+      // If the block disappeared while updating, there is nothing to mark.
+    }
+    pendingSyncedBlockSaves.delete(registryKey);
+    requestAnimationFrame(() => {
+      suppressChangeRef.current = false;
+      loadedRef.current = false;
+      endPageChangeSuppress();
+    });
+    setState('broken');
+  };
+
   const load = () => {
     if (!slug || !sourcePageId || !sourceBlockId) {
-      suppressChangeRef.current = true;
-      try {
-        outerEditor.updateBlock(block.id, {
-          props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
-        } as any);
-      } catch {
-        // If the block disappeared while loading, there is nothing to mark.
-      }
-      requestAnimationFrame(() => {
-        suppressChangeRef.current = false;
-        loadedRef.current = false;
-      });
-      setState('broken');
+      markBroken();
       return;
     }
     setState('loading');
@@ -86,6 +107,7 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
       .then((data) => {
         const blocks = markdownToBlocks(data.markdown);
         suppressChangeRef.current = true;
+        beginPageChangeSuppress();
         outerEditor.updateBlock(block.id, {
           props: { ...block.props, syncLoaded: 'true', syncBroken: 'false' },
           children: blocks,
@@ -93,29 +115,22 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
         requestAnimationFrame(() => {
           suppressChangeRef.current = false;
           loadedRef.current = true;
+          endPageChangeSuppress();
         });
         setSourceTitle(data.sourceTitle || '');
         setState('live');
         syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
           markdown: data.markdown,
           addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
-        }).catch(() => {});
+        }).catch((err) => {
+          if (err?.response?.status === 404) {
+            markBroken();
+          }
+        });
       })
       .catch((err) => {
         if (err?.response?.status === 404) {
-          suppressChangeRef.current = true;
-          try {
-            outerEditor.updateBlock(block.id, {
-              props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
-            } as any);
-          } catch {
-            // If the block disappeared while loading, there is nothing to mark.
-          }
-          requestAnimationFrame(() => {
-            suppressChangeRef.current = false;
-            loadedRef.current = false;
-          });
-          setState('broken');
+          markBroken();
         } else {
           setState('error');
         }
@@ -150,10 +165,18 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
           return;
         }
         const markdown = blocksToMarkdown(children as any[]);
-        await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
-          markdown,
-          addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
-        });
+        try {
+          await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
+            markdown,
+            addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
+          });
+        } catch (err: any) {
+          if (err?.response?.status === 404) {
+            markBroken();
+            return;
+          }
+          throw err;
+        }
         pendingSyncedBlockSaves.delete(registryKey);
         setState('saved');
       })();
@@ -170,6 +193,30 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockChildrenKey]);
+
+  // mirror 的 children 被全部删除时，补一个空段落占位，保持视觉可见
+  // （与刷新后状态一致）。补段落后 blockChildrenKey 变化，自动保存会把空内容推到源。
+  useEffect(() => {
+    if (!loadedRef.current || suppressChangeRef.current) return;
+    if (state === 'loading' || state === 'broken') return;
+    const children = block.children || [];
+    if (children.length === 0) {
+      suppressChangeRef.current = true;
+      beginPageChangeSuppress();
+      try {
+        outerEditor.updateBlock(block.id, {
+          children: [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }],
+        } as any);
+      } catch {
+        // block may have been removed
+      }
+      requestAnimationFrame(() => {
+        suppressChangeRef.current = false;
+        endPageChangeSuppress();
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockChildrenKey]);
 
