@@ -81,6 +81,8 @@ export function setSyntheticDragHandleTarget(
 }
 
 function setBlockSelection(blockIds: string[] | null) {
+  const stack = new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()).join(' | ');
+  console.log(`[setBlockSelection] ids=[${(blockIds || []).join(',')}] caller: ${stack}`);
   currentSelectedIds = blockIds || [];
   if (!blockSelectionStyleEl) {
     blockSelectionStyleEl = document.createElement('style');
