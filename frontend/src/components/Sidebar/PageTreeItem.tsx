@@ -268,6 +268,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
       <div
         {...dragHandleProps}
         data-page-row
+        onClick={handleClick}
         className={`w-full flex items-center h-[30px] rounded-md transition-colors text-left group ${
           isDragging ? 'opacity-40' : ''
         } ${
@@ -296,7 +297,6 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
 
         {/* Title */}
         <span
-          onClick={handleClick}
           className={`text-sm font-medium truncate flex-1 cursor-pointer ${isActive ? 'text-notion-text' : 'text-notion-sidebarText'}`}
         >
           {page.title || '未命名页面'}
@@ -304,7 +304,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
 
         {/* More menu button */}
         <button
-          onClick={openMenu}
+          onClick={(e) => { e.stopPropagation(); openMenu(e); }}
           className="flex items-center justify-center w-5 h-5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
         >
           <MoreHorizontal className="w-4 h-4 text-[#8e8b86]" />
