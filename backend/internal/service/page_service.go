@@ -26,9 +26,31 @@ type PageService struct {
 	dbs     map[string]interface{ Close() error }
 	mu      sync.RWMutex
 
+	// pageLocks serializes read-modify-write sequences on a single page file.
+	// Key: pageID (frontmatter id). Value: *sync.Mutex dedicated to that page.
+	// Different pageIDs run fully in parallel; same pageID operations are
+	// serialized to prevent racing reads from observing a half-written file
+	// (which previously caused GetByID's repair branch to overwrite valid
+	// content with empty frontmatter).
+	pageLocks sync.Map
+
 	// gitSync is optional; when set, file writes notify the worker so auto-commit
 	// can pick them up. Safe to leave nil (default) — the hook becomes a no-op.
 	gitSync *GitSyncWorker
+}
+
+// lockPage returns a deferred-call that unlocks the per-page mutex.
+// Usage: defer s.lockPage(pageID)()
+//
+// All read-modify-write sequences on a page file MUST be wrapped with this
+// to prevent concurrent writers from racing. The lock is process-local
+// (sync.Mutex), keyed by pageID. Lock table grows lazily; entries are cheap
+// (a *sync.Mutex pointer each) and can be ignored on page deletion.
+func (s *PageService) lockPage(pageID string) func() {
+	v, _ := s.pageLocks.LoadOrStore(pageID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return func() { mu.Unlock() }
 }
 
 // SetGitSyncWorker wires the auto-commit worker. Optional; call once at startup.
@@ -47,6 +69,20 @@ func (s *PageService) markGitDirty(spaceSlug string) {
 
 func (s *PageService) MarkGitDirty(spaceSlug string) {
 	s.markGitDirty(spaceSlug)
+}
+
+// diagReadFile reads a page file. The label argument is retained for log
+// correlation but currently unused — kept so diagnostic logging can be
+// re-enabled quickly if a future regression needs investigation.
+func diagReadFile(label, filePath string) ([]byte, error) {
+	return os.ReadFile(filePath)
+}
+
+// diagWriteFile writes a page file. The label argument is retained for log
+// correlation but currently unused — kept so diagnostic logging can be
+// re-enabled quickly if a future regression needs investigation.
+func diagWriteFile(label, filePath string, content []byte) error {
+	return os.WriteFile(filePath, content, 0644)
 }
 
 // resolveSpaceDir finds the actual directory for a space slug.
@@ -205,7 +241,7 @@ func (s *PageService) rebuildNodes(nodes []*model.PageNode, repo *repository.Pag
 // If not, generates a new UUID, writes it into the frontmatter, and returns it.
 func (s *PageService) ensurePageUUID(relPath string) string {
 	absPath := filepath.Join(s.docsDir, relPath)
-	raw, err := os.ReadFile(absPath)
+	raw, err := diagReadFile("ensurePageUUID", absPath)
 	if err != nil {
 		return uuidutil.NewPageID()
 	}
@@ -218,7 +254,7 @@ func (s *PageService) ensurePageUUID(relPath string) string {
 	// Generate and write UUID into frontmatter
 	fm.ID = uuidutil.NewPageID()
 	assembled := frontmatter.Render(fm, body)
-	os.WriteFile(absPath, assembled, 0644)
+	diagWriteFile("ensurePageUUID", absPath, assembled)
 	return fm.ID
 }
 
@@ -385,6 +421,7 @@ func sortNodesByOrder(nodes []*model.PageNode) {
 }
 
 func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, error) {
+	defer s.lockPage(pageID)()
 	repo, err := s.getRepo(spaceSlug)
 	if err != nil {
 		return nil, err
@@ -396,7 +433,7 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
 	}
 
 	filePath := filepath.Join(s.docsDir, page.FilePath)
-	raw, err := os.ReadFile(filePath)
+	raw, err := diagReadFile("GetByID", filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read page content: %w", err)
 	}
@@ -407,7 +444,7 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
 	if fm.ID == "" {
 		fm.ID = pageID
 		assembled := frontmatter.Render(fm, body)
-		os.WriteFile(filePath, assembled, 0644)
+		diagWriteFile("GetByID.repairID", filePath, assembled)
 	}
 
 	if fm.Icon != "" {
@@ -440,7 +477,7 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
 	maintained := s.maintainSubpageBlocks(page.Content, repo, page.FilePath)
 	if maintained != page.Content {
 		assembled := frontmatter.Render(fm, maintained)
-		os.WriteFile(filePath, assembled, 0644)
+		diagWriteFile("GetByID.rewriteMaintain", filePath, assembled)
 		page.Content = maintained
 	}
 
@@ -495,7 +532,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 			fm.Icon = req.Icon
 		}
 		fileBytes := frontmatter.Render(fm, "")
-		if err := os.WriteFile(filepath.Join(s.docsDir, childRelPath), fileBytes, 0644); err != nil {
+		if err := diagWriteFile("Create.child", filepath.Join(s.docsDir, childRelPath), fileBytes); err != nil {
 			return nil, fmt.Errorf("failed to create child page: %w", err)
 		}
 
@@ -524,7 +561,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 		rootFm.Icon = req.Icon
 	}
 	rootFileBytes := frontmatter.Render(rootFm, "")
-	if err := os.WriteFile(filepath.Join(s.docsDir, relPath), rootFileBytes, 0644); err != nil {
+	if err := diagWriteFile("Create.root", filepath.Join(s.docsDir, relPath), rootFileBytes); err != nil {
 		return nil, fmt.Errorf("failed to create page: %w", err)
 	}
 
@@ -539,6 +576,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
 }
 
 func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdatePageRequest) (*model.Page, error) {
+	defer s.lockPage(pageID)()
 	s.markGitDirty(spaceSlug)
 	repo, err := s.getRepo(spaceSlug)
 	if err != nil {
@@ -551,7 +589,7 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 	}
 
 	filePath := filepath.Join(s.docsDir, page.FilePath)
-	raw, err := os.ReadFile(filePath)
+	raw, err := diagReadFile("Update", filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read page file: %w", err)
 	}
@@ -566,7 +604,7 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 	// passes through untouched here.
 
 	assembled := frontmatter.Render(fm, maintained)
-	if err := os.WriteFile(filePath, assembled, 0644); err != nil {
+	if err := diagWriteFile("Update", filePath, assembled); err != nil {
 		return nil, fmt.Errorf("failed to update page content: %w", err)
 	}
 
@@ -574,6 +612,7 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 }
 
 func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.UpdatePageMetaRequest) (*model.Page, error) {
+	defer s.lockPage(pageID)()
 	s.markGitDirty(spaceSlug)
 	repo, err := s.getRepo(spaceSlug)
 	if err != nil {
@@ -586,7 +625,7 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
 	}
 
 	absPath := filepath.Join(s.docsDir, page.FilePath)
-	raw, err := os.ReadFile(absPath)
+	raw, err := diagReadFile("UpdateMeta", absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read page file: %w", err)
 	}
@@ -666,7 +705,7 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
 	}
 
 	assembled := frontmatter.Render(fm, body)
-	if err := os.WriteFile(absPath, assembled, 0644); err != nil {
+	if err := diagWriteFile("UpdateMeta", absPath, assembled); err != nil {
 		return nil, fmt.Errorf("failed to write frontmatter: %w", err)
 	}
 
@@ -1008,7 +1047,7 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID 
 
 	// Read the original file content + frontmatter
 	absPath := filepath.Join(s.docsDir, origPage.FilePath)
-	raw, err := os.ReadFile(absPath)
+	raw, err := diagReadFile("Duplicate", absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read source page: %w", err)
 	}
@@ -1065,7 +1104,7 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID 
 	newRelPath := filepath.Join(targetRelDir, newTitle+".md")
 	newAbsPath := filepath.Join(s.docsDir, newRelPath)
 	fileBytes := frontmatter.Render(newFm, body)
-	if err := os.WriteFile(newAbsPath, fileBytes, 0644); err != nil {
+	if err := diagWriteFile("Duplicate", newAbsPath, fileBytes); err != nil {
 		return nil, fmt.Errorf("failed to write duplicate page: %w", err)
 	}
 
@@ -1522,13 +1561,14 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
 //   - afterID != nil: insert after the <sub-page> line matching afterID
 //   - no existing <sub-page> lines: append to end
 func (s *PageService) insertSubpageInParent(repo *repository.PageRepository, parentID string, childID string, afterID *string) {
+	defer s.lockPage(parentID)()
 	parent, err := repo.GetByID(parentID)
 	if err != nil {
 		return
 	}
 
 	filePath := filepath.Join(s.docsDir, parent.FilePath)
-	raw, err := os.ReadFile(filePath)
+	raw, err := diagReadFile("insertSubpage", filePath)
 	if err != nil {
 		return
 	}
@@ -1566,7 +1606,7 @@ func (s *PageService) insertSubpageInParent(repo *repository.PageRepository, par
 		}
 		body += target
 		assembled := frontmatter.Render(fm, body)
-		os.WriteFile(filePath, assembled, 0644)
+		diagWriteFile("insertSubpage.append", filePath, assembled)
 		return
 	}
 
@@ -1596,18 +1636,19 @@ func (s *PageService) insertSubpageInParent(repo *repository.PageRepository, par
 	newBody = strings.TrimRight(newBody, "\n")
 
 	assembled := frontmatter.Render(fm, newBody)
-	os.WriteFile(filePath, assembled, 0644)
+	diagWriteFile("insertSubpage.insert", filePath, assembled)
 }
 
 // removeSubpageFromParent removes the subpage tag/comment for childID from parent page's content.
 func (s *PageService) removeSubpageFromParent(repo *repository.PageRepository, parentID string, childID string) {
+	defer s.lockPage(parentID)()
 	parent, err := repo.GetByID(parentID)
 	if err != nil {
 		return
 	}
 
 	filePath := filepath.Join(s.docsDir, parent.FilePath)
-	raw, err := os.ReadFile(filePath)
+	raw, err := diagReadFile("removeSubpage", filePath)
 	if err != nil {
 		return
 	}
@@ -1631,7 +1672,7 @@ func (s *PageService) removeSubpageFromParent(repo *repository.PageRepository, p
 	}
 
 	assembled := frontmatter.Render(fm, newBody)
-	os.WriteFile(filePath, assembled, 0644)
+	diagWriteFile("removeSubpage", filePath, assembled)
 }
 
 // findParentPageID determines the parent page ID from a child page's file_path.
