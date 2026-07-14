@@ -18,13 +18,13 @@ import { TextSelection, NodeSelection } from '@tiptap/pm/state';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Extension } from '@tiptap/core';
-import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction, setPendingSyncedPaste, getPendingSyncedPaste, clearPendingSyncedPaste, type PendingSyncedPaste } from './blockClipboardState';
+import { addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction, writeAkmdClipboard, readAkmdClipboard, type ClipboardPayload } from './blockClipboardState';
 import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import { MarkBlockSpec } from './MarkBlock';
 import { FileContentBlockSpec } from './FileContentBlock';
-import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves } from './SyncedBlock';
+import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves, isPageChangeSuppressed } from './SyncedBlock';
 import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
 import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
 import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
@@ -42,6 +42,7 @@ import { uploadApi } from '../../api/upload';
 import { writeSpaceFile } from '../../api/files';
 import { createMirror } from '../../services/mirrorStore';
 import { useSpaceStore } from '../../stores/spaceStore';
+import { useEditorFlushStore } from '../../stores/editorFlushStore';
 import { flushSync } from '../../services/syncModule';
 import { clearHeaderHandleLock, getHeaderHandleLock, isHeaderMenuOpen, setHeaderHandleLock, setHeaderMenuOpen } from './tableHandleState';
 import { showToast } from '../Toast';
@@ -218,10 +219,15 @@ async function flushSyncedBlockMirrorsFromDocument(blocks: any[], spaceSlug: str
   }
 
   for (const mirror of mirrorsBySource.values()) {
-    await syncedBlocksApi.update(spaceSlug, mirror.sourcePageId, mirror.sourceBlockId, {
-      markdown: mirror.markdown,
-      addQuoted: Array.from(mirror.quotes.values()),
-    });
+    try {
+      await syncedBlocksApi.update(spaceSlug, mirror.sourcePageId, mirror.sourceBlockId, {
+        markdown: mirror.markdown,
+        addQuoted: Array.from(mirror.quotes.values()),
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) continue;
+      throw err;
+    }
   }
 }
 
@@ -385,11 +391,15 @@ function normalizeSyncedBlockSelection(
     if (
       syncOuter &&
       blockOuter &&
-      syncOuter !== blockOuter &&
-      !isSyncedBlockOuterActive(syncOuter)
+      syncOuter !== blockOuter
     ) {
-      const syncId = getDirectBlockId(syncOuter);
-      if (syncId) return [syncId];
+      // broken mirror（源已消失）的提示内容无法单独删除，选中其内部时归一化为删整个 mirror。
+      // 其他情况保持 active 检查（光标在 source/正常 mirror 内时允许编辑内部内容）。
+      const isBrokenMirror = !!syncOuter.querySelector('.bn-synced-block-mirror.is-broken');
+      if (isBrokenMirror || !isSyncedBlockOuterActive(syncOuter)) {
+        const syncId = getDirectBlockId(syncOuter);
+        if (syncId) return [syncId];
+      }
     }
     return uniqueIds;
   }
@@ -415,7 +425,9 @@ function normalizeSyncedBlockSelection(
       (id) => id !== syncId && !descendantIdSet.has(id)
     );
 
-    if (forcedSyncedBlockIds.has(syncId) || hasSelectionOutsideThisSync) {
+    const isBrokenMirror = !!syncOuter.querySelector('.bn-synced-block-mirror.is-broken');
+    // broken mirror 的提示内容无法单独删除，选中其内部 subblock 时提升为整个 mirror。
+    if (forcedSyncedBlockIds.has(syncId) || hasSelectionOutsideThisSync || isBrokenMirror) {
       selected.add(syncId);
       for (const id of selectedDescendantIds) selected.delete(id);
     } else {
@@ -2201,7 +2213,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     url: string;
     position: { x: number; y: number };
   } | null>(null);
-  const [syncedPaste, setSyncedPaste] = useState<PendingSyncedPaste | null>(null);
+  const [syncedPaste, setSyncedPaste] = useState<ClipboardPayload | null>(null);
   const [syncedDelete, setSyncedDelete] = useState<{ block: any; quotedCount: number } | null>(null);
   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
   const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string; type?: 'image' | 'video' } | null>(null);
@@ -4660,6 +4672,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   }, [editor, readOnly]);
 
   const handleChange = useCallback(() => {
+    // mirror 的 load() 在 hydrate 期间触发的 updateBlock 不应视为用户编辑
+    if (isPageChangeSuppressed()) return;
     // Normalize column layouts after deletion:
     // 1. remove empty columns
     // 2. dissolve column_list when only one non-empty column remains
@@ -4871,6 +4885,16 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     if (!container || readOnly) return;
 
     const handleCopy = (e: ClipboardEvent) => {
+      // Bail out for form fields living inside the editor wrapper but outside
+      // the actual editor content (FindReplacePanel search/replace inputs,
+      // slash-menu search, link-toolbar inputs). They must handle Cmd+C via
+      // the browser/input default; otherwise the container-level capture
+      // handler would intercept the copy before the input sees it.
+      const copyTargetEl = e.target as HTMLElement | null;
+      if (copyTargetEl && (copyTargetEl.tagName === 'INPUT' || copyTargetEl.tagName === 'TEXTAREA')) {
+        return;
+      }
+
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
 
@@ -4928,7 +4952,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   const handleNormalSyncedPaste = useCallback(async () => {
     if (!syncedPaste) return;
     insertBlocksAtCursor(syncedPaste.blocks);
-    clearPendingSyncedPaste();
+    // 不清理剪贴板信号：跟随系统剪贴板生命周期，用户可在多个页面继续粘贴
     setSyncedPaste(null);
     await persistEditorNow();
   }, [insertBlocksAtCursor, persistEditorNow, syncedPaste]);
@@ -4955,7 +4979,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           pageId,
         },
       }]);
-      clearPendingSyncedPaste();
+      // 覆盖系统剪贴板：blocks 改为指向 A 源的 mirror block，isSyncedCandidate=false。
+      // 后续在 C/D/E... 粘贴时不再弹框，prepareCopiedBlocksForPaste 会把这个 mirror
+      // 转成新页上的引用块（指向同一 A 源），避免重复 wrapSource 产生嵌套损坏。
+      void writeAkmdClipboard({
+        blocks: [{
+          type: 'syncedBlockMirror',
+          props: {
+            syncId: newSyncId(),
+            sourcePageId: wrapped.sourcePageId,
+            sourceBlockId: wrapped.sourceBlockId,
+            pageId: '',
+          },
+        }],
+        markdown: syncedPaste.markdown,
+        isCut: false,
+        sourceSpaceSlug: spaceSlug,
+        sourcePageId: wrapped.sourcePageId,
+        sourceBlockIds: [wrapped.sourceBlockId],
+        sourceMarkdown: syncedPaste.markdown,
+        isSyncedCandidate: false,
+      });
+      // 不清理剪贴板信号：跟随系统剪贴板生命周期，用户可在多个页面继续创建同步块引用
       setSyncedPaste(null);
       await persistEditorNow();
     } catch (err) {
@@ -4985,15 +5030,112 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     if (!container || readOnly) return;
 
     const handlePaste = (e: ClipboardEvent) => {
-      const pending = getPendingSyncedPaste();
-      const { spaceSlug, pageId } = identityRef.current;
-      if (pending && pending.sourceSpaceSlug === spaceSlug && pending.sourcePageId !== pageId) {
-        e.preventDefault();
-        e.stopPropagation();
-        setSyncedPaste(pending);
+      // Same form-field guard as handleCopy: FindReplacePanel/ slash-menu /
+      // link-toolbar inputs must receive paste directly. Otherwise, when the
+      // clipboard happens to carry our custom akmd MIME (from any prior
+      // in-editor copy), this handler would call preventDefault() +
+      // stopImmediatePropagation() and paste the blocks into the document
+      // instead of the input the user is focused on.
+      const pasteTargetEl = e.target as HTMLElement | null;
+      if (pasteTargetEl && (pasteTargetEl.tagName === 'INPUT' || pasteTargetEl.tagName === 'TEXTAREA')) {
         return;
       }
 
+      const { spaceSlug, pageId } = identityRef.current;
+      const payload = readAkmdClipboard(e);
+
+      // 命中自定义 MIME：来自我们自己的复制
+      if (payload) {
+        // 跨页 + 候选同步块 → 弹框让用户选择
+        if (
+          payload.isSyncedCandidate &&
+          payload.sourceSpaceSlug === spaceSlug &&
+          payload.sourcePageId !== pageId
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          setSyncedPaste(payload);
+          return;
+        }
+
+        // 其他情况：作为内部 block 粘贴
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        // 块选择模式：先移除选中块
+        const selectedIds = getSelectedBlockIds();
+        if (selectedIds.length > 0) {
+          removeBlocksEnhanced(editor, selectedIds.map(id => ({ id } as any)));
+          setBlockSelection(null);
+        }
+
+        const currentBlock = editor.getTextCursorPosition().block;
+
+        (async () => {
+          const { spaceSlug: currentSpaceSlug, pageId: currentPageId } = identityRef.current;
+          let pasteBlocks = JSON.parse(JSON.stringify(payload.blocks));
+          let mirrorRegistrations: SyncedMirrorRegistration[] = [];
+          if (!payload.isCut && (!payload.sourceSpaceSlug || payload.sourceSpaceSlug === currentSpaceSlug)) {
+            const prepared = prepareCopiedBlocksForPaste(
+              pasteBlocks,
+              payload.sourcePageId || currentPageId,
+              currentPageId,
+            );
+            pasteBlocks = prepared.blocks;
+            mirrorRegistrations = prepared.mirrorRegistrations;
+          }
+
+          // 非剪切：duplicate subpage pages，避免多个粘贴共享同一 page
+          if (!payload.isCut) {
+            const subpageBlocks = pasteBlocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
+            for (const block of subpageBlocks) {
+              try {
+                const newPage = await pagesApi.duplicate(currentSpaceSlug, block.props.pageId, currentPageId);
+                block.props.pageId = newPage.id;
+              } catch (err) {
+                console.error('[PageEditor] Failed to duplicate subpage:', err);
+              }
+            }
+          }
+
+          // 当前 block 为空时替换，否则在后面插入
+          const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+
+          // 剥离 block id，让 BlockNote 创建新的
+          const blocksToInsert = pasteBlocks.map((b: any) => {
+            const { id, ...rest } = b;
+            return rest;
+          });
+          if (isEmpty) {
+            editor.replaceBlocks([currentBlock], blocksToInsert as any);
+          } else {
+            editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+          }
+          editor.focus();
+
+          // 记录 subpage 撤销动作
+          for (const block of pasteBlocks) {
+            if (block.type === 'subpage' && block.props?.pageId) {
+              setSubpageUndoAction(block.props.pageId, { action: 'delete' });
+            }
+          }
+
+          if (mirrorRegistrations.length > 0) {
+            await registerSyncedMirrorQuotes(currentSpaceSlug, mirrorRegistrations);
+          }
+
+          // 立即保存，让 backend maintainSubpageBlocks 在 sidebar 刷新前修正 sort_order
+          await persistFileContentBlocks(editor.document, currentSpaceSlug);
+          const markdown = blocksToMarkdown(editor.document);
+          await createMirror(currentSpaceSlug, currentPageId, markdown);
+          hasChangesRef.current = false;
+          await flushSync();
+          await useSpaceStore.getState().refreshAll();
+        })();
+        return;
+      }
+
+      // 没有自定义 MIME：fallback 到 text/plain 处理（外部复制 / 跨浏览器 / 老数据）
       const text = e.clipboardData?.getData('text/plain')?.trim();
       if (!text) return;
 
@@ -5212,6 +5354,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       // 注意：本 handler 注册在 capture 阶段，会先于 React 合成事件，
       // 不放行的话会拦截掉标题的 Cmd+A / Enter 等。
       const targetEl = e.target as HTMLElement | null;
+      // 表单字段（FindReplacePanel 搜索/替换 input、slash 菜单搜索框、
+      // 链接工具栏 input 等）虽然渲染在编辑器容器内，但不是 BlockNote
+      // 正文。必须放行让 input 自己处理 Cmd+C/Cmd+V/Enter 等，否则会被
+      // 下面的"复制选中块"等分支提前 preventDefault + stopImmediatePropagation
+      // 拦走（典型表现：搜索框 Cmd+C 复制的是编辑器里的块、Cmd+V 把块
+      // 粘贴到文档而不是 input）。
+      if (targetEl && (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA')) {
+        return;
+      }
       const selectedIdsAtStart = getSelectedBlockIds();
       const targetInsideEditor = !!targetEl?.closest('[data-page-editor="true"]');
       const targetInsideSideMenu = !!targetEl?.closest('.bn-side-menu, [data-floating-ui-focusable]');
@@ -5325,22 +5476,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const selectedBlocks = JSON.parse(JSON.stringify(blocksForIds(editor, ids)));
         if (selectedBlocks.length === 0) return;
         const markdown = blocksToMarkdown(selectedBlocks as any);
-        const { spaceSlug, pageId } = identityRef.current;
-        setClipboardData(selectedBlocks, markdown, isCut, { spaceSlug, pageId });
-        if (!isCut && !hasSyncedBlock(selectedBlocks)) {
-          setPendingSyncedPaste({
-            sourceSpaceSlug: spaceSlug,
-            sourcePageId: pageId,
-            sourceBlockIds: selectedBlocks.map((b: any) => b.id),
-            sourceMarkdown: markdown,
-            blocks: selectedBlocks,
-          });
-        } else {
-          clearPendingSyncedPaste();
+        // 产出 HTML 片段写入 text/html，Notion 等外部应用优先读 text/html 才能识别块结构
+        let html = '';
+        try {
+          html = editor.blocksToHTMLLossy(selectedBlocks) || '';
+        } catch (err) {
+          console.warn('[clipboard] blocksToHTMLLossy failed:', err);
         }
+        const { spaceSlug, pageId } = identityRef.current;
 
-        // Also write to system clipboard for external paste
-        navigator.clipboard.writeText(markdown).catch(() => {});
+        // 一次性写入系统剪贴板：自定义 MIME（结构化）+ text/html（外部富文本）+ text/plain（markdown 兼容）
+        // isSyncedCandidate 决定跨页粘贴时是否弹"创建同步块"选择框
+        void writeAkmdClipboard({
+          blocks: selectedBlocks,
+          markdown,
+          html,
+          isCut,
+          sourceSpaceSlug: spaceSlug,
+          sourcePageId: pageId,
+          sourceBlockIds: selectedBlocks.map((b: any) => b.id),
+          sourceMarkdown: markdown,
+          isSyncedCandidate: !isCut && !hasSyncedBlock(selectedBlocks),
+        });
 
         if (isCut) {
           // Cut: delete selected blocks after copying
@@ -5353,93 +5510,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         return;
       }
 
-      // Cmd+V: paste blocks from internal clipboard
-      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
-        const pending = getPendingSyncedPaste();
-        const { spaceSlug, pageId } = identityRef.current;
-        if (pending && pending.sourceSpaceSlug === spaceSlug && pending.sourcePageId !== pageId) {
-          return;
-        }
-        const clipData = getClipboardData();
-        if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
-
-        e.preventDefault();
-        e.stopImmediatePropagation();
-
-        const ids = getSelectedBlockIds();
-        if (ids.length > 0) {
-          // Block selection mode: replace selected blocks with clipboard content
-          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
-          updateSelection([]);
-        }
-
-        // Insert clipboard blocks at cursor position
-        const currentBlock = editor.getTextCursorPosition().block;
-
-        // Handle async: duplicate subpage pages for copy, then insert blocks
-        (async () => {
-          const { spaceSlug, pageId: currentPageId } = identityRef.current;
-          let pasteBlocks = JSON.parse(JSON.stringify(clipData.blocks));
-          let mirrorRegistrations: SyncedMirrorRegistration[] = [];
-          if (!clipData.isCut && (!clipData.sourceSpaceSlug || clipData.sourceSpaceSlug === spaceSlug)) {
-            const prepared = prepareCopiedBlocksForPaste(
-              pasteBlocks,
-              clipData.sourcePageId || currentPageId,
-              currentPageId,
-            );
-            pasteBlocks = prepared.blocks;
-            mirrorRegistrations = prepared.mirrorRegistrations;
-          }
-
-          // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
-          if (!clipData.isCut) {
-            const subpageBlocks = pasteBlocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
-            for (const block of subpageBlocks) {
-              try {
-                const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
-                block.props.pageId = newPage.id;
-              } catch (err) {
-                console.error('[PageEditor] Failed to duplicate subpage:', err);
-              }
-            }
-          }
-
-          // If current block is empty, replace it instead of inserting after it
-          const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
-
-          // Strip block IDs so BlockNote creates fresh ones
-          const blocksToInsert = pasteBlocks.map((b: any) => {
-            const { id, ...rest } = b;
-            return rest;
-          });
-          if (isEmpty) {
-            editor.replaceBlocks([currentBlock], blocksToInsert as any);
-          } else {
-            editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
-          }
-          editor.focus();
-
-          // Record undo actions for pasted subpage blocks (undo should delete them)
-          for (const block of pasteBlocks) {
-            if (block.type === 'subpage' && block.props?.pageId) {
-              setSubpageUndoAction(block.props.pageId, { action: 'delete' });
-            }
-          }
-
-          if (mirrorRegistrations.length > 0) {
-            await registerSyncedMirrorQuotes(spaceSlug, mirrorRegistrations);
-          }
-
-          // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
-          await persistFileContentBlocks(editor.document, spaceSlug);
-          const markdown = blocksToMarkdown(editor.document);
-          await createMirror(spaceSlug, currentPageId, markdown);
-          hasChangesRef.current = false;
-          await flushSync();
-          await useSpaceStore.getState().refreshAll();
-        })();
-        return;
-      }
+      // Cmd+V 的 paste 处理已全部迁移到 paste 事件 handler（capture 阶段）
+      // 见上面的 handlePaste，统一通过系统剪贴板读取数据
 
       // Delete 在文本 block 末尾时的"向前合并"修正：
       // BlockNote 默认调用 ProseMirror deleteForward，遇到下一个 atom 类 block
@@ -5501,6 +5573,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
               e.preventDefault();
               e.stopImmediatePropagation();
               const nextFocusId = syncChildTarget.focusBlock?.id;
+              console.log(`[delete.fire] path=syncChild ids=[${ids.join(',')}] nextFocusId=${nextFocusId || ''}`);
               removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
               updateSelection([]);
               setBlockSelection(null);
@@ -5519,6 +5592,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
           e.preventDefault();
           e.stopImmediatePropagation();
+          console.log(`[delete.fire] path=generic ids=[${ids.join(',')}]`);
           removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
           updateSelection([]);
           // Clean up: blur focused buttons and dismiss floating menus
@@ -5814,6 +5888,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       } else {
         finalIds = result;
       }
+      console.log(`[dragSelect] intersecting=[${intersecting.join(',')}] forced=[${Array.from(forcedSyncedBlockIds).join(',')}] normalized=[${result.join(',')}] final=[${finalIds.join(',')}]`);
       updateSelection(finalIds);
     };
 
@@ -6912,17 +6987,37 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
   }, [readOnly, handleClickBelow, findBlockByY, isInputBlock, findNearestInputBlock, editor]);
 
+  // Register a lightweight flush function for the router guard (useBlocker
+  // in PageViewPage). When the user navigates away from this page, the
+  // guard awaits this function before allowing the route change. The flush
+  // writes ONLY the IndexedDB mirror (fast, ~5-50ms) — HTTP uploads and
+  // server refreshes stay in the background so switches stay snappy.
+  // On success it clears hasChangesRef so the unmount cleanup below won't
+  // write a duplicate mirror.
+  useEffect(() => {
+    useEditorFlushStore.getState().setFlushFn(async () => {
+      if (!hasChangesRef.current || readOnlyRef.current) return;
+      const { spaceSlug, pageId } = identityRef.current;
+      const markdown = blocksToMarkdown(editor.document);
+      await createMirror(spaceSlug, pageId, markdown);
+      hasChangesRef.current = false;
+    });
+    return () => {
+      useEditorFlushStore.getState().setFlushFn(null);
+    };
+  }, [editor]);
+
   // Unmount: write final mirror if there are unsaved changes
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      const { spaceSlug, pageId } = identityRef.current;
       if (hasChangesRef.current && !readOnlyRef.current) {
         try {
           const currentBlocks = editor.document;
           const markdown = blocksToMarkdown(currentBlocks);
-          const { spaceSlug, pageId } = identityRef.current;
           createMirror(spaceSlug, pageId, markdown);
         } catch (error) {
           console.error('Failed to create mirror on unmount:', error);
