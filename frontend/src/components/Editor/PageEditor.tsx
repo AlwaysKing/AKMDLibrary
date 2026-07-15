@@ -4918,7 +4918,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       onSyncStatusChangeRef.current?.('unsaved');
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
+        saveTimeoutRef.current = undefined;
       }
       void (async () => {
         await waitForRemovedBlocks(blockIds);
