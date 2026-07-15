@@ -11,7 +11,7 @@ import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
-import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, isDragMenuOpen, setSyntheticDragHandleTarget, GROUP_ORDER, ColorListContent, findBlockDeep, SLASH_MENU_ENGLISH } from './BlockNoteComponents';
+import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, normalizeSelectedBlockIds, isDragMenuOpen, setSyntheticDragHandleTarget, GROUP_ORDER, ColorListContent, findBlockDeep, SLASH_MENU_ENGLISH } from './BlockNoteComponents';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
 import { TextSelection, NodeSelection } from '@tiptap/pm/state';
@@ -177,6 +177,42 @@ function getSyncedBlockChildEnterTarget(blocks: any[], blockId: string) {
   const parent = path[path.length - 2];
   if (parent?.type !== 'syncedBlockSource' && parent?.type !== 'syncedBlockMirror') return null;
   return { parent, block: path[path.length - 1] };
+}
+
+function isToggleBlock(block: any): boolean {
+  return block?.type === 'toggleListItem' || (block?.type === 'heading' && block?.props?.isToggleable);
+}
+
+function downgradeEmptyToggleBlock(editor: any, block: any): boolean {
+  if (!isToggleBlock(block) || !isEmptyTextBlock(block)) return false;
+  if (!Array.isArray(block.children) || block.children.length === 0) return false;
+
+  if (block.type === 'heading') {
+    editor.updateBlock(block, {
+      type: 'heading',
+      props: {
+        ...(block.props || {}),
+        isToggleable: false,
+      },
+      children: block.children,
+    } as any);
+  } else {
+    editor.updateBlock(block, {
+      type: 'paragraph',
+      props: {},
+      children: block.children,
+    } as any);
+  }
+
+  editor.focus();
+  requestAnimationFrame(() => {
+    try {
+      editor.setTextCursorPosition(block.id as any, 'start');
+    } catch {
+      // The block may have been changed by a concurrent editor transaction.
+    }
+  });
+  return true;
 }
 
 function blocksForIds(editor: any, ids: string[]): any[] {
@@ -901,6 +937,48 @@ const CustomInputRules = Extension.create({
             }
 
             return false;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+const CustomTabIndent = Extension.create({
+  name: 'customTabIndent',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('customTabIndent'),
+        props: {
+          handleKeyDown(view, event) {
+            if (event.key !== 'Tab') return false;
+
+            const $from = view.state.selection.$from;
+            for (let depth = $from.depth; depth >= 0; depth--) {
+              const nodeName = $from.node(depth).type.name;
+              if (nodeName === 'tableCell' || nodeName === 'tableHeader') {
+                return false;
+              }
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const editor = bnEditorRef.current;
+            if (!editor) return true;
+
+            if (event.shiftKey) {
+              if (editor.canUnnestBlock?.()) {
+                editor.unnestBlock();
+              }
+              return true;
+            }
+
+            if (editor.canNestBlock?.()) {
+              editor.nestBlock();
+            }
+            return true;
           },
         },
       }),
@@ -2228,12 +2306,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     initialContent: markdownToBlocks(initialContent) as any,
     dictionary: customZh as any,
     trailingBlock: false,
+    tabBehavior: 'prefer-indent',
     uploadFile: async (file: File) => {
       const { spaceSlug, pageId } = identityRef.current;
       const result = await uploadApi.upload(file, { pageId, spaceSlug });
       return result.path;
     },
-    _tiptapOptions: { extensions: [CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension, createFileContentHighlightExtension(resolvedCodeTheme)] },
+    _tiptapOptions: { extensions: [CustomTabIndent, CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension, createFileContentHighlightExtension(resolvedCodeTheme)] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules
@@ -5374,7 +5453,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           e.key === 'Delete' ||
           ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey)
         );
-      if (!targetInsideEditor && !(targetInsideSideMenu && selectedBlockShortcut)) return;
+      if (!targetInsideEditor && !targetInsideSideMenu && !selectedBlockShortcut) return;
 
       if (
         e.key === 'Enter' &&
@@ -5610,6 +5689,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         if (pmEl) pmEl.blur();
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         const currentBlock = editor.getTextCursorPosition().block;
+        if (
+          !e.altKey &&
+          !e.shiftKey &&
+          !e.metaKey &&
+          !e.ctrlKey &&
+          downgradeEmptyToggleBlock(editor, currentBlock)
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+
         const syncChildTarget = getSyncedBlockChildDeleteTarget(editor.document, currentBlock.id as string);
         if (syncChildTarget && isEmptyTextBlock(currentBlock)) {
           e.preventDefault();
@@ -5777,14 +5868,17 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const forcedSyncedBlockIds = new Set<string>();
 
       blockOuters.forEach(outer => {
-        const blockEl = outer.querySelector('[data-id]');
+        const blockEl = outer.querySelector(':scope > .bn-block[data-id]');
         if (!blockEl) return;
         // Skip column_list and column blocks — they are layout containers,
         // not selectable content blocks. Users should only select content inside them.
         if (blockEl.querySelector('.column-list-inner') || blockEl.querySelector('.column-block-inner')) return;
         const id = blockEl.getAttribute('data-id')!;
         blockOuterMap.set(id, outer);
-        const r = outer.getBoundingClientRect();
+        const hitTarget = outer.querySelector(
+          ':scope > .bn-block > .bn-block-content, :scope > .bn-block > .react-renderer'
+        ) || blockEl;
+        const r = hitTarget.getBoundingClientRect();
         const bLeft = r.left + sLeft;
         const bRight = r.right + sLeft;
         const bTop = r.top + sTop;
@@ -5897,9 +5991,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             if (idx >= 0) result.splice(idx, 1);
           }
         } else {
-          // Case A: only toggle family → remove toggle title, keep descendants
-          const idx = result.indexOf(toggleId);
-          if (idx >= 0) result.splice(idx, 1);
+          // Case A: toggle title itself is selected → keep toggle as whole unit.
+          for (const did of descendantIds) {
+            const idx = result.indexOf(did);
+            if (idx >= 0) result.splice(idx, 1);
+          }
         }
       }
 
@@ -5917,6 +6013,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       } else {
         finalIds = result;
       }
+      finalIds = normalizeSelectedBlockIds(finalIds);
       console.log(`[dragSelect] intersecting=[${intersecting.join(',')}] forced=[${Array.from(forcedSyncedBlockIds).join(',')}] normalized=[${result.join(',')}] final=[${finalIds.join(',')}]`);
       updateSelection(finalIds);
     };

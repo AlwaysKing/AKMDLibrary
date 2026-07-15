@@ -2,6 +2,9 @@ import { PartialBlock } from '@blocknote/core';
 
 const BLOCK_ANCHOR_PREFIX = 'akb_';
 const BLOCK_ANCHOR_COMMENT_RE = /^<!--\s*ak-block-anchor:\s*id="?(akb_[a-zA-Z0-9_-]+)"?\s*-->$/;
+const INDENT_MARKER = '⇥';
+const ESCAPED_INDENT_MARKER_RE = /^\\⇥/;
+const INDENT_MARKER_RE = /^(⇥+)\s?/;
 
 function isBlockAnchorId(id: any): id is string {
   return typeof id === 'string' && id.startsWith(BLOCK_ANCHOR_PREFIX);
@@ -14,21 +17,43 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
   if (!markdown) {
     return [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }];
   }
-  const blocks: any[] = [];
+  const parsedBlocks: Array<{ block: any; indent: number }> = [];
   const lines = markdown.split('\n');
   let i = 0;
   let pendingAnchorId: string | null = null;
+  let currentIndentLevel = 0;
 
   const pushBlock = (block: any) => {
     if (pendingAnchorId && !block.id) {
       block.id = pendingAnchorId;
     }
     pendingAnchorId = null;
-    blocks.push(block);
+    parsedBlocks.push({ block, indent: currentIndentLevel });
+  };
+
+  const readIndent = (rawLine: string) => {
+    if (ESCAPED_INDENT_MARKER_RE.test(rawLine)) {
+      return { line: rawLine.replace(ESCAPED_INDENT_MARKER_RE, INDENT_MARKER), indent: 0 };
+    }
+
+    const match = rawLine.match(INDENT_MARKER_RE);
+    if (!match) {
+      return { line: rawLine, indent: 0 };
+    }
+
+    const line = rawLine.slice(match[0].length);
+
+    return {
+      line: line.replace(ESCAPED_INDENT_MARKER_RE, INDENT_MARKER),
+      indent: match[1].length,
+    };
   };
 
   while (i < lines.length) {
-    const line = lines[i];
+    const rawLine = lines[i];
+    const indented = readIndent(rawLine);
+    const line = indented.line;
+    currentIndentLevel = indented.indent;
     const trimmed = line.trim();
 
     const anchorMatch = trimmed.match(BLOCK_ANCHOR_COMMENT_RE);
@@ -695,11 +720,36 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
   }
 
   // BlockNote requires at least one block — return a default empty paragraph
-  if (blocks.length === 0) {
+  if (parsedBlocks.length === 0) {
     return [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }];
   }
 
-  return blocks;
+  return nestIndentedBlocks(parsedBlocks);
+}
+
+function nestIndentedBlocks(parsedBlocks: Array<{ block: any; indent: number }>): any[] {
+  const roots: any[] = [];
+  const stack: Array<{ block: any; indent: number }> = [];
+
+  for (const item of parsedBlocks) {
+    const indent = Math.max(0, item.indent);
+
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const parent = indent > 0 ? stack[stack.length - 1]?.block : null;
+    if (parent) {
+      parent.children = parent.children || [];
+      parent.children.push(item.block);
+    } else {
+      roots.push(item.block);
+    }
+
+    stack.push({ block: item.block, indent });
+  }
+
+  return roots;
 }
 
 /**
@@ -925,11 +975,18 @@ export function blocksToMarkdown(blocks: any[]): string {
 /**
  * Serialize a single block to markdown, handling toggle blocks and children recursively.
  */
-function serializeBlock(block: any): string {
+function serializeBlock(block: any, indentLevel = 0): string {
+  const withIndent = (markdown: string) => {
+    if (!markdown || indentLevel <= 0) return markdown;
+    return `${INDENT_MARKER.repeat(indentLevel)} ${markdown}`;
+  };
+
   const withBlockAnchor = (markdown: string) => {
     if (!isBlockAnchorId(block.id) || !markdown) return markdown;
     return `<!-- ak-block-anchor: id="${escapeHtmlAttribute(block.id)}" -->\n${markdown}`;
   };
+
+  const finalizeBlock = (markdown: string) => withBlockAnchor(withIndent(markdown));
 
   if (block.type === 'syncedBlockSource') {
     const syncId = block.props?.syncId || '';
@@ -937,7 +994,7 @@ function serializeBlock(block: any): string {
     const childrenMd = block.children?.length
       ? block.children.map((c: any) => serializeBlock(c)).join('\n')
       : '';
-    return withBlockAnchor(renderSyncedSourceMarkdown(syncId, quoted, childrenMd));
+    return finalizeBlock(renderSyncedSourceMarkdown(syncId, quoted, childrenMd));
   }
 
   if (block.type === 'syncedBlockMirror') {
@@ -945,7 +1002,7 @@ function serializeBlock(block: any): string {
     const sourcePageId = block.props?.sourcePageId || '';
     const sourceBlockId = block.props?.sourceBlockId || '';
     if (!syncId || !sourcePageId || !sourceBlockId) return '';
-    return withBlockAnchor(`<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`);
+    return finalizeBlock(`<sync-block id="${escapeHtmlAttribute(syncId)}" source-page="${escapeHtmlAttribute(sourcePageId)}" source-block="${escapeHtmlAttribute(sourceBlockId)}" />`);
   }
 
   // Column list — skip if all columns are empty (content was deleted)
@@ -961,7 +1018,7 @@ function serializeBlock(block: any): string {
       const colContent = (col.children || []).map((c: any) => serializeBlock(c)).join('\n');
       return `<column ratio="${ratio}">\n${colContent}\n</column>`;
     }).join('\n');
-    return withBlockAnchor(`<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`);
+    return finalizeBlock(`<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`);
   }
 
   // Toggle heading
@@ -971,7 +1028,7 @@ function serializeBlock(block: any): string {
     const childrenMd = block.children?.length
       ? block.children.map((c: any) => serializeBlock(c)).join('\n')
       : '';
-    return withBlockAnchor(`<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
+    return finalizeBlock(`<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
   }
 
   // Toggle list item
@@ -980,7 +1037,7 @@ function serializeBlock(block: any): string {
     const childrenMd = block.children?.length
       ? block.children.map((c: any) => serializeBlock(c)).join('\n')
       : '';
-    return withBlockAnchor(`<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
+    return finalizeBlock(`<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
   }
 
   // Regular blocks
@@ -988,18 +1045,19 @@ function serializeBlock(block: any): string {
 
   // If a regular block has children, append them
   if (block.children?.length) {
-    const childrenMd = block.children.map((c: any) => serializeBlock(c)).join('\n');
-    return withBlockAnchor(line + '\n' + childrenMd);
+    const childrenMd = block.children.map((c: any) => serializeBlock(c, indentLevel + 1)).join('\n');
+    return finalizeBlock(line + '\n' + childrenMd);
   }
 
-  return withBlockAnchor(line);
+  return finalizeBlock(line);
 }
 
 /**
  * Serialize a regular (non-toggle) block to a single markdown line.
  */
 function serializeRegularBlock(block: any): string {
-  switch (block.type) {
+  const serialized = (() => {
+    switch (block.type) {
     case 'heading': {
       const level = block.props?.level || 1;
       const headingText = getTextContent(block.content);
@@ -1194,7 +1252,17 @@ function serializeRegularBlock(block: any): string {
 
     default:
       return `<!-- Unknown block type: ${block.type} -->`;
+    }
+  })();
+
+  return escapeLeadingIndentMarker(serialized);
+}
+
+function escapeLeadingIndentMarker(markdown: string): string {
+  if (markdown.startsWith(INDENT_MARKER)) {
+    return `\\${markdown}`;
   }
+  return markdown;
 }
 
 function parseQuotedProp(raw: any): Array<{ pageId: string; syncId: string }> {

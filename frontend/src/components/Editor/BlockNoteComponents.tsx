@@ -82,15 +82,16 @@ export function setSyntheticDragHandleTarget(
 
 function setBlockSelection(blockIds: string[] | null) {
   const stack = new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()).join(' | ');
-  console.log(`[setBlockSelection] ids=[${(blockIds || []).join(',')}] caller: ${stack}`);
-  currentSelectedIds = blockIds || [];
+  const normalizedBlockIds = normalizeSelectedBlockIds(blockIds || []);
+  console.log(`[setBlockSelection] ids=[${normalizedBlockIds.join(',')}] raw=[${(blockIds || []).join(',')}] caller: ${stack}`);
+  currentSelectedIds = normalizedBlockIds;
   if (!blockSelectionStyleEl) {
     blockSelectionStyleEl = document.createElement('style');
     blockSelectionStyleEl.id = 'block-selection-style';
     document.head.appendChild(blockSelectionStyleEl);
   }
-  if (blockIds && blockIds.length > 0) {
-    const rules = blockIds.map(id => `
+  if (normalizedBlockIds.length > 0) {
+    const rules = normalizedBlockIds.map(id => `
       .bn-block-outer:has(> [data-id="${id}"]) {
         position: relative;
       }
@@ -144,6 +145,83 @@ export { setBlockSelection };
 
 export function clearBlockSelection() {
   setBlockSelection(null);
+}
+
+export function normalizeSelectedBlockIds(blockIds: string[]): string[] {
+  const result = Array.from(new Set(blockIds));
+
+  const getOuter = (id: string): Element | null => {
+    return document.querySelector(`.bn-block[data-id="${CSS.escape(id)}"]`)?.closest('.bn-block-outer') || null;
+  };
+
+  const getDirectId = (outer: Element | null): string | null => {
+    return outer?.querySelector(':scope > .bn-block[data-id]')?.getAttribute('data-id') || null;
+  };
+
+  const getParentGroup = (outer: Element | null): Element | null => {
+    return outer?.parentElement?.classList.contains('bn-block-group') ? outer.parentElement : null;
+  };
+
+  const getParentOuter = (outer: Element | null): Element | null => {
+    return outer?.parentElement?.closest('.bn-block-outer') || null;
+  };
+
+  const getDescendantIds = (outer: Element): string[] => {
+    return Array.from(outer.querySelectorAll(':scope > .bn-block > .bn-block-group .bn-block-outer'))
+      .map((childOuter) => getDirectId(childOuter))
+      .filter((id): id is string => !!id);
+  };
+
+  const getDepth = (outer: Element): number => {
+    let depth = 0;
+    let el = outer.parentElement;
+    while (el) {
+      if (el.classList?.contains('bn-block-outer')) depth++;
+      el = el.parentElement;
+    }
+    return depth;
+  };
+
+  const selectedSnapshot = [...result];
+  for (const selectedId of selectedSnapshot) {
+    const selectedOuter = getOuter(selectedId);
+    const parentOuter = getParentOuter(selectedOuter);
+    const parentId = getDirectId(parentOuter);
+    if (!selectedOuter || !parentOuter || !parentId || result.includes(parentId)) continue;
+
+    const parentGroup = getParentGroup(parentOuter);
+    const hasSelectedParentSibling = !!parentGroup && result.some((candidateId) => {
+      if (candidateId === selectedId || candidateId === parentId) return false;
+      const candidateOuter = getOuter(candidateId);
+      return getParentGroup(candidateOuter) === parentGroup;
+    });
+
+    if (hasSelectedParentSibling) {
+      result.push(parentId);
+    }
+  }
+
+  const parentEntries = result
+    .map((id) => {
+      const outer = getOuter(id);
+      if (!outer) return null;
+      const descendantIds = getDescendantIds(outer).filter((descendantId) => result.includes(descendantId));
+      if (descendantIds.length === 0) return null;
+      return { id, outer, descendantIds, depth: getDepth(outer) };
+    })
+    .filter((entry): entry is { id: string; outer: Element; descendantIds: string[]; depth: number } => !!entry)
+    .sort((a, b) => a.depth - b.depth);
+
+  for (const { id, descendantIds } of parentEntries) {
+    if (!result.includes(id)) continue;
+
+    for (const descendantId of descendantIds) {
+      const idx = result.indexOf(descendantId);
+      if (idx >= 0) result.splice(idx, 1);
+    }
+  }
+
+  return result;
 }
 
 function getBlockIdFromOuter(blockOuter: Element | null): string | null {

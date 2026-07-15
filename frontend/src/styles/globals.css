@@ -118,6 +118,14 @@ h4[contenteditable],
   padding: 6px 6px 6px 8px !important;
 }
 
+/* Remove BlockNote's default nested-block guide line globally.
+   Quote/mark blocks use their own explicit border styles below. */
+.bn-editor .bn-block-group .bn-block-group > .bn-block-outer::before {
+  content: none !important;
+  display: none !important;
+  border-left: 0 !important;
+}
+
 .page-content-scroll {
   overscroll-behavior-y: contain;
 }
