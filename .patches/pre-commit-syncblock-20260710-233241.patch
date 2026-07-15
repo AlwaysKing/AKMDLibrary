@@ -1,0 +1,522 @@
+diff --git a/frontend/src/components/Editor/BlockNoteComponents.tsx b/frontend/src/components/Editor/BlockNoteComponents.tsx
+index b2758f8..f694627 100644
+--- a/frontend/src/components/Editor/BlockNoteComponents.tsx
++++ b/frontend/src/components/Editor/BlockNoteComponents.tsx
+@@ -168,6 +168,7 @@ function getInactiveSyncedSourceOuter(blockOuter: Element | null): Element | nul
+   if (!blockOuter) return null;
+   const syncOuter = findSyncedBlockSourceOuter(blockOuter);
+   if (!syncOuter) return null;
++  if (syncOuter.querySelector('.react-renderer.node-syncedBlockSource[data-sync-source-active="true"]')) return null;
+   const active = document.activeElement;
+   if (active && syncOuter.contains(active)) return null;
+   return syncOuter;
+@@ -1756,8 +1757,10 @@ function getDragHandleBlockId(): string | null {
+       for (const el of elements) {
+         const blockOuter = (el as HTMLElement).closest('.bn-block-outer');
+         if (blockOuter) {
+-          const bc = blockOuter.querySelector('[data-node-type="blockContainer"]') || blockOuter;
+-          return bc.getAttribute('data-id') || blockOuter.getAttribute('data-id') || null;
++          const syncOuter = getInactiveSyncedSourceOuter(blockOuter);
++          const targetOuter = syncOuter || blockOuter;
++          const bc = targetOuter.querySelector('[data-node-type="blockContainer"]') || targetOuter;
++          return bc.getAttribute('data-id') || targetOuter.getAttribute('data-id') || null;
+         }
+       }
+     }
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index ff31b56..d03ceb5 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -174,7 +174,7 @@ function getDomSelectedBlockIds(container: HTMLElement, editor: any): string[] {
+     seen.add(id);
+     ids.push(id);
+   });
+-  return ids;
++  return normalizeSyncedSourceSelection(ids, container);
+ }
+ 
+ function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
+@@ -187,6 +187,50 @@ function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
+   return bnIds;
+ }
+ 
++function getDirectBlockId(outer: Element | null): string | null {
++  const block = outer?.querySelector(':scope > .bn-block[data-id]');
++  return block?.getAttribute('data-id') || null;
++}
++
++function getSelectedDescendantIds(containerOuter: Element): string[] {
++  return Array.from(containerOuter.querySelectorAll(':scope > .bn-block > .bn-block-group .bn-block-outer'))
++    .map((childOuter) => getDirectBlockId(childOuter))
++    .filter((id): id is string => !!id);
++}
++
++function normalizeSyncedSourceSelection(ids: string[], container: HTMLElement): string[] {
++  if (ids.length <= 1) return ids;
++
++  const uniqueIds = Array.from(new Set(ids));
++  const selected = new Set(uniqueIds);
++  const syncOuters = Array.from(
++    container.querySelectorAll('.bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)')
++  );
++
++  for (const syncOuter of syncOuters) {
++    const syncId = getDirectBlockId(syncOuter);
++    if (!syncId) continue;
++
++    const descendantIds = getSelectedDescendantIds(syncOuter);
++    const selectedDescendantIds = descendantIds.filter((id) => selected.has(id));
++    if (selectedDescendantIds.length === 0) continue;
++
++    const descendantIdSet = new Set(descendantIds);
++    const hasSelectionOutsideThisSync = Array.from(selected).some(
++      (id) => id !== syncId && !descendantIdSet.has(id)
++    );
++
++    if (hasSelectionOutsideThisSync) {
++      selected.add(syncId);
++      for (const id of selectedDescendantIds) selected.delete(id);
++    } else {
++      selected.delete(syncId);
++    }
++  }
++
++  return uniqueIds.filter((id) => selected.has(id));
++}
++
+ function resolvePageAssetUrl(rawUrl: string | undefined, spaceSlug?: string, pageId?: string): string {
+   const url = String(rawUrl || '').trim();
+   if (!url) return '';
+@@ -5352,7 +5396,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       // Process outermost toggles first (lower depth = more outer)
+       toggleInfoList.sort((a, b) => a.depth - b.depth);
+ 
+-      const result = [...intersecting];
++      const result = normalizeSyncedSourceSelection(intersecting, container);
+       for (const { id: toggleId, outer: toggleOuter, descendantIds } of toggleInfoList) {
+         // Skip if toggle already removed from result (by a parent's Case B)
+         if (!result.includes(toggleId)) continue;
+@@ -5589,9 +5633,114 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       return !!((anchor && element.contains(anchor)) || (focus && element.contains(focus)));
+     };
+ 
+-    const setSyncSourceActive = (syncSourceOuter: HTMLElement, active: boolean) => {
+-      if (active) syncSourceOuter.dataset.syncSourceActive = 'true';
+-      else delete syncSourceOuter.dataset.syncSourceActive;
++    let activeSyncSourceOuters = new Set<HTMLElement>();
++
++    const setSyncSourceActiveMarker = (syncSourceOuter: HTMLElement, active: boolean) => {
++      const sourceRenderer = syncSourceOuter.querySelector(':scope > .bn-block > .react-renderer.node-syncedBlockSource') as HTMLElement | null;
++      const sourceContent = sourceRenderer?.querySelector('[data-content-type="syncedBlockSource"]') as HTMLElement | null;
++      if (active) {
++        if (sourceRenderer) sourceRenderer.dataset.syncSourceActive = 'true';
++        if (sourceContent) sourceContent.dataset.syncSourceActive = 'true';
++      } else {
++        if (sourceRenderer) delete sourceRenderer.dataset.syncSourceActive;
++        if (sourceContent) delete sourceContent.dataset.syncSourceActive;
++      }
++    };
++
++    const setActiveSyncSourceOuters = (nextOuters: Set<HTMLElement>) => {
++      for (const outer of activeSyncSourceOuters) {
++        if (!nextOuters.has(outer)) {
++          setSyncSourceActiveMarker(outer, false);
++        }
++      }
++      for (const outer of nextOuters) {
++        setSyncSourceActiveMarker(outer, true);
++      }
++      activeSyncSourceOuters = nextOuters;
++    };
++
++    const blockOuterIsSyncSourceChild = (blockOuter: HTMLElement | null, syncSourceOuter: HTMLElement | null) => {
++      return !!(
++        blockOuter &&
++        syncSourceOuter &&
++        blockOuter !== syncSourceOuter &&
++        syncSourceOuter.contains(blockOuter)
++      );
++    };
++
++    const getBlockOuterFromNode = (node: Node | null): HTMLElement | null => {
++      const element =
++        node instanceof HTMLElement
++          ? node
++          : node?.parentElement || null;
++      if (!element || !container.contains(element)) return null;
++      return element.closest('.bn-block-outer') as HTMLElement | null;
++    };
++
++    const getSelectedBlockOuter = (): HTMLElement | null => {
++      const selection = window.getSelection();
++      if (selection && selection.rangeCount > 0) {
++        const anchorOuter = getBlockOuterFromNode(selection.anchorNode);
++        const focusOuter = getBlockOuterFromNode(selection.focusNode);
++        if (anchorOuter) return anchorOuter;
++        if (focusOuter) return focusOuter;
++      }
++
++      try {
++        const pmView = (editor as any)._tiptapEditor?.view || (editor as any).prosemirrorView;
++        const from = pmView?.state?.selection?.from;
++        if (pmView && typeof from === 'number') {
++          const domAtPos = pmView.domAtPos(from);
++          const outer = getBlockOuterFromNode(domAtPos.node);
++          if (outer) return outer;
++        }
++      } catch {
++        // Ignore and fall back to BlockNote's cursor API.
++      }
++
++      try {
++        const cursorBlockId = editor.getTextCursorPosition?.().block?.id || null;
++        if (!cursorBlockId) return null;
++        const cursorBlock = container.querySelector(`.bn-block[data-id="${cursorBlockId}"]`) as HTMLElement | null;
++        return cursorBlock?.closest('.bn-block-outer') as HTMLElement | null;
++      } catch {
++        return null;
++      }
++    };
++
++    const syncSourceHasEditableChildFocus = (syncSourceOuter: HTMLElement | null) => {
++      if (!syncSourceOuter) return false;
++      return blockOuterIsSyncSourceChild(getSelectedBlockOuter(), syncSourceOuter);
++    };
++
++    const getBlockOuterById = (blockId: string): HTMLElement | null => {
++      const block = Array.from(container.querySelectorAll('.bn-block[data-id]')).find(
++        (element) => element.getAttribute('data-id') === blockId
++      ) as HTMLElement | undefined;
++      return (block?.closest('.bn-block-outer') as HTMLElement | null) || null;
++    };
++
++    const refreshActiveSyncSources = () => {
++      const nextOuters = new Set<HTMLElement>();
++
++      const selectedOuter = getSelectedBlockOuter();
++      if (selectedOuter) {
++        const syncSourceOuter = findSyncedBlockSourceOuter(selectedOuter);
++        if (blockOuterIsSyncSourceChild(selectedOuter, syncSourceOuter)) {
++          nextOuters.add(syncSourceOuter!);
++        }
++      }
++
++      for (const blockId of getSelectedBlockIds()) {
++        const blockOuter = getBlockOuterById(blockId);
++        const syncSourceOuter = findSyncedBlockSourceOuter(blockOuter);
++        if (!syncSourceOuter) continue;
++        if (blockOuter === syncSourceOuter || blockOuterIsSyncSourceChild(blockOuter, syncSourceOuter)) {
++          nextOuters.add(syncSourceOuter);
++        }
++      }
++
++      setActiveSyncSourceOuters(nextOuters);
+     };
+ 
+     const syncSourceMenu = document.createElement('div');
+@@ -5763,6 +5912,62 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     syncSourceMenu.addEventListener('mousedown', syncSourceMenuMouseDown);
+     syncSourceMenu.addEventListener('click', syncSourceMenuClick);
+ 
++    let nativeSideMenuFrame: number | null = null;
++    let nativeSideMenuTargetRect: DOMRect | null = null;
++    let nativeSideMenuTargetTop: number | null = null;
++
++    const hideNativeSideMenu = () => {
++      if (nativeSideMenuFrame !== null) {
++        cancelAnimationFrame(nativeSideMenuFrame);
++        nativeSideMenuFrame = null;
++      }
++      nativeSideMenuTargetRect = null;
++      nativeSideMenuTargetTop = null;
++      document.body.classList.remove('side-menu-visible');
++    };
++
++    const showNativeSideMenuWhenReady = (targetRect: DOMRect) => {
++      const targetTop = Math.round(targetRect.top);
++      if (nativeSideMenuFrame !== null && nativeSideMenuTargetTop === targetTop) {
++        nativeSideMenuTargetRect = targetRect;
++        return;
++      }
++      if (nativeSideMenuFrame === null && nativeSideMenuTargetTop === targetTop && document.body.classList.contains('side-menu-visible')) {
++        nativeSideMenuTargetRect = targetRect;
++        return;
++      }
++      nativeSideMenuTargetRect = targetRect;
++      nativeSideMenuTargetTop = targetTop;
++      if (nativeSideMenuFrame !== null) cancelAnimationFrame(nativeSideMenuFrame);
++      nativeSideMenuFrame = requestAnimationFrame(() => {
++        nativeSideMenuFrame = requestAnimationFrame(() => {
++          nativeSideMenuFrame = null;
++          const expectedRect = nativeSideMenuTargetRect;
++          const nativeSideMenu = document.querySelector(
++            '[data-floating-ui-focusable] > .bn-side-menu'
++          ) as HTMLElement | null;
++          const wrapper = nativeSideMenu?.closest('[data-floating-ui-focusable]') as HTMLElement | null;
++          if (!expectedRect || !nativeSideMenu || !wrapper) {
++            document.body.classList.remove('side-menu-visible');
++            return;
++          }
++          if (nativeSideMenu.dataset.blockType === 'syncedBlockSource') {
++            document.body.classList.remove('side-menu-visible');
++            return;
++          }
++          const wrapperRect = wrapper.getBoundingClientRect();
++          const verticalReady =
++            wrapperRect.height > 0 &&
++            Math.abs(wrapperRect.top - expectedRect.top) <= 8;
++          if (verticalReady) {
++            document.body.classList.add('side-menu-visible');
++          } else {
++            document.body.classList.remove('side-menu-visible');
++          }
++        });
++      });
++    };
++
+     const handleSideMenuZone = (e: MouseEvent) => {
+       // When drag menu is open, keep side menu visible regardless of mouse position
+       if (isDragMenuOpen()) return;
+@@ -5790,15 +5995,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const activeElementAtPoint = document.activeElement;
+       const pointedSyncSourceIsActive = !!(
+         pointedSyncSourceOuter &&
+-        (selectionIsInside(pointedSyncSourceOuter) ||
++        (syncSourceHasEditableChildFocus(pointedSyncSourceOuter) ||
++          selectionIsInside(pointedSyncSourceOuter) ||
+           (activeElementAtPoint && pointedSyncSourceOuter.contains(activeElementAtPoint)))
+       );
+ 
+-      if (pointedSyncSourceOuter) {
+-        setSyncSourceActive(pointedSyncSourceOuter, pointedSyncSourceIsActive);
+-      }
+-
+       if (pointedSyncSourceOuter && !pointedSyncSourceIsActive) {
++        hideNativeSideMenu();
+         showSyncSourceMenu(pointedSyncSourceOuter);
+         return;
+       }
+@@ -5817,13 +6020,17 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         const overActiveOuter = rectContainsPoint(activeOuterRect, e.clientX, e.clientY);
+         const overSyncMenu = rectContainsPoint(menuRect, e.clientX, e.clientY);
+         const overMenuBridge = rectContainsPoint(bridgeRect, e.clientX, e.clientY);
+-        if (overSyncMenu || overMenuBridge) {
+-          document.body.classList.remove('side-menu-visible');
++        if (syncSourceHasEditableChildFocus(hoveredSyncSourceOuter)) {
++          hideSyncSourceMenu();
++          hideNativeSideMenu();
++        } else if (overSyncMenu || overMenuBridge) {
++          hideNativeSideMenu();
+           return;
+-        }
+-        if (!overActiveOuter) {
++        } else if (!overActiveOuter) {
+           hideSyncSourceMenu();
+-          document.body.classList.remove('side-menu-visible');
++          hideNativeSideMenu();
++          return;
++        } else {
+           return;
+         }
+       }
+@@ -5831,16 +6038,20 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       // Find hovered block by y coordinate
+       const blockOuters = container.querySelectorAll('.bn-block-outer');
+       let hoveredOuter: HTMLElement | null = null;
++      const activePointedSyncSourceOuter = pointedSyncSourceIsActive ? pointedSyncSourceOuter : null;
+       // Find the content block closest to the mouse x-position.
+       // For blocks inside columns, multiple blocks may match the y-position;
+       // we pick the one whose content center is nearest to the mouse.
+       let bestDist = Infinity;
+       let fallbackOuter: HTMLElement | null = null;
+       for (const outer of blockOuters) {
++        if (outer === activePointedSyncSourceOuter || isSyncedBlockSourceOuter(outer)) continue;
+         const r = outer.getBoundingClientRect();
+         if (e.clientY >= r.top && e.clientY <= r.bottom) {
+           fallbackOuter = outer as HTMLElement;
+-          const blockContent = outer.querySelector('[data-id]');
++          const blockContent = outer.querySelector(
++            ':scope > .bn-block > .bn-block-content, :scope > .bn-block > .react-renderer, :scope > .bn-block'
++          );
+           if (blockContent) {
+             const cr = blockContent.getBoundingClientRect();
+             if (cr.width > 0 && cr.height > 0) {
+@@ -5857,7 +6068,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       if (!hoveredOuter) hoveredOuter = fallbackOuter;
+ 
+       if (!hoveredOuter) {
+-        document.body.classList.remove('side-menu-visible');
++        hideNativeSideMenu();
+         clearSyncSourceSideMenuMode();
+         return;
+       }
+@@ -5866,23 +6077,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const activeElement = document.activeElement;
+       const syncSourceIsActive = !!(
+         syncSourceOuter &&
+-        (selectionIsInside(syncSourceOuter) || (activeElement && syncSourceOuter.contains(activeElement)))
++        (syncSourceHasEditableChildFocus(syncSourceOuter) ||
++          selectionIsInside(syncSourceOuter) ||
++          (activeElement && syncSourceOuter.contains(activeElement)))
+       );
+ 
+-      if (syncSourceOuter) {
+-        setSyncSourceActive(syncSourceOuter, syncSourceIsActive);
+-      }
+-
+       if (syncSourceOuter && !syncSourceIsActive) {
+         hideSyncSourceMenu();
+-        document.body.classList.remove('side-menu-visible');
++        hideNativeSideMenu();
+         return;
+       }
+ 
+       hideSyncSourceMenu();
+ 
++      if (syncSourceOuter && syncSourceIsActive && isSyncedBlockSourceOuter(hoveredOuter)) {
++        hideNativeSideMenu();
++        return;
++      }
++
+       // Get block content boundaries
+-      const blockContent = hoveredOuter.querySelector('[data-id]') || hoveredOuter;
++      const blockContent = hoveredOuter.querySelector(
++        ':scope > .bn-block > .bn-block-content, :scope > .bn-block > .react-renderer, :scope > .bn-block'
++      ) || hoveredOuter;
+       const contentRect = blockContent.getBoundingClientRect();
+ 
+       // Notion's hover zone: left boundary = blockLeft - 150px, right boundary = blockLeft + blockWidth * 0.7
+@@ -5891,16 +6107,50 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const verticalHit = e.clientY >= contentRect.top && e.clientY <= contentRect.bottom;
+ 
+       if (verticalHit && e.clientX >= leftBound && e.clientX <= rightBound) {
+-        document.body.classList.add('side-menu-visible');
++        if (syncSourceOuter && syncSourceIsActive) {
++          showNativeSideMenuWhenReady(contentRect);
++        } else {
++          if (nativeSideMenuFrame !== null) {
++            cancelAnimationFrame(nativeSideMenuFrame);
++            nativeSideMenuFrame = null;
++          }
++          nativeSideMenuTargetRect = null;
++          nativeSideMenuTargetTop = null;
++          document.body.classList.add('side-menu-visible');
++        }
+       } else {
+-        document.body.classList.remove('side-menu-visible');
++        hideNativeSideMenu();
+       }
+     };
+ 
+     document.addEventListener('mousemove', handleSideMenuZone);
++    let syncSourceActiveFrame: number | null = null;
++    const scheduleSyncSourceActiveRefresh = () => {
++      if (syncSourceActiveFrame !== null) cancelAnimationFrame(syncSourceActiveFrame);
++      syncSourceActiveFrame = requestAnimationFrame(() => {
++        syncSourceActiveFrame = null;
++        refreshActiveSyncSources();
++      });
++    };
++    const unsubscribeEditorSelectionChange = editor.onSelectionChange?.(scheduleSyncSourceActiveRefresh);
++    const syncSourceMutationObserver = new MutationObserver(scheduleSyncSourceActiveRefresh);
++    syncSourceMutationObserver.observe(container, { childList: true, subtree: true });
++    document.addEventListener('selectionchange', scheduleSyncSourceActiveRefresh);
++    document.addEventListener('block-selection-change', scheduleSyncSourceActiveRefresh);
++    container.addEventListener('focusin', scheduleSyncSourceActiveRefresh);
++    container.addEventListener('keyup', scheduleSyncSourceActiveRefresh);
+ 
+     return () => {
++      if (syncSourceActiveFrame !== null) cancelAnimationFrame(syncSourceActiveFrame);
++      hideNativeSideMenu();
++      setActiveSyncSourceOuters(new Set());
+       document.removeEventListener('mousemove', handleSideMenuZone);
++      unsubscribeEditorSelectionChange?.();
++      syncSourceMutationObserver.disconnect();
++      document.removeEventListener('selectionchange', scheduleSyncSourceActiveRefresh);
++      document.removeEventListener('block-selection-change', scheduleSyncSourceActiveRefresh);
++      container.removeEventListener('focusin', scheduleSyncSourceActiveRefresh);
++      container.removeEventListener('keyup', scheduleSyncSourceActiveRefresh);
+       syncSourceMenu.removeEventListener('mousedown', syncSourceMenuMouseDown);
+       syncSourceMenu.removeEventListener('click', syncSourceMenuClick);
+       syncSourceMenu.remove();
+diff --git a/frontend/src/styles/globals.css b/frontend/src/styles/globals.css
+index 93efcc3..8370471 100644
+--- a/frontend/src/styles/globals.css
++++ b/frontend/src/styles/globals.css
+@@ -313,7 +313,7 @@ h4[contenteditable],
+   display: block;
+   width: 100%;
+   border-left: 3px solid rgba(55, 53, 47, 0.35);
+-  border-radius: 8px;
++  border-radius: 6px;
+   overflow: hidden;
+   background: rgba(55, 53, 47, 0.06);
+   padding: 10px 14px;
+@@ -685,6 +685,12 @@ body.sync-source-side-menu-mode [data-floating-ui-focusable]:has(> .bn-side-menu
+   transition: none !important;
+ }
+ 
++body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-block-type="syncedBlockSource"]) {
++  opacity: 0 !important;
++  pointer-events: none !important;
++  transition: none !important;
++}
++
+ .bn-sync-source-floating-menu {
+   position: fixed;
+   z-index: calc(var(--bn-ui-base-z-index, 0) + 21);
+@@ -2969,7 +2975,7 @@ a.is-internal-link {
+ 
+ .bn-image-lightbox {
+   position: fixed;
+-  inset: 0;
++  inset: -0.5px -0.5px -0.5px -0.5px;
+   z-index: 1000;
+   display: flex;
+   align-items: center;
+@@ -3226,6 +3232,14 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   margin-left: 0 !important;
+ }
+ 
++.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource) {
++  pointer-events: none !important;
++}
++
++.bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource) > .bn-block > .bn-block-group > .bn-block-outer {
++  pointer-events: auto !important;
++}
++
+ .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockSource)::before,
+ .bn-editor .bn-block-outer:has(> .bn-block > .react-renderer.node-syncedBlockMirror)::before {
+   content: none !important;
+@@ -3338,8 +3352,8 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource)::after {
+   content: '';
+   position: absolute;
+-  inset: -2px 0;
+-  border: 2px solid rgba(189, 130, 70, 0.22);
++  inset: -0.5px -0.5px 0 -0.5px;
++  border: 2px solid rgba(189, 130, 70, 0.36);
+   border-radius: 8px;
+   pointer-events: none;
+   opacity: 0;
+@@ -3349,7 +3363,9 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover::after,
+ .bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover::after,
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within::after,
+-.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after {
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):focus-within::after,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource[data-sync-source-active="true"])::after,
++.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"][data-sync-source-active="true"])::after {
+   opacity: 1;
+ }
+ 
+@@ -3395,7 +3411,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ }
+ 
+ .bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):hover .bn-synced-block-header,
+-.bn-editor .bn-block:has(> .react-renderer [data-content-type="syncedBlockSource"]):focus-within .bn-synced-block-header,
++.bn-editor .bn-block:has(> .react-renderer.node-syncedBlockSource):hover .bn-synced-block-header,
+ .bn-synced-block-mirror:hover > .bn-synced-block-header,
+ .bn-synced-block-mirror:focus-within > .bn-synced-block-header,
+ .bn-synced-block-mirror.is-saving > .bn-synced-block-header,

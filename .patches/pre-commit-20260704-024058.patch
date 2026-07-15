@@ -1,0 +1,53 @@
+diff --git a/backend/internal/handler/page_handler.go b/backend/internal/handler/page_handler.go
+index 6835002..624b422 100644
+--- a/backend/internal/handler/page_handler.go
++++ b/backend/internal/handler/page_handler.go
+@@ -136,10 +136,6 @@ func (h *PageHandler) Update(w http.ResponseWriter, r *http.Request) {
+ 
+ 	page, err := h.pageService.Update(slug, pageID, &req)
+ 	if err != nil {
+-		if err.Error() == "page is locked" {
+-			http.Error(w, err.Error(), http.StatusLocked)
+-			return
+-		}
+ 		http.Error(w, err.Error(), http.StatusInternalServerError)
+ 		return
+ 	}
+@@ -163,10 +159,6 @@ func (h *PageHandler) UpdateMeta(w http.ResponseWriter, r *http.Request) {
+ 
+ 	page, err := h.pageService.UpdateMeta(slug, pageID, &req)
+ 	if err != nil {
+-		if err.Error() == "page is locked" {
+-			http.Error(w, err.Error(), http.StatusLocked)
+-			return
+-		}
+ 		http.Error(w, err.Error(), http.StatusInternalServerError)
+ 		return
+ 	}
+diff --git a/backend/internal/service/page_service.go b/backend/internal/service/page_service.go
+index 80f3cdb..010e042 100644
+--- a/backend/internal/service/page_service.go
++++ b/backend/internal/service/page_service.go
+@@ -540,9 +540,6 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if page.IsLocked {
+-		return nil, errors.New("page is locked")
+-	}
+ 
+ 	filePath := filepath.Join(s.docsDir, page.FilePath)
+ 	raw, err := os.ReadFile(filePath)
+@@ -615,12 +612,6 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
+ 	if req.IsStarred != nil {
+ 		fm.Starred = req.IsStarred
+ 	}
+-	if page.IsLocked {
+-		unlocking := req.IsLocked != nil && !*req.IsLocked
+-		if !unlocking {
+-			return nil, errors.New("page is locked")
+-		}
+-	}
+ 
+ 	if req.Title != nil && *req.Title != "" && *req.Title != page.Title {
+ 		newTitle := *req.Title

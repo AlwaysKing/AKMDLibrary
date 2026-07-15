@@ -1,0 +1,4 @@
+ M frontend/src/components/Editor/BlockNoteComponents.tsx
+ M frontend/src/components/Editor/PageEditor.tsx
+ M frontend/src/styles/globals.css
+?? .patches/

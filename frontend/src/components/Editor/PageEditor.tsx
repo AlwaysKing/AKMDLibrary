@@ -5628,6 +5628,35 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
           return;
         }
+        // [case NEW] 空子块（任意嵌套类型：toggle / list / 嵌套段落等）+ Backspace
+        // 用户预期：删除当前空子块，光标回到前一个兄弟；没有前兄弟时回到父块。
+        // 必须拦截：BlockNote 0.50.0 的默认 unnest（Bt 函数）在"空子块 + 后续兄弟"
+        // 场景下有 bug，会把后续兄弟错误收编为被提升块的 children，破坏结构。
+        // 此拦截直接删块 + 移焦，完全绕开那条有 bug 的路径。
+        // Delete 键不走此逻辑（其语义为向后删，无此 bug）。
+        // 拦截前提：本 handler 在 document capture 阶段注册（见文件末尾 addEventListener），
+        // 早于 BlockNote/ProseMirror 在编辑器元素上的 bubble 阶段 keymap，故
+        // stopImmediatePropagation 能阻断其默认 unnest。若未来 BlockNote 改在
+        // document capture 或编辑器祖先节点 capture 上监听 keydown，需重评拦截策略
+        //（与 handleShiftClickCapture 注释里描述的同类风险一致）。
+        if (e.key === 'Backspace') {
+          const pos = editor.getTextCursorPosition();
+          if (pos?.parentBlock && isEmptyTextBlock(pos.block)) {
+            const focusTarget = pos.prevBlock || pos.parentBlock;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            removeBlocksEnhanced(editor, [{ id: currentBlock.id } as any]);
+            editor.focus();
+            requestAnimationFrame(() => {
+              try {
+                editor.setTextCursorPosition(focusTarget.id as any, 'end');
+              } catch {
+                // 目标块可能已被并发事务移除，忽略。
+              }
+            });
+            return;
+          }
+        }
         if (e.key !== 'Backspace') return;
         // Allow deleting empty first block (BlockNote default doesn't support this)
         const blocks = editor.document;

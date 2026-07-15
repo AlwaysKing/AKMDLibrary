@@ -1,0 +1,3121 @@
+diff --git a/.gitignore b/.gitignore
+index f990c8d..ac9ea03 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,6 +3,10 @@
+ *.png
+ # 例外：README 截图需要进 git
+ !docs/screenshots/*.png
++# 例外：PWA 默认图标随仓库分发
++!frontend/public/icons/*.png
++# 例外：imageutil 单测源图
++!backend/internal/imageutil/testdata/*.png
+ .DS_Store
+ .chrome-debug-profile/
+ .claude/
+@@ -26,6 +30,12 @@ docs/*
+ !docs/screenshots/
+ !docs/FORMATS.md
+ !docs/STRUCTURE.md
++# 项目设计文档与 superpowers 计划文档
++!docs/DESIGN.md
++!docs/PLAN.md
++!docs/PWA-SUPPORT-DESIGN.md
++!docs/SYNCED-BLOCK-DESIGN.md
++!docs/superpowers/
+ drag-test-1
+ drag-test-handle
+ frontend/.next/
+diff --git a/backend/cmd/server/main.go b/backend/cmd/server/main.go
+index 8c0e753..01cb1aa 100644
+--- a/backend/cmd/server/main.go
++++ b/backend/cmd/server/main.go
+@@ -287,9 +287,11 @@ func main() {
+ 	r.Get("/api/covers/*", uploadHandler.ServeCover)
+ 
+ 	// Public site assets (favicon, logo)
+-	// IMPORTANT: `pwa-icon` must be registered before `{filename}` so chi matches it
+-	// as a precise route rather than falling through to the wildcard.
+-	r.Get("/api/site-assets/pwa-icon", siteSettingHandler.ServePWAIcon)
++	// IMPORTANT: literal PWA-icon paths must be registered before `{filename}`
++	// so chi matches them precisely rather than falling through to the wildcard.
++	r.Get("/api/site-assets/pwa-icon-192.png", siteSettingHandler.ServePWAIconSizedStatic("192"))
++	r.Get("/api/site-assets/pwa-icon-512.png", siteSettingHandler.ServePWAIconSizedStatic("512"))
++	r.Get("/api/site-assets/pwa-icon-512-maskable.png", siteSettingHandler.ServePWAIconSizedStatic("512-maskable"))
+ 	r.Get("/api/site-assets/{filename}", siteSettingHandler.ServeAsset)
+ 
+ 	// Public PWA manifest (dynamic — reflects current site name + favicon)
+diff --git a/backend/go.mod b/backend/go.mod
+index c7cbcdd..5d683a3 100644
+--- a/backend/go.mod
++++ b/backend/go.mod
+@@ -13,4 +13,7 @@ require (
+ 	gopkg.in/yaml.v3 v3.0.1
+ )
+ 
+-require github.com/coder/websocket v1.8.15
++require (
++	github.com/coder/websocket v1.8.15
++	golang.org/x/image v0.44.0
++)
+diff --git a/backend/go.sum b/backend/go.sum
+index 78875bc..74a124c 100644
+--- a/backend/go.sum
++++ b/backend/go.sum
+@@ -14,6 +14,8 @@ github.com/mattn/go-sqlite3 v1.14.44 h1:3VSe+xafpbzsLbdr2AWlAZk9yRHiBhTBakioXaCK
+ github.com/mattn/go-sqlite3 v1.14.44/go.mod h1:pjEuOr8IwzLJP2MfGeTb0A35jauH+C2kbHKBr7yXKVQ=
+ golang.org/x/crypto v0.50.0 h1:zO47/JPrL6vsNkINmLoo/PH1gcxpls50DNogFvB5ZGI=
+ golang.org/x/crypto v0.50.0/go.mod h1:3muZ7vA7PBCE6xgPX7nkzzjiUq87kRItoJQM1Yo8S+Q=
++golang.org/x/image v0.44.0 h1:+tDekMZED9+LrtB3G5xzRggpVh9CARjZqROla3R3R+I=
++golang.org/x/image v0.44.0/go.mod h1:V8K3KE9KKKE+pLpQDOeN18w9oacNSvy1tDOirTu4xtY=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+diff --git a/backend/internal/handler/site_setting_handler.go b/backend/internal/handler/site_setting_handler.go
+index a275e56..64b40b3 100644
+--- a/backend/internal/handler/site_setting_handler.go
++++ b/backend/internal/handler/site_setting_handler.go
+@@ -1,13 +1,16 @@
+ package handler
+ 
+ import (
++	"bytes"
+ 	"encoding/json"
+ 	"io"
++	"log"
+ 	"net/http"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+ 
++	"github.com/alwaysking/akmdlibrary/internal/imageutil"
+ 	"github.com/alwaysking/akmdlibrary/internal/model"
+ 	"github.com/alwaysking/akmdlibrary/internal/service"
+ )
+@@ -59,9 +62,13 @@ func (h *SiteSettingHandler) UpdateSiteName(w http.ResponseWriter, r *http.Reque
+ 	json.NewEncoder(w).Encode(settings)
+ }
+ 
+-// UploadFavicon handles favicon upload (admin only)
++// UploadFavicon handles favicon upload (admin only). Saves the original file
++// for the <link rel="icon"> tag AND generates three PNG variants (192, 512,
++// 512-maskable) used by the PWA manifest. If the upload isn't a decodable
++// raster (e.g. SVG/ICO), PWA variants are skipped and the manifest keeps
++// pointing at the bundled defaults.
+ func (h *SiteSettingHandler) UploadFavicon(w http.ResponseWriter, r *http.Request) {
+-	if err := r.ParseMultipartForm(5 << 20); err != nil {
++	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MiB headroom for variant generation
+ 		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+ 		return
+ 	}
+@@ -73,39 +80,41 @@ func (h *SiteSettingHandler) UploadFavicon(w http.ResponseWriter, r *http.Reques
+ 	}
+ 	defer file.Close()
+ 
+-	// Read first bytes to detect extension
+-	buf := make([]byte, 512)
+-	n, _ := file.Read(buf)
+-	contentType := http.DetectContentType(buf[:n])
++	// Read once into memory — we need it for both the original save and PNG variants.
++	var buf bytes.Buffer
++	if _, err := io.Copy(&buf, file); err != nil {
++		http.Error(w, "Failed to read upload", http.StatusBadRequest)
++		return
++	}
++	data := buf.Bytes()
+ 
++	contentType := http.DetectContentType(data)
+ 	ext := ".png"
+-	if strings.Contains(contentType, "svg") {
++	switch {
++	case strings.Contains(contentType, "svg"):
+ 		ext = ".svg"
+-	} else if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") {
++	case strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg"):
+ 		ext = ".jpg"
+-	} else if strings.Contains(contentType, "ico") {
++	case strings.Contains(contentType, "ico"):
+ 		ext = ".ico"
+-	} else if strings.Contains(contentType, "gif") {
++	case strings.Contains(contentType, "gif"):
+ 		ext = ".gif"
+ 	}
+ 
+-	// Remove old favicon files
+-	oldFiles, _ := filepath.Glob(filepath.Join(h.siteDir, "favicon*"))
+-	for _, f := range oldFiles {
+-		os.Remove(f)
+-	}
++	// Replace old favicon originals + any previously generated PWA variants.
++	h.purgeFaviconFiles()
+ 
+-	// Save new file
+-	filePath := filepath.Join(h.siteDir, "favicon"+ext)
+-	dst, err := os.Create(filePath)
+-	if err != nil {
+-		http.Error(w, "Failed to save file", http.StatusInternalServerError)
++	origPath := filepath.Join(h.siteDir, "favicon"+ext)
++	if err := os.WriteFile(origPath, data, 0644); err != nil {
++		http.Error(w, "Failed to save favicon", http.StatusInternalServerError)
+ 		return
+ 	}
+-	defer dst.Close()
+ 
+-	dst.Write(buf[:n])
+-	io.Copy(dst, file)
++	// Generate PWA PNG variants. Non-fatal on failure — manifest will fall back
++	// to bundled defaults via HasCustomFavicon() returning false.
++	if _, err := imageutil.ProcessToPWAVariants(h.siteDir, bytes.NewReader(data)); err != nil {
++		log.Printf("site_setting: PWA variant generation failed: %v", err)
++	}
+ 
+ 	url := "/api/site-assets/favicon" + ext
+ 	h.siteSettingService.Update(&model.UpdateSiteSettingsRequest{Favicon: &url})
+@@ -114,6 +123,16 @@ func (h *SiteSettingHandler) UploadFavicon(w http.ResponseWriter, r *http.Reques
+ 	json.NewEncoder(w).Encode(map[string]string{"url": url})
+ }
+ 
++// purgeFaviconFiles removes any existing favicon* and pwa-icon-*.png from siteDir.
++func (h *SiteSettingHandler) purgeFaviconFiles() {
++	for _, pattern := range []string{"favicon*", "pwa-icon-*.png"} {
++		old, _ := filepath.Glob(filepath.Join(h.siteDir, pattern))
++		for _, f := range old {
++			os.Remove(f)
++		}
++	}
++}
++
+ // UploadLogo handles logo upload (admin only)
+ func (h *SiteSettingHandler) UploadLogo(w http.ResponseWriter, r *http.Request) {
+ 	if err := r.ParseMultipartForm(5 << 20); err != nil {
+@@ -167,12 +186,9 @@ func (h *SiteSettingHandler) UploadLogo(w http.ResponseWriter, r *http.Request)
+ 	json.NewEncoder(w).Encode(map[string]string{"url": url})
+ }
+ 
+-// ResetFavicon removes custom favicon (admin only)
++// ResetFavicon removes custom favicon + generated PWA variants (admin only)
+ func (h *SiteSettingHandler) ResetFavicon(w http.ResponseWriter, r *http.Request) {
+-	oldFiles, _ := filepath.Glob(filepath.Join(h.siteDir, "favicon*"))
+-	for _, f := range oldFiles {
+-		os.Remove(f)
+-	}
++	h.purgeFaviconFiles()
+ 	empty := ""
+ 	h.siteSettingService.Update(&model.UpdateSiteSettingsRequest{Favicon: &empty})
+ 	w.WriteHeader(http.StatusNoContent)
+@@ -227,8 +243,10 @@ func (h *SiteSettingHandler) GetLogoPath() string {
+ }
+ 
+ // ServeManifest returns a PWA Web App Manifest reflecting current site settings (public).
+-// Site name and icon are wired to the admin-configured values so the installed PWA
+-// stays in sync with /api/site-settings without rebuilding the frontend.
++// Uses concrete PNG sizes (192/512/maskable) — Chrome rejects SVG with sizes:"any"
++// (see https://issuetracker.google.com/issues/40925759). Icon URLs switch between
++// the bundled defaults and admin-uploaded PNGs depending on whether a custom
++// favicon is configured.
+ func (h *SiteSettingHandler) ServeManifest(w http.ResponseWriter, r *http.Request) {
+ 	settings, err := h.siteSettingService.Get()
+ 	if err != nil {
+@@ -240,19 +258,27 @@ func (h *SiteSettingHandler) ServeManifest(w http.ResponseWriter, r *http.Reques
+ 	if settings != nil && settings.SiteName != nil && *settings.SiteName != "" {
+ 		name = *settings.SiteName
+ 	}
++	shortName := shortNameFrom(name)
++
++	icon192, icon512, iconMask := h.pwaIconURLs()
+ 
+ 	manifest := map[string]any{
++		"id":               "/",
+ 		"name":             name,
+-		"short_name":       name,
+-		"description":      "MD Library",
++		"short_name":       shortName,
++		"description":      "MD Library — self-hosted markdown library",
+ 		"start_url":        "/",
+ 		"scope":            "/",
+ 		"display":          "standalone",
++		"display_override": []string{"standalone", "minimal-ui"},
++		"orientation":      "any",
+ 		"background_color": "#ffffff",
+ 		"theme_color":      "#ffffff",
++		"categories":       []string{"productivity", "education"},
+ 		"icons": []map[string]any{
+-			{"src": "/api/site-assets/pwa-icon", "sizes": "any", "purpose": "any"},
+-			{"src": "/api/site-assets/pwa-icon", "sizes": "any", "purpose": "maskable"},
++			{"src": icon192, "sizes": "192x192", "type": "image/png", "purpose": "any"},
++			{"src": icon512, "sizes": "512x512", "type": "image/png", "purpose": "any"},
++			{"src": iconMask, "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+ 		},
+ 	}
+ 
+@@ -265,18 +291,60 @@ func (h *SiteSettingHandler) ServeManifest(w http.ResponseWriter, r *http.Reques
+ 	}
+ }
+ 
+-// ServePWAIcon serves the current favicon at a stable URL so the PWA manifest
+-// can reference it without knowing its extension. Falls back to the bundled
+-// frontend SVG when no custom favicon is configured.
+-func (h *SiteSettingHandler) ServePWAIcon(w http.ResponseWriter, r *http.Request) {
+-	favPath := h.GetFaviconPath()
+-	if favPath == "" {
+-		// No custom favicon → fall back to the default Vite SVG shipped with the frontend.
+-		http.Redirect(w, r, "/vite.svg", http.StatusFound)
+-		return
++// shortNameFrom truncates name to ≤12 runes (Chrome recommendation) so the
++// home-screen icon label doesn't get truncated by the OS.
++func shortNameFrom(name string) string {
++	runes := []rune(name)
++	if len(runes) <= 12 {
++		return name
+ 	}
++	return string(runes[:12])
++}
+ 
+-	// http.ServeFile sets Content-Type from the file extension automatically.
+-	w.Header().Set("Cache-Control", "no-cache")
+-	http.ServeFile(w, r, favPath)
++// pwaIconURLs returns the three icon URLs the manifest should reference. When
++// admin-uploaded PWA variants exist in siteDir, they're served from /api/site-assets/;
++// otherwise the manifest falls back to the bundled defaults under /icons/.
++func (h *SiteSettingHandler) pwaIconURLs() (string, string, string) {
++	if h.HasCustomFavicon() {
++		return "/api/site-assets/pwa-icon-192.png",
++			"/api/site-assets/pwa-icon-512.png",
++			"/api/site-assets/pwa-icon-512-maskable.png"
++	}
++	return "/icons/icon-192.png",
++		"/icons/icon-512.png",
++		"/icons/icon-512-maskable.png"
++}
++
++// HasCustomFavicon reports whether the admin has uploaded a custom favicon
++// AND the PWA PNG variants were successfully generated for it.
++func (h *SiteSettingHandler) HasCustomFavicon() bool {
++	matches, _ := filepath.Glob(filepath.Join(h.siteDir, "pwa-icon-512.png"))
++	return len(matches) > 0
++}
++
++// ServePWAIconSizedStatic returns an http.HandlerFunc that serves a specific
++// PWA icon size. Used by chi routes where the size is a literal in the URL.
++// Falls back to the bundled default via 302 redirect when the generated file
++// is missing (e.g. operator deleted it mid-flight).
++func (h *SiteSettingHandler) ServePWAIconSizedStatic(sizeKey string) http.HandlerFunc {
++	staticMap := map[string]string{
++		"192":          "/icons/icon-192.png",
++		"512":          "/icons/icon-512.png",
++		"512-maskable": "/icons/icon-512-maskable.png",
++	}
++	return func(w http.ResponseWriter, r *http.Request) {
++		fname := "pwa-icon-" + sizeKey + ".png"
++		full := filepath.Join(h.siteDir, fname)
++		if _, err := os.Stat(full); err != nil {
++			static := staticMap[sizeKey]
++			if static == "" {
++				http.NotFound(w, r)
++				return
++			}
++			http.Redirect(w, r, static, http.StatusFound)
++			return
++		}
++		w.Header().Set("Cache-Control", "no-cache")
++		http.ServeFile(w, r, full)
++	}
+ }
+diff --git a/backend/internal/imageutil/imageutil.go b/backend/internal/imageutil/imageutil.go
+new file mode 100644
+index 0000000..fe5fd15
+--- /dev/null
++++ b/backend/internal/imageutil/imageutil.go
+@@ -0,0 +1,119 @@
++// Package imageutil decodes arbitrary uploaded images and produces the PNG
++// variants required by the PWA manifest (192, 512, 512-maskable).
++package imageutil
++
++import (
++	"bytes"
++	"fmt"
++	"image"
++	"image/color"
++	"image/png"
++	"io"
++	"os"
++	"path/filepath"
++
++	_ "image/gif"
++	_ "image/jpeg"
++	_ "image/png"
++
++	_ "golang.org/x/image/bmp"
++	_ "golang.org/x/image/webp"
++
++	"golang.org/x/image/draw"
++)
++
++// Decode reads an image stream and returns the decoded raster plus its format
++// name (png / jpeg / gif / webp / bmp). Returns an error for SVG or unknown
++// formats — callers should fall back to saving those as-is.
++func Decode(r io.Reader) (image.Image, string, error) {
++	img, format, err := image.Decode(r)
++	if err != nil {
++		return nil, "", fmt.Errorf("imageutil: decode: %w", err)
++	}
++	return img, format, nil
++}
++
++// ResizePNG scales img to size×size preserving aspect ratio (letterboxed
++// with transparent background) and writes it to w as PNG.
++func ResizePNG(w io.Writer, img image.Image, size int) error {
++	dst := image.NewRGBA(image.Rect(0, 0, size, size))
++	// NewRGBA is zero-filled = fully transparent; letterbox preserves aspect.
++	srcBounds := img.Bounds()
++	srcW, srcH := srcBounds.Dx(), srcBounds.Dy()
++	scale := min(float64(size)/float64(srcW), float64(size)/float64(srcH))
++	outW := int(float64(srcW) * scale)
++	outH := int(float64(srcH) * scale)
++	r := image.Rect((size-outW)/2, (size-outH)/2, (size+outW)/2, (size+outH)/2)
++	draw.CatmullRom.Scale(dst, r, img, srcBounds, draw.Over, nil)
++	if err := png.Encode(w, dst); err != nil {
++		return fmt.Errorf("imageutil: encode resized: %w", err)
++	}
++	return nil
++}
++
++// ComposeMaskable renders img onto a size×size opaque white canvas with the
++// source centered at 80% scale — the ~10% safe zone required by Android's
++// maskable icon spec.
++func ComposeMaskable(w io.Writer, img image.Image, size int) error {
++	canvas := image.NewRGBA(image.Rect(0, 0, size, size))
++	white := image.NewUniform(color.RGBA{R: 255, G: 255, B: 255, A: 255})
++	draw.Draw(canvas, canvas.Bounds(), white, image.Point{}, draw.Src)
++
++	innerSize := int(float64(size) * 0.8)
++	inner := image.NewRGBA(image.Rect(0, 0, innerSize, innerSize))
++	srcBounds := img.Bounds()
++	srcW, srcH := srcBounds.Dx(), srcBounds.Dy()
++	scale := min(float64(innerSize)/float64(srcW), float64(innerSize)/float64(srcH))
++	outW := int(float64(srcW) * scale)
++	outH := int(float64(srcH) * scale)
++	r := image.Rect((innerSize-outW)/2, (innerSize-outH)/2, (innerSize+outW)/2, (innerSize+outH)/2)
++	draw.CatmullRom.Scale(inner, r, img, srcBounds, draw.Over, nil)
++
++	offset := (size - innerSize) / 2
++	draw.Draw(canvas, image.Rect(offset, offset, offset+innerSize, offset+innerSize), inner, image.Point{}, draw.Over)
++
++	if err := png.Encode(w, canvas); err != nil {
++		return fmt.Errorf("imageutil: encode maskable: %w", err)
++	}
++	return nil
++}
++
++// ProcessToPWAVariants decodes r and writes three PNGs into outDir:
++//   - pwa-icon-192.png          (purpose: any)
++//   - pwa-icon-512.png          (purpose: any)
++//   - pwa-icon-512-maskable.png (purpose: maskable)
++//
++// Returns the relative filenames written.
++func ProcessToPWAVariants(outDir string, r io.Reader) ([]string, error) {
++	var buf bytes.Buffer
++	if _, err := io.Copy(&buf, r); err != nil {
++		return nil, fmt.Errorf("imageutil: read source: %w", err)
++	}
++	img, _, err := Decode(bytes.NewReader(buf.Bytes()))
++	if err != nil {
++		return nil, err
++	}
++	if err := os.MkdirAll(outDir, 0755); err != nil {
++		return nil, fmt.Errorf("imageutil: mkdir: %w", err)
++	}
++	names := []string{"pwa-icon-192.png", "pwa-icon-512.png", "pwa-icon-512-maskable.png"}
++	for _, name := range names {
++		f, err := os.Create(filepath.Join(outDir, name))
++		if err != nil {
++			return nil, fmt.Errorf("imageutil: create %s: %w", name, err)
++		}
++		switch name {
++		case "pwa-icon-192.png":
++			err = ResizePNG(f, img, 192)
++		case "pwa-icon-512.png":
++			err = ResizePNG(f, img, 512)
++		case "pwa-icon-512-maskable.png":
++			err = ComposeMaskable(f, img, 512)
++		}
++		f.Close()
++		if err != nil {
++			return nil, fmt.Errorf("imageutil: write %s: %w", name, err)
++		}
++	}
++	return names, nil
++}
+diff --git a/backend/internal/imageutil/imageutil_test.go b/backend/internal/imageutil/imageutil_test.go
+new file mode 100644
+index 0000000..37f9a50
+--- /dev/null
++++ b/backend/internal/imageutil/imageutil_test.go
+@@ -0,0 +1,89 @@
++package imageutil
++
++import (
++	"bytes"
++	"image/png"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestDecode_PNG(t *testing.T) {
++	b, err := os.ReadFile("testdata/src.png")
++	if err != nil {
++		t.Fatalf("read src: %v", err)
++	}
++	img, format, err := Decode(bytes.NewReader(b))
++	if err != nil {
++		t.Fatalf("decode: %v", err)
++	}
++	if format != "png" {
++		t.Fatalf("format = %q, want png", format)
++	}
++	if img.Bounds().Dx() != 512 || img.Bounds().Dy() != 512 {
++		t.Fatalf("bounds = %v, want 512x512", img.Bounds())
++	}
++}
++
++func TestResizePNG(t *testing.T) {
++	src, _ := os.ReadFile("testdata/src.png")
++	img, _, _ := Decode(bytes.NewReader(src))
++
++	var buf bytes.Buffer
++	if err := ResizePNG(&buf, img, 192); err != nil {
++		t.Fatalf("resize: %v", err)
++	}
++	out, err := png.Decode(&buf)
++	if err != nil {
++		t.Fatalf("decode resized: %v", err)
++	}
++	if out.Bounds().Dx() != 192 || out.Bounds().Dy() != 192 {
++		t.Fatalf("size = %v, want 192x192", out.Bounds())
++	}
++}
++
++func TestComposeMaskable_HasPadding(t *testing.T) {
++	src, _ := os.ReadFile("testdata/src.png")
++	img, _, _ := Decode(bytes.NewReader(src))
++
++	var buf bytes.Buffer
++	if err := ComposeMaskable(&buf, img, 512); err != nil {
++		t.Fatalf("compose: %v", err)
++	}
++	out, _ := png.Decode(&buf)
++	bounds := out.Bounds()
++	if bounds.Dx() != 512 || bounds.Dy() != 512 {
++		t.Fatalf("size = %v, want 512x512", bounds)
++	}
++	// Corner pixel should be opaque white (the safe-zone padding) since the
++	// source is centered at 80% scale.
++	r, g, b, a := out.At(0, 0).RGBA()
++	if r < 0xF000 || g < 0xF000 || b < 0xF000 {
++		t.Fatalf("corner RGB = (%d,%d,%d), want near-white padding", r>>8, g>>8, b>>8)
++	}
++	if a != 0xFFFF {
++		t.Fatalf("corner alpha = %d, want fully opaque", a>>8)
++	}
++}
++
++func TestProcessToPWAVariants(t *testing.T) {
++	src, _ := os.ReadFile("testdata/src.png")
++	tmp := t.TempDir()
++	variants, err := ProcessToPWAVariants(tmp, bytes.NewReader(src))
++	if err != nil {
++		t.Fatalf("process: %v", err)
++	}
++	want := []string{"pwa-icon-192.png", "pwa-icon-512.png", "pwa-icon-512-maskable.png"}
++	if len(variants) != len(want) {
++		t.Fatalf("variants = %v, want %v", variants, want)
++	}
++	for _, name := range want {
++		info, err := os.Stat(filepath.Join(tmp, name))
++		if err != nil {
++			t.Fatalf("stat %s: %v", name, err)
++		}
++		if info.Size() == 0 {
++			t.Fatalf("%s is empty", name)
++		}
++	}
++}
+diff --git a/backend/internal/imageutil/testdata/src.png b/backend/internal/imageutil/testdata/src.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6293959ae592f3d17b683618f96808016f352af
+GIT binary patch
+literal 12854
+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
+Mm)Xwb?Z+?uA8-)D82|tP
+
+literal 0
+HcmV?d00001
+
+diff --git a/docs/PWA-SUPPORT-DESIGN.md b/docs/PWA-SUPPORT-DESIGN.md
+new file mode 100644
+index 0000000..3a22a42
+--- /dev/null
++++ b/docs/PWA-SUPPORT-DESIGN.md
+@@ -0,0 +1,110 @@
++# PWA 支持 — 设计方案
++
++> **更新（2026-07-15）：** 方案已升级。原方案使用 `"sizes":"any"` + SVG 兜底图标，
++> 触发 Chrome 已知 bug（[crbug 40925759](https://issuetracker.google.com/issues/40925759)），
++> 浏览器不弹安装提示。现改为：
++> - 默认图标随仓库分发（PNG 192/512/maskable 三档），由 `frontend/scripts/generate-pwa-icons.mjs` 烘焙
++> - 上传 favicon 时后端用 `golang.org/x/image` 解码并烘焙三档 PNG
++> - manifest 引用具体尺寸 PNG + `id` / `display_override` / `orientation` / `categories` 字段
++> - SW 升级为 App Shell 预缓存 + stale-while-revalidate（API 旁路，不缓存用户数据）
++> - 补 `apple-touch-icon` / `mask-icon` / `description` / `apple-mobile-web-app-*` 等 iOS 兼容 meta
++>
++> 原文保留如下作为决策溯源。详细任务拆解见
++> `docs/superpowers/plans/2026-07-15-pwa-installability.md`。
++
++## 目标
++
++让 AKMDLibrary 在 HTTPS 部署后被浏览器判定为可安装 PWA（能"添加到主屏幕/安装成 App"）。
++不做离线缓存（用户选择 A 方案）。
++
++## 范围与非目标
++
++- **范围内**：可安装性（manifest + 最小 SW）、图标和站点名跟随站点设置联动。
++- **非目标**：离线访问、API 响应缓存、push 通知、后台同步。
++
++## 选型与决策
++
++- **方案：后端动态生成 manifest**（不使用 `vite-plugin-pwa`，零前端新依赖）
++  - 理由：站点名 / 图标由管理员通过 `/api/site-settings` 动态配置；静态 manifest 无法反映这些变化，动态生成是唯一干净的方案。
++- **图标策略**：manifest 中使用 `"sizes": "any"`，由浏览器按需缩放，避免后端切图。
++- **SW 策略**：纯占位（仅 `fetch` no-op 监听器），只为满足 Chrome 可安装性判定。
++
++## 改动清单
++
++### 后端 (`backend/`)
++
++1. `internal/handler/site_setting_handler.go` 增加两个 handler：
++   - `ServeManifest(w, r)`：
++     - 读当前 `SiteSettings`（`site_name`, `favicon`）
++     - 返回 JSON manifest，`Content-Type: application/manifest+json`，`Cache-Control: no-cache`
++     - `name`/`short_name` 用 `site_name`，为空时降级 `"MD Library"`
++   - `ServePWAIcon(w, r)`：
++     - 复用 `GetFaviconPath()`
++     - 有自定义 favicon → 按实际扩展名设 `Content-Type`，`http.ServeFile`
++     - 无自定义 → 重定向到 `/vite.svg`（或 404，由浏览器自动用 `rel="icon"` 的 favicon 兜底）
++     - `Cache-Control: no-cache`（因为同一 URL 内容会变）
++
++2. `cmd/server/main.go` 公开路由区新增：
++   - `r.Get("/api/manifest.webmanifest", siteSettingHandler.ServeManifest)`
++   - `r.Get("/api/site-assets/pwa-icon", siteSettingHandler.ServePWAIcon)`
++   - **注意**：`pwa-icon` 必须注册在 `/api/site-assets/{filename}` 通配之前，chi 路由器会优先匹配精确路径。
++
++### 前端 (`frontend/`)
++
++1. `index.html` — `<head>` 增加两行：
++   ```html
++   <link rel="manifest" href="/api/manifest.webmanifest" />
++   <meta name="theme-color" content="#ffffff" />
++   ```
++
++2. `public/sw.js`（新增）：
++   ```js
++   self.addEventListener('install', () => self.skipWaiting());
++   self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
++   self.addEventListener('fetch', () => {}); // no-op
++   ```
++
++3. `src/main.tsx`（注册 SW，仅生产）：
++   ```ts
++   if ('serviceWorker' in navigator && import.meta.env.PROD) {
++     navigator.serviceWorker.register('/sw.js').catch(() => {});
++   }
++   ```
++
++## Manifest 形状
++
++```json
++{
++  "name": "<site_name 或 'MD Library'>",
++  "short_name": "<同上>",
++  "description": "MD Library",
++  "start_url": "/",
++  "scope": "/",
++  "display": "standalone",
++  "background_color": "#ffffff",
++  "theme_color": "#ffffff",
++  "icons": [
++    { "src": "/api/site-assets/pwa-icon", "sizes": "any", "purpose": "any" },
++    { "src": "/api/site-assets/pwa-icon", "sizes": "any", "purpose": "maskable" }
++  ]
++}
++```
++
++省略 icon 的 `type` 字段——浏览器以响应 `Content-Type` 为准，更鲁棒。
++
++## 已知 trade-off / 注意事项
++
++1. **HTTPS 前看不到效果**：Chrome 要求 secure context 才允许安装，部署 HTTPS 前不可验证，符合预期。
++2. **maskable 裁切**：管理员上传的图标若没有安全边距，Android 圆角图标可能被裁；非阻塞性 UX 问题。
++3. **已安装 PWA 的图标更新滞后**：浏览器周期性重新拉取 manifest，不是实时的；改完图标不会立刻反映到已安装实例。
++4. **SW 在开发环境不注册**：通过 `import.meta.env.PROD` 门控，避免 Vite HMR 与 SW 冲突。
++5. **Manifest 缓存**：`Cache-Control: no-cache` 保证浏览器每次重新验证，站点设置变更能及时生效。
++
++## 验证步骤
++
++部署 HTTPS 后：
++1. Chrome DevTools → Application → Manifest：应能看到 name/icons 正确加载，无报错
++2. Application → Service Workers：应显示 `/sw.js` activated and running
++3. 地址栏右侧应出现"安装"图标
++4. 修改管理员上传的 favicon → 刷新 → 重新打开 Manifest 面板，icon 应已更新
++5. 修改 `site_name` → 同上，name 字段应已更新
+diff --git a/docs/superpowers/plans/2026-07-15-pwa-installability.md b/docs/superpowers/plans/2026-07-15-pwa-installability.md
+new file mode 100644
+index 0000000..098d108
+--- /dev/null
++++ b/docs/superpowers/plans/2026-07-15-pwa-installability.md
+@@ -0,0 +1,999 @@
++# PWA 可安装性修复 Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** 让 Chrome 等浏览器判定 AKMDLibrary 为可安装 PWA（出现"安装"按钮），并把现有最小实现升级为带 App Shell 缓存、自定义 favicon 自动切图、iOS 兼容的完整方案。
++
++**Architecture:**
++- 默认图标用 dev-time 脚本从 `vite.svg` 烘焙出 PNG（192/512/maskable）随仓库分发。
++- manifest 端点改成引用具体尺寸的 PNG，并补齐 `id` / `display_override` / `orientation` 等字段。
++- 上传 favicon 时后端用 `golang.org/x/image/draw` 解码 + 缩放 + 合成 maskable，输出三档 PNG 到 siteDir。
++- Service Worker 升级为 App Shell + stale-while-revalidate，离线可打开外壳；API 请求不走缓存，避免脏数据。
++- `index.html` 补 apple-touch-icon / mask-icon / description 等 meta，iOS 兼容。
++
++**Tech Stack:**
++- Backend: Go 1.25, `golang.org/x/image/draw`、`image/png`、`image/jpeg`、`image/gif`、`golang.org/x/image/webp`、`golang.org/x/image/bmp`（ICO 内部用 BMP）
++- Frontend: Vite + React（已有），新增 dev dep `sharp` 仅用于一次性烘焙图标
++- Test: Go 标准 `testing`
++
++---
++
++## File Structure
++
++**新建：**
++- `frontend/scripts/generate-pwa-icons.mjs` — 一次性 dev 脚本，用 `sharp` 从 `vite.svg` 烘焙 PNG
++- `frontend/public/icons/icon-192.png` — 默认 192×192 PNG（any purpose）
++- `frontend/public/icons/icon-512.png` — 默认 512×512 PNG（any purpose）
++- `frontend/public/icons/icon-512-maskable.png` — 默认 512×512 maskable PNG（带 ~10% 安全区 padding）
++- `backend/internal/imageutil/imageutil.go` — 图像处理工具：`Decode`、`ResizePNG`、`ComposeMaskable`、`ProcessToPWAVariants`
++- `backend/internal/imageutil/imageutil_test.go` — 单元测试
++- `backend/internal/imageutil/testdata/src.png` — 测试用源图（脚本生成或借用现有图标）
++
++**修改：**
++- `backend/go.mod` / `go.sum` — 新增 `golang.org/x/image`
++- `backend/internal/handler/site_setting_handler.go`
++  - `ServeManifest`：用具体尺寸 PNG 路径 + 补 `id` / `display_override` / `orientation` / `short_name` 截断
++  - `UploadFavicon`：保存原图后调用 `imageutil.ProcessToPWAVariants`
++  - `ResetFavicon`：同时清理 `pwa-icon-*.png`
++  - 新增 `ServePWAIcon192` / `ServePWAIcon512` / `ServePWAIcon512Maskable`（或单个带 size 参数的 handler），动态图标存在时返回 siteDir 内 PNG，否则代理到 `frontend/public/icons/` 静态文件
++- `backend/cmd/server/main.go` — 注册新路由 `/api/site-assets/pwa-icon-{192,512,512-maskable}.png`，删除旧 `/api/site-assets/pwa-icon`
++- `frontend/index.html` — 加 `apple-touch-icon`、`mask-icon`、`description` meta
++- `frontend/public/sw.js` — App Shell 缓存 + SWR + API 旁路
++- `frontend/src/main.tsx` — SW 注册后监听 `updatefound` → `skipWaiting` + 提示刷新
++- `frontend/package.json` — devDependencies 加 `sharp`
++- `docs/PWA-SUPPORT-DESIGN.md` — 更新方案（移除"不做离线缓存"、"sizes:any"等过时决策）
++
++---
++
++## Task 1: 烘焙默认 PNG 图标（前端）
++
++**Files:**
++- Create: `frontend/scripts/generate-pwa-icons.mjs`
++- Create: `frontend/public/icons/icon-192.png`
++- Create: `frontend/public/icons/icon-512.png`
++- Create: `frontend/public/icons/icon-512-maskable.png`
++- Modify: `frontend/package.json`
++
++- [ ] **Step 1: 安装 sharp 作为 devDependency**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/frontend && npm install --save-dev sharp
++```
++Expected: `sharp` 出现在 `frontend/package.json` 的 `devDependencies`。
++
++- [ ] **Step 2: 编写烘焙脚本**
++
++Create `frontend/scripts/generate-pwa-icons.mjs`:
++```javascript
++// One-shot script: rasterize frontend/public/vite.svg into the PNG icons
++// required by the PWA manifest. Run manually after changing the logo.
++//
++// Usage: node scripts/generate-pwa-icons.mjs
++import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
++import { join, dirname } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import sharp from 'sharp';
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++const publicDir = join(__dirname, '..', 'public');
++const svgPath = join(publicDir, 'vite.svg');
++const iconsDir = join(publicDir, 'icons');
++mkdirSync(iconsDir, { recursive: true });
++
++const svgBuf = readFileSync(svgPath);
++
++// Maskable: render at 512 then composite onto an 80% canvas over theme color,
++// leaving ~10% safe-zone padding on all sides.
++async function bakeMaskable() {
++  const inner = await sharp(svgBuf, { density: 384 })
++    .resize(410, 410, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
++    .png()
++    .toBuffer();
++  await sharp({ create: { width: 512, height: 512, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
++    .composite([{ input: inner, gravity: 'center' }])
++    .png()
++    .toFile(join(iconsDir, 'icon-512-maskable.png'));
++}
++
++await sharp(svgBuf, { density: 384 }).resize(192, 192).png().toFile(join(iconsDir, 'icon-192.png'));
++await sharp(svgBuf, { density: 384 }).resize(512, 512).png().toFile(join(iconsDir, 'icon-512.png'));
++await bakeMaskable();
++console.log('PWA icons generated under frontend/public/icons/');
++```
++
++- [ ] **Step 3: 运行脚本生成 PNG**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/frontend && node scripts/generate-pwa-icons.mjs
++```
++Expected: stdout 打印 `PWA icons generated under frontend/public/icons/`，且 `frontend/public/icons/` 下出现三个 PNG 文件。
++
++- [ ] **Step 4: 校验输出文件**
++
++Run:
++```bash
++file frontend/public/icons/icon-192.png frontend/public/icons/icon-512.png frontend/public/icons/icon-512-maskable.png
++```
++Expected: 三个文件均显示 `PNG image data, 192 x 192` / `512 x 512` / `512 x 512`。
++
++---
++
++## Task 2: 后端添加 `golang.org/x/image` 依赖
++
++**Files:**
++- Modify: `backend/go.mod`
++- Modify: `backend/go.sum`
++
++- [ ] **Step 1: 添加依赖**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go get golang.org/x/image@latest
++```
++Expected: `go.mod` 的 require 块出现 `golang.org/x/image`。
++
++- [ ] **Step 2: 同步 tidy**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go mod tidy
++```
++Expected: 无报错。
++
++---
++
++## Task 3: 创建 `imageutil` 包（含单测，TDD）
++
++**Files:**
++- Create: `backend/internal/imageutil/imageutil.go`
++- Create: `backend/internal/imageutil/imageutil_test.go`
++- Create: `backend/internal/imageutil/testdata/src.png`（用 Task 1 烘焙的 512 PNG 复制即可）
++
++- [ ] **Step 1: 准备 testdata**
++
++Run:
++```bash
++mkdir -p /Users/alwaysking/AKProject/AKMDLibrary/backend/internal/imageutil/testdata && cp /Users/alwaysking/AKProject/AKMDLibrary/frontend/public/icons/icon-512.png /Users/alwaysking/AKProject/AKMDLibrary/backend/internal/imageutil/testdata/src.png
++```
++Expected: testdata 目录存在，内含 `src.png`。
++
++- [ ] **Step 2: 先写失败的测试**
++
++Create `backend/internal/imageutil/imageutil_test.go`:
++```go
++package imageutil
++
++import (
++	"bytes"
++	"image"
++	"image/png"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestDecode_PNG(t *testing.T) {
++	b, err := os.ReadFile("testdata/src.png")
++	if err != nil {
++		t.Fatalf("read src: %v", err)
++	}
++	img, format, err := Decode(bytes.NewReader(b))
++	if err != nil {
++		t.Fatalf("decode: %v", err)
++	}
++	if format != "png" {
++		t.Fatalf("format = %q, want png", format)
++	}
++	if img.Bounds().Dx() != 512 || img.Bounds().Dy() != 512 {
++		t.Fatalf("bounds = %v, want 512x512", img.Bounds())
++	}
++}
++
++func TestResizePNG(t *testing.T) {
++	src, _ := os.ReadFile("testdata/src.png")
++	img, _, _ := Decode(bytes.NewReader(src))
++
++	var buf bytes.Buffer
++	if err := ResizePNG(&buf, img, 192); err != nil {
++		t.Fatalf("resize: %v", err)
++	}
++	out, err := png.Decode(&buf)
++	if err != nil {
++		t.Fatalf("decode resized: %v", err)
++	}
++	if out.Bounds().Dx() != 192 || out.Bounds().Dy() != 192 {
++		t.Fatalf("size = %v, want 192x192", out.Bounds())
++	}
++}
++
++func TestComposeMaskable_HasPadding(t *testing.T) {
++	src, _ := os.ReadFile("testdata/src.png")
++	img, _, _ := Decode(bytes.NewReader(src))
++
++	var buf bytes.Buffer
++	if err := ComposeMaskable(&buf, img, 512); err != nil {
++		t.Fatalf("compose: %v", err)
++	}
++	out, _ := png.Decode(&buf)
++	bounds := out.Bounds()
++	if bounds.Dx() != 512 || bounds.Dy() != 512 {
++		t.Fatalf("size = %v, want 512x512", bounds)
++	}
++	// Top-left corner should be background (white), since source is centered at 80%
++	corner := out.At(0, 0)
++	r, g, b, _ := corner.RGBA()
++	if r < 0xF000 || g < 0xF000 || b < 0xF000 {
++		t.Fatalf("corner pixel = (%d,%d,%d), expected near-white padding", r>>8, g>>8, b>>8)
++	}
++}
++
++func TestProcessToPWAVariants(t *testing.T) {
++	src, _ := os.ReadFile("testdata/src.png")
++	tmp := t.TempDir()
++	variants, err := ProcessToPWAVariants(tmp, bytes.NewReader(src))
++	if err != nil {
++		t.Fatalf("process: %v", err)
++	}
++	want := []string{"pwa-icon-192.png", "pwa-icon-512.png", "pwa-icon-512-maskable.png"}
++	if len(variants) != len(want) {
++		t.Fatalf("variants = %v, want %v", variants, want)
++	}
++	for _, name := range want {
++		info, err := os.Stat(filepath.Join(tmp, name))
++		if err != nil {
++			t.Fatalf("stat %s: %v", name, err)
++		}
++		if info.Size() == 0 {
++			t.Fatalf("%s is empty", name)
++		}
++	}
++}
++
++// guard: ensure image package is referenced for completeness
++var _ = image.Rect
++```
++
++- [ ] **Step 3: 跑测试，确认全部失败（FAIL: undefined）**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go test ./internal/imageutil/...
++```
++Expected: 编译失败，`undefined: Decode` / `ResizePNG` / `ComposeMaskable` / `ProcessToPWAVariants`。
++
++- [ ] **Step 4: 实现 `imageutil.go`**
++
++Create `backend/internal/imageutil/imageutil.go`:
++```go
++// Package imageutil decodes arbitrary uploaded images and produces the PNG
++// variants required by the PWA manifest (192, 512, 512-maskable).
++package imageutil
++
++import (
++	"bytes"
++	"fmt"
++	"image"
++	"image/png"
++	"io"
++	"os"
++	"path/filepath"
++
++	_ "image/gif"
++	_ "image/jpeg"
++	_ "image/png"
++
++	_ "golang.org/x/image/bmp"
++	_ "golang.org/x/image/webp"
++	"golang.org/x/image/draw"
++)
++
++// Decode reads an image stream and returns the decoded raster plus its format
++// name (png / jpeg / gif / webp / bmp). Returns an error for SVG or unknown
++// formats — callers should fall back to saving those as-is.
++func Decode(r io.Reader) (image.Image, string, error) {
++	img, format, err := image.Decode(r)
++	if err != nil {
++		return nil, "", fmt.Errorf("imageutil: decode: %w", err)
++	}
++	return img, format, nil
++}
++
++// ResizePNG scales img to size×size preserving aspect ratio (letterboxed
++// with transparent background) and writes it to w as PNG.
++func ResizePNG(w io.Writer, img image.Image, size int) error {
++	dst := image.NewRGBA(image.Rect(0, 0, size, size))
++	// Center-fit; transparent background (NewRGBA is zero-filled = transparent).
++	srcBounds := img.Bounds()
++	srcW, srcH := srcBounds.Dx(), srcBounds.Dy()
++	scale := minf(float64(size)/float64(srcW), float64(size)/float64(srcH))
++	outW := int(float64(srcW) * scale)
++	outH := int(float64(srcH) * scale)
++	r := image.Rect((size-outW)/2, (size-outH)/2, (size+outW)/2, (size+outH)/2)
++	draw.CatmullRom.Scale(dst, r, img, srcBounds, draw.Over, nil)
++	if err := png.Encode(w, dst); err != nil {
++		return fmt.Errorf("imageutil: encode resized: %w", err)
++	}
++	return nil
++}
++
++// ComposeMaskable renders img onto a size×size opaque white canvas with the
++// source centered at 80% scale — the ~10% safe zone required by Android's
++// maskable icon spec.
++func ComposeMaskable(w io.Writer, img image.Image, size int) error {
++	canvas := image.NewRGBA(image.Rect(0, 0, size, size))
++	// Fill with white.
++	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: image.NewUniform(white).C}, image.Point{}, draw.Src)
++
++	// Prepare scaled source at 80%.
++	innerSize := int(float64(size) * 0.8)
++	inner := image.NewRGBA(image.Rect(0, 0, innerSize, innerSize))
++	srcBounds := img.Bounds()
++	srcW, srcH := srcBounds.Dx(), srcBounds.Dy()
++	scale := minf(float64(innerSize)/float64(srcW), float64(innerSize)/float64(srcH))
++	outW := int(float64(srcW) * scale)
++	outH := int(float64(srcH) * scale)
++	r := image.Rect((innerSize-outW)/2, (innerSize-outH)/2, (innerSize+outW)/2, (innerSize+outH)/2)
++	draw.CatmullRom.Scale(inner, r, img, srcBounds, draw.Over, nil)
++
++	// Center composite.
++	offset := (size - innerSize) / 2
++	draw.Draw(canvas, image.Rect(offset, offset, offset+innerSize, offset+innerSize), inner, image.Point{}, draw.Over)
++
++	if err := png.Encode(w, canvas); err != nil {
++		return fmt.Errorf("imageutil: encode maskable: %w", err)
++	}
++	return nil
++}
++
++// ProcessToPWAVariants decodes r and writes three PNGs into outDir:
++//   - pwa-icon-192.png        (purpose: any)
++//   - pwa-icon-512.png        (purpose: any)
++//   - pwa-icon-512-maskable.png (purpose: maskable)
++//
++// Returns the relative filenames written.
++func ProcessToPWAVariants(outDir string, r io.Reader) ([]string, error) {
++	// Buffer so we can decode once but reuse for both pipelines.
++	var buf bytes.Buffer
++	if _, err := io.Copy(&buf, r); err != nil {
++		return nil, fmt.Errorf("imageutil: read source: %w", err)
++	}
++	img, _, err := Decode(bytes.NewReader(buf.Bytes()))
++	if err != nil {
++		return nil, err
++	}
++	if err := os.MkdirAll(outDir, 0755); err != nil {
++		return nil, fmt.Errorf("imageutil: mkdir: %w", err)
++	}
++	names := []string{"pwa-icon-192.png", "pwa-icon-512.png", "pwa-icon-512-maskable.png"}
++	for _, name := range names {
++		f, err := os.Create(filepath.Join(outDir, name))
++		if err != nil {
++			return nil, fmt.Errorf("imageutil: create %s: %w", name, err)
++		}
++		switch name {
++		case "pwa-icon-192.png":
++			err = ResizePNG(f, img, 192)
++		case "pwa-icon-512.png":
++			err = ResizePNG(f, img, 512)
++		case "pwa-icon-512-maskable.png":
++			err = ComposeMaskable(f, img, 512)
++		}
++		f.Close()
++		if err != nil {
++			return nil, fmt.Errorf("imageutil: write %s: %w", name, err)
++		}
++	}
++	return names, nil
++}
++
++var white = image.NewUniform(image.NewRGBA(image.Rect(0, 0, 1, 1)).At(0, 0))
++
++func minf(a, b float64) float64 {
++	if a < b {
++		return a
++	}
++	return b
++}
++```
++
++> 备注：上面 `white` 的定义有点绕，简化为：
++```go
++var white = image.NewUniform(color.RGBA{R: 255, G: 255, B: 255, A: 255})
++```
++并在 import 加 `"image/color"`。`ComposeMaskable` 中 `&image.Uniform{C: ...}` 那行改成 `white`。
++
++- [ ] **Step 5: 跑测试，确认全过**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go test ./internal/imageutil/... -v
++```
++Expected: PASS（4 个 test case 全绿）。
++
++---
++
++## Task 4: 重构 `ServeManifest` 用具体尺寸 PNG
++
++**Files:**
++- Modify: `backend/internal/handler/site_setting_handler.go:229-266`
++
++- [ ] **Step 1: 替换 `ServeManifest`**
++
++替换 `ServeManifest` 整段为：
++```go
++// ServeManifest returns a PWA Web App Manifest reflecting current site settings (public).
++// Uses concrete PNG sizes (192/512/maskable) — Chrome rejects SVG with sizes:"any".
++// Icon URLs switch between the bundled defaults and admin-uploaded PNGs depending
++// on whether a custom favicon is configured.
++func (h *SiteSettingHandler) ServeManifest(w http.ResponseWriter, r *http.Request) {
++	settings, err := h.siteSettingService.Get()
++	if err != nil {
++		http.Error(w, "Failed to load site settings", http.StatusInternalServerError)
++		return
++	}
++
++	name := "MD Library"
++	if settings != nil && settings.SiteName != nil && *settings.SiteName != "" {
++		name = *settings.SiteName
++	}
++	shortName := shortNameFrom(name)
++
++	hasCustom := h.HasCustomFavicon()
++	icon192, icon512, iconMask := h.pwaIconURLs(hasCustom)
++
++	manifest := map[string]any{
++		"id":               "/",
++		"name":             name,
++		"short_name":       shortName,
++		"description":      "MD Library — self-hosted markdown library",
++		"start_url":        "/",
++		"scope":            "/",
++		"display":          "standalone",
++		"display_override": []string{"standalone", "minimal-ui"},
++		"orientation":      "any",
++		"background_color": "#ffffff",
++		"theme_color":      "#ffffff",
++		"categories":       []string{"productivity", "education"},
++		"icons": []map[string]any{
++			{"src": icon192, "sizes": "192x192", "type": "image/png", "purpose": "any"},
++			{"src": icon512, "sizes": "512x512", "type": "image/png", "purpose": "any"},
++			{"src": iconMask, "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
++		},
++	}
++
++	w.Header().Set("Content-Type", "application/manifest+json; charset=utf-8")
++	w.Header().Set("Cache-Control", "no-cache")
++	if err := json.NewEncoder(w).Encode(manifest); err != nil {
++		http.Error(w, "Failed to encode manifest", http.StatusInternalServerError)
++		return
++	}
++}
++
++// shortNameFrom truncates name to ≤12 runes (Chrome recommendation) for the
++// home-screen icon label.
++func shortNameFrom(name string) string {
++	runes := []rune(name)
++	if len(runes) <= 12 {
++		return name
++	}
++	return string(runes[:12])
++}
++```
++
++- [ ] **Step 2: 替换 `ServePWAIcon` 为带 size 参数的版本 + 帮助函数**
++
++替换 `ServePWAIcon` 整段（含注释）为：
++```go
++// pwaIconURLs returns the three icon URLs the manifest should reference.
++// When a custom favicon is configured, they point at the generated PNGs under
++// /api/site-assets/; otherwise they fall back to the bundled defaults in
++// frontend/public/icons/.
++func (h *SiteSettingHandler) pwaIconURLs(hasCustom bool) (string, string, string) {
++	if hasCustom {
++		return "/api/site-assets/pwa-icon-192.png",
++			"/api/site-assets/pwa-icon-512.png",
++			"/api/site-assets/pwa-icon-512-maskable.png"
++	}
++	return "/icons/icon-192.png",
++		"/icons/icon-512.png",
++		"/icons/icon-512-maskable.png"
++}
++
++// HasCustomFavicon reports whether the admin has uploaded a custom favicon
++// (and therefore the generated PWA PNG variants exist in siteDir).
++func (h *SiteSettingHandler) HasCustomFavicon() bool {
++	matches, _ := filepath.Glob(filepath.Join(h.siteDir, "pwa-icon-512.png"))
++	return len(matches) > 0
++}
++
++// ServePWAIconSized serves one of the three generated PWA PNG variants.
++// When no custom favicon is configured, it 302-redirects to the bundled
++// default under /icons/. (Manifest always points at this endpoint when custom
++// favicon is configured, so the redirect path is only used when the operator
++// deleted files mid-flight.)
++func (h *SiteSettingHandler) ServePWAIconSized(w http.ResponseWriter, r *http.Request) {
++	size := chi.URLParam(r, "size") // "192" | "512" | "512-maskable"
++	fname := "pwa-icon-" + size + ".png"
++	full := filepath.Join(h.siteDir, fname)
++	if _, err := os.Stat(full); err != nil {
++		// Fall back to bundled default (maskable uses same file as plain 512).
++		static := map[string]string{
++			"192":          "/icons/icon-192.png",
++			"512":          "/icons/icon-512.png",
++			"512-maskable": "/icons/icon-512-maskable.png",
++		}[size]
++		if static == "" {
++			http.NotFound(w, r)
++			return
++		}
++		http.Redirect(w, r, static, http.StatusFound)
++		return
++	}
++	w.Header().Set("Cache-Control", "no-cache")
++	http.ServeFile(w, r, full)
++}
++```
++
++需要在文件顶部 import 块加入：`"github.com/go-chi/chi/v5"`。
++
++- [ ] **Step 3: 删除旧 `ServePWAIcon` 函数（已在 Step 2 替换）**
++
++确认文件中不再有名为 `ServePWAIcon` 的函数（仅保留 `ServePWAIconSized`）。
++
++- [ ] **Step 4: 构建验证**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go build ./...
++```
++Expected: 无报错。
++
++---
++
++## Task 5: `UploadFavicon` 生成 PNG 变体
++
++**Files:**
++- Modify: `backend/internal/handler/site_setting_handler.go:62-115`
++
++- [ ] **Step 1: 替换 `UploadFavicon`**
++
++替换整个 `UploadFavicon` 函数为：
++```go
++// UploadFavicon handles favicon upload (admin only). Saves the original file
++// for the <link rel="icon"> tag AND generates three PNG variants (192, 512,
++// 512-maskable) used by the PWA manifest.
++func (h *SiteSettingHandler) UploadFavicon(w http.ResponseWriter, r *http.Request) {
++	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MiB to give PNG variants headroom
++		http.Error(w, "Failed to parse form", http.StatusBadRequest)
++		return
++	}
++
++	file, _, err := r.FormFile("file")
++	if err != nil {
++		http.Error(w, "No file provided", http.StatusBadRequest)
++		return
++	}
++	defer file.Close()
++
++	// Read whole upload into memory (max 10 MiB) — we need it twice: once for
++	// the original save, once for PNG variant generation.
++	var buf bytes.Buffer
++	if _, err := io.Copy(&buf, file); err != nil {
++		http.Error(w, "Failed to read upload", http.StatusBadRequest)
++		return
++	}
++	data := buf.Bytes()
++
++	contentType := http.DetectContentType(data)
++	ext := ".png"
++	switch {
++	case strings.Contains(contentType, "svg"):
++		ext = ".svg"
++	case strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg"):
++		ext = ".jpg"
++	case strings.Contains(contentType, "ico"):
++		ext = ".ico"
++	case strings.Contains(contentType, "gif"):
++		ext = ".gif"
++	}
++
++	// Replace old favicon originals + any previously generated PWA variants.
++	h.purgeFaviconFiles()
++
++	// Save the original (used by <link rel="icon">).
++	origPath := filepath.Join(h.siteDir, "favicon"+ext)
++	if err := os.WriteFile(origPath, data, 0644); err != nil {
++		http.Error(w, "Failed to save favicon", http.StatusInternalServerError)
++		return
++	}
++
++	// Generate PWA PNG variants. If the upload isn't a decodable raster
++	// (e.g. SVG/ICO), the manifest will fall back to the bundled defaults
++	// (HasCustomFavicon stays false because pwa-icon-*.png won't exist).
++	if _, err := imageutil.ProcessToPWAVariants(h.siteDir, bytes.NewReader(data)); err != nil {
++		// Non-fatal: log via response field but don't fail the upload.
++		fmt.Printf("site_setting: PWA variant generation failed: %v\n", err)
++	}
++
++	url := "/api/site-assets/favicon" + ext
++	h.siteSettingService.Update(&model.UpdateSiteSettingsRequest{Favicon: &url})
++
++	w.Header().Set("Content-Type", "application/json")
++	json.NewEncoder(w).Encode(map[string]string{"url": url})
++}
++
++// purgeFaviconFiles removes any existing favicon* and pwa-icon-*.png from siteDir.
++func (h *SiteSettingHandler) purgeFaviconFiles() {
++	for _, pattern := range []string{"favicon*", "pwa-icon-*.png"} {
++		old, _ := filepath.Glob(filepath.Join(h.siteDir, pattern))
++		for _, f := range old {
++			os.Remove(f)
++		}
++	}
++}
++```
++
++在文件顶部 import 块加入：
++```go
++"bytes"
++"fmt"
++"github.com/alwaysking/akmdlibrary/internal/imageutil"
++```
++
++- [ ] **Step 2: 更新 `ResetFavicon`**
++
++将 `ResetFavicon` 函数体改为：
++```go
++func (h *SiteSettingHandler) ResetFavicon(w http.ResponseWriter, r *http.Request) {
++	h.purgeFaviconFiles()
++	empty := ""
++	h.siteSettingService.Update(&model.UpdateSiteSettingsRequest{Favicon: &empty})
++	w.WriteHeader(http.StatusNoContent)
++}
++```
++
++- [ ] **Step 3: 构建验证**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go build ./...
++```
++Expected: 无报错。
++
++---
++
++## Task 6: 注册新路由，删除旧 `pwa-icon`
++
++**Files:**
++- Modify: `backend/cmd/server/main.go:289-296`
++
++- [ ] **Step 1: 替换路由块**
++
++将：
++```go
++// IMPORTANT: `pwa-icon` must be registered before `{filename}` so chi matches it
++r.Get("/api/site-assets/pwa-icon", siteSettingHandler.ServePWAIcon)
++
++// Public PWA manifest (dynamic — reflects current site name + favicon)
++r.Get("/api/manifest.webmanifest", siteSettingHandler.ServeManifest)
++```
++替换为：
++```go
++// IMPORTANT: literal paths must be registered before `{filename}` so chi matches them.
++r.Get("/api/site-assets/pwa-icon-192.png", siteSettingHandler.ServePWAIconSizedStatic(192))
++r.Get("/api/site-assets/pwa-icon-512.png", siteSettingHandler.ServePWAIconSizedStatic(512))
++r.Get("/api/site-assets/pwa-icon-512-maskable.png", siteSettingHandler.ServePWAIconSizedStatic(512))
++
++// Public PWA manifest (dynamic — reflects current site name + favicon)
++r.Get("/api/manifest.webmanifest", siteSettingHandler.ServeManifest)
++```
++
++> 备注：`ServePWAIconSizedStatic(size int) http.HandlerFunc` 是闭包包装器，避免改 chi 路由风格。
++
++- [ ] **Step 2: 在 handler 中补上闭包包装器**
++
++在 `site_setting_handler.go` 末尾追加：
++```go
++// ServePWAIconSizedStatic returns an http.HandlerFunc that serves a specific
++// PWA icon size — used by chi routes where the size is a literal in the URL.
++func (h *SiteSettingHandler) ServePWAIconSizedStatic(sizeKey string) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		size := sizeKey
++		if sizeKey == "512-maskable" {
++			size = "512-maskable"
++		}
++		fname := "pwa-icon-" + size + ".png"
++		full := filepath.Join(h.siteDir, fname)
++		if _, err := os.Stat(full); err != nil {
++			static := map[string]string{
++				"192":          "/icons/icon-192.png",
++				"512":          "/icons/icon-512.png",
++				"512-maskable": "/icons/icon-512-maskable.png",
++			}[size]
++			if static == "" {
++				http.NotFound(w, r)
++				return
++			}
++			http.Redirect(w, r, static, http.StatusFound)
++			return
++		}
++		w.Header().Set("Cache-Control", "no-cache")
++		http.ServeFile(w, r, full)
++	}
++}
++```
++
++删除之前 `ServePWAIconSized(w, r)` 版本（不再需要 chi URLParam）。`"github.com/go-chi/chi/v5"` import 可以移除（若文件其他地方未用）。
++
++- [ ] **Step 3: 构建并启动一次，curl 验证**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go build ./... && go vet ./...
++```
++Expected: 无报错。
++
++---
++
++## Task 7: 升级 Service Worker
++
++**Files:**
++- Modify: `frontend/public/sw.js`
++
++- [ ] **Step 1: 重写 sw.js**
++
++完整覆盖 `frontend/public/sw.js`：
++```javascript
++// PWA Service Worker — App Shell precache + stale-while-revalidate for static
++// assets. API requests (/api/*) bypass the cache to avoid stale user data.
++
++const CACHE_VERSION = 'akmdl-v1';
++const APP_SHELL = [
++  '/',
++  '/index.html',
++  '/icons/icon-192.png',
++  '/icons/icon-512.png',
++  '/icons/icon-512-maskable.png',
++];
++
++self.addEventListener('install', (event) => {
++  event.waitUntil((async () => {
++    const cache = await caches.open(CACHE_VERSION);
++    // best-effort: addAll fails whole if one resource 404s, so add individually
++    await Promise.all(APP_SHELL.map((u) => cache.add(u).catch(() => {})));
++    await self.skipWaiting();
++  })());
++});
++
++self.addEventListener('activate', (event) => {
++  event.waitUntil((async () => {
++    const keys = await caches.keys();
++    await Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)));
++    await self.clients.claim();
++  })());
++});
++
++self.addEventListener('fetch', (event) => {
++  const req = event.request;
++  if (req.method !== 'GET') return;
++
++  const url = new URL(req.url);
++  // Only handle same-origin; let cross-origin pass through.
++  if (url.origin !== self.location.origin) return;
++
++  // API requests: network-only, no caching.
++  if (url.pathname.startsWith('/api/')) return;
++
++  // Navigation requests: network-first, fall back to cached shell when offline.
++  if (req.mode === 'navigate') {
++    event.respondWith((async () => {
++      try {
++        const fresh = await fetch(req);
++        const cache = await caches.open(CACHE_VERSION);
++        cache.put('/', fresh.clone()).catch(() => {});
++        return fresh;
++      } catch {
++        const cached = await caches.match(req);
++        return cached || (await caches.match('/')) || Response.error();
++      }
++    })());
++    return;
++  }
++
++  // Static assets: stale-while-revalidate.
++  event.respondWith((async () => {
++    const cache = await caches.open(CACHE_VERSION);
++    const cached = await cache.match(req);
++    const network = fetch(req).then((res) => {
++      if (res && res.status === 200 && res.type === 'basic') {
++        cache.put(req, res.clone()).catch(() => {});
++      }
++      return res;
++    }).catch(() => cached);
++    return cached || network;
++  })());
++});
++```
++
++---
++
++## Task 8: `main.tsx` SW 更新流程
++
++**Files:**
++- Modify: `frontend/src/main.tsx`
++
++- [ ] **Step 1: 替换 SW 注册块**
++
++将 `frontend/src/main.tsx` 末尾的 SW 注册块替换为：
++```typescript
++// Register the PWA service worker (production only — HMR + SW don't mix).
++if ('serviceWorker' in navigator && import.meta.env.PROD) {
++  navigator.serviceWorker.register('/sw.js').then((reg) => {
++    reg.addEventListener('updatefound', () => {
++      const installing = reg.installing;
++      if (!installing) return;
++      installing.addEventListener('statechange', () => {
++        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
++          // New SW took over after skipWaiting — reload once to pick up new shell.
++          navigator.serviceWorker.controller?.postMessage({ type: 'SKIP_WAITING' });
++          window.location.reload();
++        }
++      });
++    });
++  }).catch((err) => {
++    console.warn('SW registration failed:', err);
++  });
++}
++```
++
++并在 `sw.js` 中（已在 Task 7 已含 `skipWaiting`，再补一个 message 监听）：
++
++`sw.js` 的 `install` 之后追加：
++```javascript
++self.addEventListener('message', (event) => {
++  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
++});
++```
++
++---
++
++## Task 9: `index.html` 补 iOS 兼容 meta
++
++**Files:**
++- Modify: `frontend/index.html`
++
++- [ ] **Step 1: 替换 `<head>` 内容**
++
++将 `<head>` 内的：
++```html
++<link rel="icon" type="image/svg+xml" href="/vite.svg" />
++<link rel="manifest" href="/api/manifest.webmanifest" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0" />
++<meta name="theme-color" content="#ffffff" />
++```
++替换为：
++```html
++<link rel="icon" href="/icons/icon-192.png" />
++<link rel="icon" type="image/svg+xml" href="/vite.svg" />
++<link rel="apple-touch-icon" href="/icons/icon-512.png" />
++<link rel="mask-icon" href="/vite.svg" color="#4F46E5" />
++<link rel="manifest" href="/api/manifest.webmanifest" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
++<meta name="theme-color" content="#ffffff" />
++<meta name="description" content="MD Library — self-hosted markdown library" />
++<meta name="apple-mobile-web-app-capable" content="yes" />
++<meta name="apple-mobile-web-app-status-bar-style" content="default" />
++<meta name="apple-mobile-web-app-title" content="MD Library" />
++<meta name="mobile-web-app-capable" content="yes" />
++```
++
++---
++
++## Task 10: 前端构建验证
++
++**Files:** 无（仅运行）
++
++- [ ] **Step 1: 前端 build**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/frontend && npm run build
++```
++Expected: 构建成功；`dist/` 包含 `icons/icon-192.png`、`icons/icon-512.png`、`icons/icon-512-maskable.png`、`sw.js`。
++
++- [ ] **Step 2: 校验 dist**
++
++Run:
++```bash
++ls /Users/alwaysking/AKProject/AKMDLibrary/frontend/dist/icons/ && head -c 200 /Users/alwaysking/AKProject/AKMDLibrary/frontend/dist/sw.js
++```
++Expected: 三个 PNG 文���存在；`dist/sw.js` 已是新内容（带 `App Shell precache` 注释）。
++
++---
++
++## Task 11: 更新设计文档
++
++**Files:**
++- Modify: `docs/PWA-SUPPORT-DESIGN.md`
++
++- [ ] **Step 1: 在文件顶部加变更说明**
++
++在 `docs/PWA-SUPPORT-DESIGN.md` 第 1 行后插入：
++```markdown
++> **更新（2026-07-15）：** 方案已升级。原方案使用 `"sizes":"any"` + SVG 兜底图标，
++> 触发 Chrome 已知 bug（[crbug 40925759](https://issuetracker.google.com/issues/40925759)），
++> 浏览器不弹安装提示。现改为：
++> - 默认图标随仓库分发（PNG 192/512/maskable 三档），由 `frontend/scripts/generate-pwa-icons.mjs` 生成
++> - 上传 favicon 时后端用 `golang.org/x/image` 解码并烘焙三档 PNG
++> - manifest 引用具体尺寸 PNG + `id` / `display_override` / `orientation` 字段
++> - SW 升级为 App Shell 预缓存 + stale-while-revalidate（API 旁路）
++> - 补 `apple-touch-icon` / `mask-icon` 等 iOS 兼容 meta
++> 原文保留如下作为决策溯源。
++```
++
++---
++
++## Task 12: 端到端冒烟验证（手工）
++
++- [ ] **Step 1: 启动后端 + 前端 build**
++
++Run:
++```bash
++cd /Users/alwaysking/AKProject/AKMDLibrary/backend && go build -o /tmp/akmdl-pwa-test ./cmd/server && AKMDL_DOCS_DIR=/tmp/akmdl-pwa-docs AKMDL_DATA_DIR=/tmp/akmdl-pwa-data AKMDL_FRONTEND_DIST=/Users/alwaysking/AKProject/AKMDLibrary/frontend/dist AKMDL_SITE_DIR=/tmp/akmdl-pwa-site AKMDL_PORT=7788 /tmp/akmdl-pwa-test
++```
++（若环境变量名不同，参照现有 main.go 读取的实际变量名）
++
++- [ ] **Step 2: curl manifest 校验**
++
++Run:
++```bash
++curl -s http://localhost:7788/api/manifest.webmanifest | python3 -m json.tool
++```
++Expected: JSON 输出包含 `icons` 数组，三个条目分别带 `"sizes": "192x192"`、`"512x512"`、`"512x512"` + `purpose: maskable`，`type` 均为 `image/png`。
++
++- [ ] **Step 3: curl 默认图标**
++
++Run:
++```bash
++curl -sI http://localhost:7788/icons/icon-192.png | head -5
++```
++Expected: `200 OK`，`Content-Type: image/png`。
++
++- [ ] **Step 4: 浏览器手动验收**
++
++打开 Chrome（需 HTTPS 或 localhost），访问 `http://localhost:7788/`：
++1. DevTools → Application → Manifest：无报错，图标加载到位
++2. DevTools → Application → Service Workers：`sw.js` activated
++3. 地址栏右侧应出现安装图标（或菜单 → "安装 MD Library…"）
++4. Application → Storage → Cache Storage：可见 `akmdl-v1` 含 `/`、`/index.html`、图标
++5. 关闭网络 → 刷新首页：能打开（App Shell 离线可用）
++
++- [ ] **Step 5: favicon 上传冒烟（可选）**
++
++在管理员设置页上传一张 PNG/JPG，然后：
++```bash
++ls /tmp/akmdl-pwa-site/
++```
++Expected: 出现 `favicon.<ext>` + `pwa-icon-192.png` + `pwa-icon-512.png` + `pwa-icon-512-maskable.png`。
++
++---
++
++## 验收（subagent）
++
++完成上述任务后，按用户工作流"实施与验证"第 2 步，启动 `code-reviewer` subagent 检查：
++1. 代码质量（命名、错误处理、import 顺序）
++2. 是否有遗漏（路由冲突、未删除旧 `ServePWAIcon`、`go.mod` 漂移）
++3. 测试是否真覆盖关键路径（Decode/Resize/Maskable/ProcessToPWAVariants）
++4. 前端 build 是否通过、SW 是否在 dist 中、icons 是否在 dist 中
++5. 设计文档是否更新
++
++如 subagent 不通过，根据反馈修改后再提交新 subagent 验收，循环直到通过。
++
++## 提交策略
++
++按用户附加要求：**不私自提交**。所有任务完成后向用户汇报，等待用户明确要求提交时再做：
++1. 创建 patch 保留环境
++2. 提交
++3. 用 patch 复核是否有误删内容
+diff --git a/frontend/index.html b/frontend/index.html
+index 9b295a7..3a9c53b 100644
+--- a/frontend/index.html
++++ b/frontend/index.html
+@@ -2,10 +2,18 @@
+ <html lang="en">
+   <head>
+     <meta charset="UTF-8" />
++    <link rel="icon" href="/icons/icon-192.png" />
+     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
++    <link rel="apple-touch-icon" href="/icons/icon-512.png" />
++    <link rel="mask-icon" href="/vite.svg" color="#4F46E5" />
+     <link rel="manifest" href="/api/manifest.webmanifest" />
+-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+     <meta name="theme-color" content="#ffffff" />
++    <meta name="description" content="MD Library — self-hosted markdown library" />
++    <meta name="apple-mobile-web-app-capable" content="yes" />
++    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
++    <meta name="apple-mobile-web-app-title" content="MD Library" />
++    <meta name="mobile-web-app-capable" content="yes" />
+     <title>MD Library</title>
+   </head>
+   <body>
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 2ba6be0..25fa70d 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -7,6 +7,7 @@
+     "": {
+       "name": "akmdlibrary-frontend",
+       "version": "0.0.0",
++      "hasInstallScript": true,
+       "dependencies": {
+         "@blocknote/core": "^0.50.0",
+         "@blocknote/react": "^0.50.0",
+@@ -28,6 +29,7 @@
+         "@vitejs/plugin-react": "^4.2.1",
+         "autoprefixer": "^10.4.19",
+         "postcss": "^8.4.38",
++        "sharp": "^0.35.3",
+         "tailwindcss": "^3.4.3",
+         "typescript": "^5.4.5",
+         "vite": "^5.2.8"
+@@ -455,6 +457,17 @@
+         "react": ">=16.8.0"
+       }
+     },
++    "node_modules/@emnapi/runtime": {
++      "version": "1.11.2",
++      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.2.tgz",
++      "integrity": "sha512-kyOl3X0DuTiT1h2ft8r2fYO8JYtU9a9Xis/zBSiGArNaagCOWx90N1k2wxp18czFDH+OgcWGb5ZP/XMt3dcyPA==",
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "dependencies": {
++        "tslib": "^2.4.0"
++      }
++    },
+     "node_modules/@emoji-mart/data": {
+       "version": "1.2.1",
+       "resolved": "https://registry.npmjs.org/@emoji-mart/data/-/data-1.2.1.tgz",
+@@ -921,6 +934,533 @@
+         "prosemirror-view": "^1.0.0"
+       }
+     },
++    "node_modules/@img/colour": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/@img/colour/-/colour-1.1.0.tgz",
++      "integrity": "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=18"
++      }
++    },
++    "node_modules/@img/sharp-darwin-arm64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.35.3.tgz",
++      "integrity": "sha512-RMnFX7YQsMoh7lWfcM4NEHHymBX/rLuKNPVM84XE9ONPcaSCDgE7CHIHpSgPcO2xcRthgBy1HfNO319mwhIAkg==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-darwin-arm64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-darwin-x64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.35.3.tgz",
++      "integrity": "sha512-Xo+5uFBtLN0BKqieTxiFzFPQAUlBbbH5iBKyRX/z1JrbnYsHTfKJnUfL8+p2TPXr1pXqao4eeL4Rl144uDpK9w==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-darwin-x64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-freebsd-wasm32": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-freebsd-wasm32/-/sharp-freebsd-wasm32-0.35.3.tgz",
++      "integrity": "sha512-lUxcqWIj2wMQ9BrwNjngcr1gWUr5xgaGThBRqPPalIC2n67Cqj1uPh8NnA/ZhAg8hUbKl+kVHKwgUIwe6ZYPrg==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "dependencies": {
++        "@img/sharp-wasm32": "0.35.3"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-darwin-arm64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.2.tgz",
++      "integrity": "sha512-9J6ypZFpQBj4YnePGoq/S38w6nz+vqg5WZLrLGY4YuSemdMq47GMLBPO42MzwdGwpg/agZ7xzZcFHa48xlywfg==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-darwin-x64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.2.tgz",
++      "integrity": "sha512-m2pW1n6cns9VaubNwsZ+c3CRYjxNQWgJ5gPlnL1nbBcpkBvFm6SCFN5o0psFHI8w9n11NKhFkeEDns98tiqbEw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-arm": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.2.tgz",
++      "integrity": "sha512-1eMLzy92I4J6rmi4mAT8yC3HxOtniyGELlzGbNMLLeqe052ahFQ0h6LFq+lh5DsDIdYViIDst08abvSbcEdLXQ==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-arm64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.2.tgz",
++      "integrity": "sha512-dqVSFynCox4C/J8kT16V7SIFAns0IjgLwkvYT7p8LQVmJ5OS5b6tI9IGflxTeuBS//zXeFIUbwt5dwxyZ17cnA==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-ppc64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.2.tgz",
++      "integrity": "sha512-3z0NHDxD6n5I9gc05U1eW1AyRm+Gznzq3naMrthPNqE6oYykcogW0l/jfpJdjYnuNl8R7yI9pNbE1XiUeyq0Aw==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-riscv64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.2.tgz",
++      "integrity": "sha512-bsb4rI+NldGOsXuej2r8OdSS8+zXDVaCWxyWrcv6kneTOlgAHtZABRzBBCwdsPiD90J4myNJuHpg6kA20ImW/w==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-s390x": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.2.tgz",
++      "integrity": "sha512-/ABshyj8gCpyIrNXnHn4LorDJ0HHm1VhXPBlxZ8zAtfVPAaSafXPGn+sUSIRiwaSBy0mmFjSjiXI5mkcwdChKQ==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linux-x64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.2.tgz",
++      "integrity": "sha512-ITPEtgffGJ0S6G9dRyw/366tJQqFRcHWPHhC+Stpg3Z8AEMrDrTr2lhdz4f/Y/HMbRh//7Z5mBzEpVdi62Oc3w==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linuxmusl-arm64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.2.tgz",
++      "integrity": "sha512-zE9EdiUzUmg5mDT5a1rk5fYJ6GWPloTwWBYDS14naqHsL+EaMpDj1AWnpLgh3u0YCORv2Tt50wrcrpYqkP97Kw==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-libvips-linuxmusl-x64": {
++      "version": "1.3.2",
++      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.2.tgz",
++      "integrity": "sha512-m0lrLiUt+lBYnCFr8qV/65yMR4E/c7/wf78I5eKTdkEakFAlZ9QlzEM3QIhhAwVeUhLAHLcCq7a7Vszq/oFNZQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-linux-arm": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.35.3.tgz",
++      "integrity": "sha512-affVWCTLooy8TSxbDx2qkzuDeaWLNVBA+P//FNBirHsXpP2fuBhk5AuboYUnrDnzoXes8GFjpTx0SBFOCRg+FA==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-arm": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linux-arm64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.35.3.tgz",
++      "integrity": "sha512-QgKDspHPnrU+GQ55XPhGwyhC8acLVOOSyAvo1oVfFmrIXLkDNmGWzAfDZ4xK8oSA1qBQrALcHX0G5UZni/SuFQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-arm64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linux-ppc64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.35.3.tgz",
++      "integrity": "sha512-sMd8rDxmpLOwv/7N44klFjOD5DUO7FLdjiXDI0hoxYaf7Ar262dQIEkosE98bps+5HPLtp/EvNqeqQtOycP/IA==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-ppc64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linux-riscv64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.35.3.tgz",
++      "integrity": "sha512-0Eob78yjlYPfL5vMNWAW55l3R9Y6BQS/gOfe0ZcP9mEz9ohhKSt4im1hayiknXgf8AWrFqMvJcKIdmLmEe7yeQ==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-riscv64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linux-s390x": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.35.3.tgz",
++      "integrity": "sha512-KgAxQ0DxpNOq1rG2t5cgTgShJFGSuU7XO45cqC+1NVOuZnP6tlgZRuSYOfNupGkHID0o3cJOsw4DVeJpMovcGw==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-s390x": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linux-x64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.3.tgz",
++      "integrity": "sha512-8pqvxubL2PGdhlPy6GLqzDYMUjyRmKAwKHYKixpdJYBUK7PJ0C029XdsnpFIdgRZG68fZiGdHVWcKPvtiPB4cA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linux-x64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linuxmusl-arm64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.35.3.tgz",
++      "integrity": "sha512-Vz0iQjzzcSX3HCbfwFfCSG/9SCIqyO0mH2sXyiHaAYfBk0cRsCWXRyQYX0ovCK/PAQBbTzQ0dsPQHh5MAFL59w==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linuxmusl-arm64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-linuxmusl-x64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.35.3.tgz",
++      "integrity": "sha512-6O1NPKcDVj9QEdg7Hx549EX8U0rp6yXQERqru6yRN7fGBn32UvIRJUlWnk+8xDCiG76hXVBbX82NZ/ZKr0euIg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-libvips-linuxmusl-x64": "1.3.2"
++      }
++    },
++    "node_modules/@img/sharp-wasm32": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.3.tgz",
++      "integrity": "sha512-cZ0XkcYGpHZkqW6iCkqTcmUC0CD9DhD5d/qeZlZkfRBn6GnHniZXLUo5+9xw8Iv76YE6LQFN9YNBlKREcCG76w==",
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
++      "optional": true,
++      "dependencies": {
++        "@emnapi/runtime": "^1.11.1"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-webcontainers-wasm32": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-webcontainers-wasm32/-/sharp-webcontainers-wasm32-0.35.3.tgz",
++      "integrity": "sha512-2rnq7bX3NzeR2T4YWgz8qiG4h3TSdMe+vN1iQXpJleSJ3SM5zQ8Fy2SyyXAWlbxpEZ2Y+Z4u1BePgJEYbSy80Q==",
++      "cpu": [
++        "wasm32"
++      ],
++      "dev": true,
++      "license": "Apache-2.0",
++      "optional": true,
++      "dependencies": {
++        "@img/sharp-wasm32": "0.35.3"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-win32-arm64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.3.tgz",
++      "integrity": "sha512-4bPwFdMbeC4JQ8L8LOyWp6nsHcboP5fxkp6iPOXz2Vg49R42TuMs2whkJ5OAP4/Ul035qOzy0AecOF9VOscn4w==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-win32-ia32": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.3.tgz",
++      "integrity": "sha512-r53mXsBN6lFUDiST764SvgwUdHAqM4rPAiDzAmf4fLoB6X/rkfyTrLCg6+g17wJJiCmB3JYgHuUldCWUIRFSXw==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": "^20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
++    "node_modules/@img/sharp-win32-x64": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.3.tgz",
++      "integrity": "sha512-D4y1vNeZrIIJCN+uHaWVtH86B+aCrdMYYjicy9pXHvbGZeGYLLSd3wdVuC37FxVXlU1ARsk84eKWfWMXGYEqvA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "Apache-2.0 AND LGPL-3.0-or-later",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      }
++    },
+     "node_modules/@jridgewell/gen-mapping": {
+       "version": "0.3.13",
+       "resolved": "https://registry.npmjs.org/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz",
+@@ -2274,6 +2814,16 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/detect-libc": {
++      "version": "2.1.2",
++      "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
++      "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "engines": {
++        "node": ">=8"
++      }
++    },
+     "node_modules/devlop": {
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/devlop/-/devlop-1.1.0.tgz",
+@@ -5023,6 +5573,69 @@
+         "semver": "bin/semver.js"
+       }
+     },
++    "node_modules/sharp": {
++      "version": "0.35.3",
++      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.35.3.tgz",
++      "integrity": "sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "dependencies": {
++        "@img/colour": "^1.1.0",
++        "detect-libc": "^2.1.2",
++        "semver": "^7.8.5"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "funding": {
++        "url": "https://opencollective.com/libvips"
++      },
++      "optionalDependencies": {
++        "@img/sharp-darwin-arm64": "0.35.3",
++        "@img/sharp-darwin-x64": "0.35.3",
++        "@img/sharp-freebsd-wasm32": "0.35.3",
++        "@img/sharp-libvips-darwin-arm64": "1.3.2",
++        "@img/sharp-libvips-darwin-x64": "1.3.2",
++        "@img/sharp-libvips-linux-arm": "1.3.2",
++        "@img/sharp-libvips-linux-arm64": "1.3.2",
++        "@img/sharp-libvips-linux-ppc64": "1.3.2",
++        "@img/sharp-libvips-linux-riscv64": "1.3.2",
++        "@img/sharp-libvips-linux-s390x": "1.3.2",
++        "@img/sharp-libvips-linux-x64": "1.3.2",
++        "@img/sharp-libvips-linuxmusl-arm64": "1.3.2",
++        "@img/sharp-libvips-linuxmusl-x64": "1.3.2",
++        "@img/sharp-linux-arm": "0.35.3",
++        "@img/sharp-linux-arm64": "0.35.3",
++        "@img/sharp-linux-ppc64": "0.35.3",
++        "@img/sharp-linux-riscv64": "0.35.3",
++        "@img/sharp-linux-s390x": "0.35.3",
++        "@img/sharp-linux-x64": "0.35.3",
++        "@img/sharp-linuxmusl-arm64": "0.35.3",
++        "@img/sharp-linuxmusl-x64": "0.35.3",
++        "@img/sharp-webcontainers-wasm32": "0.35.3",
++        "@img/sharp-win32-arm64": "0.35.3",
++        "@img/sharp-win32-ia32": "0.35.3",
++        "@img/sharp-win32-x64": "0.35.3"
++      },
++      "peerDependenciesMeta": {
++        "@types/node": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/sharp/node_modules/semver": {
++      "version": "7.8.5",
++      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
++      "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
++      "dev": true,
++      "license": "ISC",
++      "bin": {
++        "semver": "bin/semver.js"
++      },
++      "engines": {
++        "node": ">=10"
++      }
++    },
+     "node_modules/shiki": {
+       "version": "4.1.0",
+       "resolved": "https://registry.npmjs.org/shiki/-/shiki-4.1.0.tgz",
+diff --git a/frontend/package.json b/frontend/package.json
+index 86cc5e5..8200044 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -30,6 +30,7 @@
+     "@vitejs/plugin-react": "^4.2.1",
+     "autoprefixer": "^10.4.19",
+     "postcss": "^8.4.38",
++    "sharp": "^0.35.3",
+     "tailwindcss": "^3.4.3",
+     "typescript": "^5.4.5",
+     "vite": "^5.2.8"
+diff --git a/frontend/public/icons/icon-192.png b/frontend/public/icons/icon-192.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..9dfb1c3af559b41dedebc14c92e6cbf3345cfa3f
+GIT binary patch
+literal 3221
+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
+McRJe^Tl-%6FVYf&OaK4?
+
+literal 0
+HcmV?d00001
+
+diff --git a/frontend/public/icons/icon-512-maskable.png b/frontend/public/icons/icon-512-maskable.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd78a47245a22834fe691b416d8d7793a2c37dfa
+GIT binary patch
+literal 10875
+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
+MTW)%~(ebzc0e4Qu1^@s6
+
+literal 0
+HcmV?d00001
+
+diff --git a/frontend/public/icons/icon-512.png b/frontend/public/icons/icon-512.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6293959ae592f3d17b683618f96808016f352af
+GIT binary patch
+literal 12854
+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
+Mm)Xwb?Z+?uA8-)D82|tP
+
+literal 0
+HcmV?d00001
+
+diff --git a/frontend/public/sw.js b/frontend/public/sw.js
+index 15dfcbd..71a627a 100644
+--- a/frontend/public/sw.js
++++ b/frontend/public/sw.js
+@@ -1,6 +1,76 @@
+-// Minimal Service Worker — exists only to satisfy Chrome's PWA installability
+-// criteria (requires a registered SW with a fetch handler). No offline caching
+-// is performed; every request passes through to the network.
+-self.addEventListener('install', () => self.skipWaiting());
+-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+-self.addEventListener('fetch', () => {});
++// PWA Service Worker — App Shell precache + stale-while-revalidate for static
++// assets. API requests (/api/*) bypass the cache to avoid stale user data.
++
++const CACHE_VERSION = 'akmdl-v1';
++const APP_SHELL = [
++  '/',
++  '/index.html',
++  '/icons/icon-192.png',
++  '/icons/icon-512.png',
++  '/icons/icon-512-maskable.png',
++];
++
++self.addEventListener('install', (event) => {
++  event.waitUntil((async () => {
++    const cache = await caches.open(CACHE_VERSION);
++    // addAll fails atomically if any single resource 404s; add individually so
++    // a missing optional asset doesn't break the whole install.
++    await Promise.all(APP_SHELL.map((u) => cache.add(u).catch(() => {})));
++    await self.skipWaiting();
++  })());
++});
++
++self.addEventListener('activate', (event) => {
++  event.waitUntil((async () => {
++    const keys = await caches.keys();
++    await Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)));
++    await self.clients.claim();
++  })());
++});
++
++self.addEventListener('message', (event) => {
++  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
++});
++
++self.addEventListener('fetch', (event) => {
++  const req = event.request;
++  if (req.method !== 'GET') return;
++
++  const url = new URL(req.url);
++  // Cross-origin: pass through (e.g. CDN fonts, Google APIs).
++  if (url.origin !== self.location.origin) return;
++
++  // API requests: network-only, never cache (avoid stale user data).
++  if (url.pathname.startsWith('/api/')) return;
++
++  // Navigation requests: network-first with cache fallback (offline shell).
++  if (req.mode === 'navigate') {
++    event.respondWith((async () => {
++      try {
++        const fresh = await fetch(req);
++        const cache = await caches.open(CACHE_VERSION);
++        cache.put('/', fresh.clone()).catch(() => {});
++        return fresh;
++      } catch {
++        const cached = await caches.match(req);
++        return cached || (await caches.match('/')) || Response.error();
++      }
++    })());
++    return;
++  }
++
++  // Static assets: stale-while-revalidate.
++  event.respondWith((async () => {
++    const cache = await caches.open(CACHE_VERSION);
++    const cached = await cache.match(req);
++    const network = fetch(req)
++      .then((res) => {
++        if (res && res.status === 200 && res.type === 'basic') {
++          cache.put(req, res.clone()).catch(() => {});
++        }
++        return res;
++      })
++      .catch(() => cached);
++    return cached || network;
++  })());
++});
+diff --git a/frontend/scripts/generate-pwa-icons.mjs b/frontend/scripts/generate-pwa-icons.mjs
+new file mode 100644
+index 0000000..9ad0a8a
+--- /dev/null
++++ b/frontend/scripts/generate-pwa-icons.mjs
+@@ -0,0 +1,51 @@
++// One-shot script: rasterize frontend/public/vite.svg into the PNG icons
++// required by the PWA manifest. Run manually after changing the logo.
++//
++// Usage: node scripts/generate-pwa-icons.mjs
++//
++// Produces:
++//   frontend/public/icons/icon-192.png           (purpose: any)
++//   frontend/public/icons/icon-512.png           (purpose: any)
++//   frontend/public/icons/icon-512-maskable.png  (purpose: maskable, 80% center + white padding)
++import { readFileSync, mkdirSync } from 'node:fs';
++import { join, dirname } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import sharp from 'sharp';
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++const publicDir = join(__dirname, '..', 'public');
++const svgPath = join(publicDir, 'vite.svg');
++const iconsDir = join(publicDir, 'icons');
++mkdirSync(iconsDir, { recursive: true });
++
++const svgBuf = readFileSync(svgPath);
++// density bumped so the rasterized "M" glyph stays crisp at small sizes.
++const density = 384;
++
++// Maskable: composite the source at 80% on a 512x512 opaque white canvas,
++// leaving ~10% safe-zone padding on all sides per Android maskable spec.
++async function bakeMaskable() {
++  const inner = await sharp(svgBuf, { density })
++    .resize(410, 410, {
++      fit: 'contain',
++      background: { r: 255, g: 255, b: 255, alpha: 0 },
++    })
++    .png()
++    .toBuffer();
++  await sharp({
++    create: {
++      width: 512,
++      height: 512,
++      channels: 4,
++      background: { r: 255, g: 255, b: 255, alpha: 1 },
++    },
++  })
++    .composite([{ input: inner, gravity: 'center' }])
++    .png()
++    .toFile(join(iconsDir, 'icon-512-maskable.png'));
++}
++
++await sharp(svgBuf, { density }).resize(192, 192).png().toFile(join(iconsDir, 'icon-192.png'));
++await sharp(svgBuf, { density }).resize(512, 512).png().toFile(join(iconsDir, 'icon-512.png'));
++await bakeMaskable();
++console.log('PWA icons generated under frontend/public/icons/');
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 5156fd2..ff310a4 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -83,6 +83,18 @@ function App() {
+           document.head.appendChild(link);
+         }
+         link.href = settings.favicon;
++
++        // Sync apple-touch-icon to the generated 512 PNG so iOS "Add to Home
++        // Screen" reflects custom favicon uploads. The endpoint serves the
++        // generated variant when a custom favicon exists; index.html's static
++        // default still applies otherwise.
++        let apple = document.querySelector("link[rel='apple-touch-icon']") as HTMLLinkElement | null;
++        if (!apple) {
++          apple = document.createElement('link');
++          apple.rel = 'apple-touch-icon';
++          document.head.appendChild(apple);
++        }
++        apple.href = '/api/site-assets/pwa-icon-512.png';
+       }
+       if (settings.site_name) {
+         document.title = settings.site_name;
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+index 0ea00fa..54f1fa3 100644
+--- a/frontend/src/main.tsx
++++ b/frontend/src/main.tsx
+@@ -9,10 +9,21 @@ createRoot(document.getElementById('root')!).render(
+   </StrictMode>,
+ )
+ 
+-// Register the minimal PWA service worker.
+-// Gated on PROD so Vite's HMR isn't disrupted during development.
++// Register the PWA service worker (production only — HMR + SW don't mix).
++// On update, skip waiting and reload so the new App Shell takes effect.
+ if ('serviceWorker' in navigator && import.meta.env.PROD) {
+-  navigator.serviceWorker.register('/sw.js').catch((err) => {
++  navigator.serviceWorker.register('/sw.js').then((reg) => {
++    reg.addEventListener('updatefound', () => {
++      const installing = reg.installing
++      if (!installing) return
++      installing.addEventListener('statechange', () => {
++        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
++          navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' })
++          window.location.reload()
++        }
++      })
++    })
++  }).catch((err) => {
+     console.warn('SW registration failed:', err)
+   })
+ }

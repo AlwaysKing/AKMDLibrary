@@ -1,0 +1,18 @@
+ M Dockerfile
+ D FORMATS.md
+ M backend/cmd/server/main.go
+ M backend/go.mod
+ M backend/go.sum
+ M backend/internal/middleware/feature_flag.go
+ M backend/internal/model/space.go
+ M frontend/src/api/spaces.ts
+ M frontend/src/components/Layout/AppLayout.tsx
+ M frontend/src/components/Layout/Sidebar.tsx
+ M frontend/src/pages/AdminPage.tsx
+?? .patches/
+?? backend/internal/handler/claude_handler.go
+?? backend/internal/service/claude/
+?? entrypoint.sh
+?? frontend/src/api/claude.ts
+?? frontend/src/components/ClaudeChat/
+?? frontend/src/hooks/useClaudeChat.ts

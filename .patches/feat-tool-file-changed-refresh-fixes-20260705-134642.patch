@@ -1,0 +1,354 @@
+diff --git a/backend/internal/service/claude/manager.go b/backend/internal/service/claude/manager.go
+index 899c92c..54bb814 100644
+--- a/backend/internal/service/claude/manager.go
++++ b/backend/internal/service/claude/manager.go
+@@ -128,6 +128,8 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
+ 			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+ 		},
+ 		OnToolFileChanged: func(tool, filePath string) {
++			// session 已经把路径构造为 Page.file_path 格式（spaceSlug/...），直接透传
++			log.Printf("[claude manager][debug] OnToolFileChanged tool=%s filePath=%s", tool, filePath)
+ 			data, _ := json.Marshal(EventToolFileChanged{Type: "tool_file_changed", Tool: tool, FilePath: filePath})
+ 			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+ 		},
+@@ -138,6 +140,7 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
+ 	}
+ 	sess := NewSession(SessionParams{
+ 		SessionID:    sessionID,
++		SpaceSlug:    params.SpaceSlug,
+ 		SpaceDir:     params.SpaceDir,
+ 		AttachDir:    attachDir,
+ 		EnvOverrides: m.config.LoadSettingsEnv(),
+diff --git a/backend/internal/service/claude/protocol.go b/backend/internal/service/claude/protocol.go
+index fa9ab2b..382e36d 100644
+--- a/backend/internal/service/claude/protocol.go
++++ b/backend/internal/service/claude/protocol.go
+@@ -225,11 +225,11 @@ type EventPermissionDenied struct {
+ //   - 若 filePath 等于当前打开页面的 file_path → 重新拉文档内容
+ //   - 否则 → 刷新左侧目录树
+ //
+-// 注意：filePath 已被规范化为相对 spaceDir 的路径，与 Page.file_path 字段一致。
++// filePath 已构造为与 Page.file_path 完全一致的格式：spaceSlug + "/" + space内相对路径。
+ type EventToolFileChanged struct {
+-	Type     string `json:"type"` // "tool_file_changed"
+-	Tool     string `json:"tool"` // "Write" | "Edit" | "MultiEdit"
+-	FilePath string `json:"filePath"`
++	Type     string `json:"type"`     // "tool_file_changed"
++	Tool     string `json:"tool"`     // "Write" | "Edit" | "MultiEdit"
++	FilePath string `json:"filePath"` // 与 Page.file_path 同格式
+ }
+ 
+ type EventError struct {
+diff --git a/backend/internal/service/claude/session.go b/backend/internal/service/claude/session.go
+index 693c54a..c5978cb 100644
+--- a/backend/internal/service/claude/session.go
++++ b/backend/internal/service/claude/session.go
+@@ -13,6 +13,7 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"sync"
++	"time"
+ 
+ 	"github.com/coder/websocket"
+ 	"github.com/google/uuid"
+@@ -38,6 +39,7 @@ type Session struct {
+ 	wg           sync.WaitGroup
+ 	cancel       context.CancelFunc
+ 	sessionID    string
++	spaceSlug    string
+ 	spaceDir     string
+ 	attachDir    string
+ 	userWrite    bool
+@@ -61,6 +63,7 @@ type pendingToolUse struct {
+ 
+ type SessionParams struct {
+ 	SessionID    string                         // 由 manager 生成
++	SpaceSlug    string                         // 用于构造与 Page.file_path 一致的路径
+ 	SpaceDir     string                         // 子进程 cwd
+ 	AttachDir    string                         // /tmp/.../session/<id>，由 manager 创建好
+ 	EnvOverrides map[string]string              // settings.json.env 的覆盖
+@@ -75,6 +78,7 @@ type SessionParams struct {
+ func NewSession(p SessionParams) *Session {
+ 	return &Session{
+ 		sessionID:       p.SessionID,
++		spaceSlug:       p.SpaceSlug,
+ 		spaceDir:        p.SpaceDir,
+ 		attachDir:       p.AttachDir,
+ 		userWrite:       p.UserCanWrite,
+@@ -223,6 +227,7 @@ func (s *Session) handleAssistant(line []byte) {
+ 			toolName: tu.Name,
+ 			input:    tu.Input,
+ 		}
++		log.Printf("[claude session][debug] cached tool_use: id=%s name=%s input_keys=%v", tu.ID, tu.Name, keysOf(tu.Input))
+ 	}
+ }
+ 
+@@ -231,14 +236,19 @@ func (s *Session) handleAssistant(line []byte) {
+ func (s *Session) handleUser(line []byte) {
+ 	var msg ToolResultMessage
+ 	if err := json.Unmarshal(line, &msg); err != nil {
++		log.Printf("[claude session][debug] handleUser unmarshal failed: %v", err)
+ 		return
+ 	}
+-	for _, tr := range msg.ExtractToolResults() {
++	results := msg.ExtractToolResults()
++	log.Printf("[claude session][debug] user message: %d tool_result(s), pending_size=%d", len(results), len(s.pendingToolUses))
++	for _, tr := range results {
+ 		pending, ok := s.pendingToolUses[tr.ToolUseID]
+ 		if !ok {
++			log.Printf("[claude session][debug] tool_result id=%s NOT in pending (miss)", tr.ToolUseID)
+ 			continue
+ 		}
+ 		delete(s.pendingToolUses, tr.ToolUseID)
++		log.Printf("[claude session][debug] tool_result id=%s matched pending name=%s is_error=%v", tr.ToolUseID, pending.toolName, tr.IsError)
+ 		if tr.IsError {
+ 			continue
+ 		}
+@@ -246,24 +256,47 @@ func (s *Session) handleUser(line []byte) {
+ 		switch pending.toolName {
+ 		case "Write", "Edit", "MultiEdit":
+ 			rawPath, _ := pending.input["file_path"].(string)
+-			if rawPath == "" || s.callbacks.OnToolFileChanged == nil {
++			if rawPath == "" {
++				log.Printf("[claude session][debug] %s: empty file_path, skip", pending.toolName)
+ 				continue
+ 			}
+-			// 规范化为相对 spaceDir 的路径，与 Page.file_path 字段一致，前端可直接比对。
++			if s.callbacks.OnToolFileChanged == nil {
++				log.Printf("[claude session][debug] %s: OnToolFileChanged callback nil, skip", pending.toolName)
++				continue
++			}
++			// 解析为绝对路径。空间外的路径（理论被权限层挡掉）做兜底校验。
+ 			absPath := rawPath
+ 			if !filepath.IsAbs(absPath) {
+ 				absPath = filepath.Join(s.spaceDir, absPath)
+ 			}
+ 			relPath, err := filepath.Rel(s.spaceDir, absPath)
+ 			if err != nil || strings.HasPrefix(relPath, "..") {
+-				// 路径不在 spaceDir 内（理论上权限层已经挡掉，这里是兜底）
++				log.Printf("[claude session][debug] %s: path outside spaceDir abs=%s spaceDir=%s", pending.toolName, absPath, s.spaceDir)
+ 				continue
+ 			}
+-			s.callbacks.OnToolFileChanged(pending.toolName, relPath)
++			// 构造与 Page.file_path 一致的格式：spaceSlug + "/" + space内相对路径
++			// 前端可直接用 === 与 currentPage.file_path 比对，无需后端查 DB。
++			pageFilePath := strings.TrimPrefix(filepath.Join(s.spaceSlug, relPath), "/")
++			log.Printf("[claude session][debug] firing OnToolFileChanged: tool=%s pageFilePath=%s", pending.toolName, pageFilePath)
++			s.callbacks.OnToolFileChanged(pending.toolName, pageFilePath)
++		default:
++			log.Printf("[claude session][debug] %s: not file-modifying tool, skip", pending.toolName)
+ 		}
+ 	}
+ }
+ 
++// keysOf 返回 map 的键集合（仅用于诊断日志，顺序无意义）。
++func keysOf(m map[string]any) []string {
++	if len(m) == 0 {
++		return nil
++	}
++	out := make([]string, 0, len(m))
++	for k := range m {
++		out = append(out, k)
++	}
++	return out
++}
++
+ func (s *Session) handleControlRequest(line []byte) {
+ 	var cr ControlRequest
+ 	if err := json.Unmarshal(line, &cr); err != nil {
+@@ -300,7 +333,19 @@ func (s *Session) writeJSON(v any) {
+ 	}
+ }
+ 
+-// SendUserMessage 接收用户文本 + 可选 context + 可选附件列表，拼装成 content blocks 发给 claude。
++// SendInterrupt 中止当前回答：向 claude 发 control_request subtype=interrupt。
++// claude 会停止当前生成并产出一条带 "[Request interrupted by user]" 的收尾消息。
++func (s *Session) SendInterrupt() {
++	msg := map[string]any{
++		"type": "control_request",
++		"request": map[string]any{
++			"subtype": "interrupt",
++		},
++		"request_id": fmt.Sprintf("interrupt_%d", time.Now().UnixMilli()),
++	}
++	s.writeJSON(msg)
++	log.Printf("[claude session] sent interrupt")
++}
+ //
+ // 拼装顺序：
+ //   1. 当前文档（如果 context.ActivePageID 不为空）：text block
+@@ -468,8 +513,12 @@ func (s *Session) HandleWebSocket(ctx context.Context, c *websocket.Conn) {
+ 		if err := json.Unmarshal(data, &msg); err != nil {
+ 			continue
+ 		}
+-		if msg.Type == "user_message" {
++		switch msg.Type {
++		case "user_message":
+ 			s.SendUserMessage(msg.Content, msg.Context, msg.Attachments)
++		case "stop":
++			// 用户点击中止按钮：向 claude 发 interrupt
++			s.SendInterrupt()
+ 		}
+ 	}
+ }
+diff --git a/frontend/src/components/ClaudeChat/ChatPanel.tsx b/frontend/src/components/ClaudeChat/ChatPanel.tsx
+index ad4c6ac..e80714f 100644
+--- a/frontend/src/components/ClaudeChat/ChatPanel.tsx
++++ b/frontend/src/components/ClaudeChat/ChatPanel.tsx
+@@ -37,21 +37,21 @@ interface ResizeStart {
+ export function ChatPanel({ spaceSlug, open, onClose }: Props) {
+   // 文件变更回调：模型改了文件就根据是否当前页决定刷新哪个
+   // 用 useCallback + pageStore.getState() 避免闭包陈旧；hook 内部会用 ref 持有最新版本
+-  const handleToolFileChanged = (tool: string, filePath: string) => {
++  const handleToolFileChanged = (event: { tool: string; filePath: string }) => {
+     const pageState = usePageStore.getState();
+     const current = pageState.currentPage;
+-    if (current && current.file_path === filePath) {
+-      // 当前打开的页被改 → 重新拉内容
+-      console.log(`[ChatPanel] tool=${tool} 改了当前页 ${filePath}，刷新内容`);
++    console.log('[ChatPanel][debug] tool_file_changed received:', { ...event, currentFilePath: current?.file_path, currentPageId: current?.id });
++    // filePath 与 Page.file_path 同格式（spaceSlug/...），可直接 === 比对
++    if (current && current.file_path === event.filePath) {
++      console.log(`[ChatPanel] tool=${event.tool} 改了当前页 ${event.filePath}，刷新内容`);
+       pageState.fetchPage(spaceSlug, current.id).catch(e => console.error('[ChatPanel] fetchPage 失败:', e));
+     } else {
+-      // 不是当前页 → 刷新左侧目录树
+-      console.log(`[ChatPanel] tool=${tool} 改了 ${filePath}（非当前页），刷新目录树`);
++      console.log(`[ChatPanel] tool=${event.tool} 改了 ${event.filePath}（非当前页），刷新目录树`);
+       pageState.refreshPageTree().catch(e => console.error('[ChatPanel] refreshPageTree 失败:', e));
+     }
+   };
+ 
+-  const { messages, status, send, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true, onToolFileChanged: handleToolFileChanged });
++  const { messages, status, send, stop, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true, onToolFileChanged: handleToolFileChanged });
+   // 初始位置：让面板距右边缘和底边缘各 20px（与 size 460x520 配合）
+   const [pos, setPos] = useState({ x: window.innerWidth - 480, y: window.innerHeight - 540 });
+   const [size, setSize] = useState({ w: 460, h: 520 });
+@@ -277,6 +277,7 @@ export function ChatPanel({ spaceSlug, open, onClose }: Props) {
+       <MessageInput
+         onSend={handleSend}
+         disabled={status === 'answering'}
++        onStop={stop}
+         uploadAttachment={uploadAttachment}
+         pendings={pendings}
+         onRemovePending={removePending}
+diff --git a/frontend/src/components/ClaudeChat/MessageInput.tsx b/frontend/src/components/ClaudeChat/MessageInput.tsx
+index 77610e0..2c4d712 100644
+--- a/frontend/src/components/ClaudeChat/MessageInput.tsx
++++ b/frontend/src/components/ClaudeChat/MessageInput.tsx
+@@ -1,10 +1,13 @@
+ import { useRef, useState, KeyboardEvent, ChangeEvent, ClipboardEvent } from 'react';
+-import { Send, Paperclip, Loader2, X } from 'lucide-react';
++import { Send, Paperclip, Loader2, X, Square } from 'lucide-react';
+ import { ChatAttachment } from '../../hooks/useClaudeChat';
+ 
+ interface Props {
+   onSend: (text: string, attachments?: ChatAttachment[]) => void;
++  /** 回答中状态：true 时输入禁用、发送按钮变中止按钮 */
+   disabled: boolean;
++  /** 用户点击中止按钮时触发 */
++  onStop?: () => void;
+   uploadAttachment: (file: File) => Promise<{ attachmentId: string; filename: string }>;
+   // 由 ChatPanel 提升上来的附件状态（整个面板都是 drop target）
+   pendings: PendingAttachment[];
+@@ -32,7 +35,7 @@ export function nextLocalId() {
+   return `pa_${Date.now()}_${localIdCounter}`;
+ }
+ 
+-export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFiles }: Props) {
++export function MessageInput({ onSend, disabled, onStop, pendings, onRemovePending, onFiles }: Props) {
+   const [text, setText] = useState('');
+   const fileInputRef = useRef<HTMLInputElement>(null);
+ 
+@@ -51,6 +54,9 @@ export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFi
+   };
+ 
+   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
++    // 输入法 composing 状态（用户在选词按回车）不触发发送
++    // isComposing 是标准属性；keyCode 229 是兼容老浏览器的 fallback
++    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+     if (e.key === 'Enter' && !e.shiftKey) {
+       e.preventDefault();
+       submit();
+@@ -124,14 +130,25 @@ export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFi
+           className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm resize-none max-h-32 focus:outline-none focus:ring-1 focus:ring-blue-500"
+           disabled={disabled}
+         />
+-        <button
+-          onClick={submit}
+-          disabled={!canSend}
+-          className="p-2 bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-30"
+-          title={hasUploading ? '附件上传中...' : '发送'}
+-        >
+-          <Send className="w-4 h-4" />
+-        </button>
++        {disabled ? (
++          <button
++            onClick={() => onStop?.()}
++            disabled={!onStop}
++            className="p-2 bg-notion-text text-white rounded hover:bg-red-500 disabled:opacity-30"
++            title="中止当前回答"
++          >
++            <Square className="w-4 h-4 fill-current" />
++          </button>
++        ) : (
++          <button
++            onClick={submit}
++            disabled={!canSend}
++            className="p-2 bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-30"
++            title={hasUploading ? '附件上传中...' : '发送'}
++          >
++            <Send className="w-4 h-4" />
++          </button>
++        )}
+       </div>
+     </div>
+   );
+diff --git a/frontend/src/hooks/useClaudeChat.ts b/frontend/src/hooks/useClaudeChat.ts
+index d21e30a..cb2fb5b 100644
+--- a/frontend/src/hooks/useClaudeChat.ts
++++ b/frontend/src/hooks/useClaudeChat.ts
+@@ -20,8 +20,8 @@ export interface ChatContext {
+ interface UseClaudeChatOptions {
+   spaceSlug: string | null;
+   enabled: boolean; // space 是否启用 claude
+-  /** 模型通过 Write/Edit/MultiEdit 成功改动了文件时触发；filePath 是相对 spaceDir 的路径 */
+-  onToolFileChanged?: (tool: string, filePath: string) => void;
++  /** 模型通过 Write/Edit/MultiEdit 成功改动了文件时触发；filePath 与 Page.file_path 同格式 */
++  onToolFileChanged?: (event: { tool: string; filePath: string }) => void;
+ }
+ 
+ interface UseClaudeChatReturn {
+@@ -31,6 +31,8 @@ interface UseClaudeChatReturn {
+   sessionId: string | null;
+   /** 发送消息：text + 可选 context + 可选附件列表 */
+   send: (text: string, context?: ChatContext, attachments?: ChatAttachment[]) => void;
++  /** 中止当前回答（向 claude 发 control_request subtype=interrupt） */
++  stop: () => void;
+   /** 上传附件到当前 session，返回 attachmentId 与去重后的 filename */
+   uploadAttachment: (file: File) => Promise<{ attachmentId: string; filename: string }>;
+   reset: () => void;
+@@ -146,7 +148,7 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
+           break;
+         case 'tool_file_changed':
+           // 模型通过 Write/Edit/MultiEdit 改了文件；交给上层判断刷当前页还是刷目录
+-          try { onToolFileChangedRef.current?.(msg.tool, msg.filePath); } catch (e) { console.error('[useClaudeChat] onToolFileChanged handler error:', e); }
++          try { onToolFileChangedRef.current?.({ tool: msg.tool, filePath: msg.filePath }); } catch (e) { console.error('[useClaudeChat] onToolFileChanged handler error:', e); }
+           break;
+         case 'error':
+           setMessages(prev => [...prev, {
+@@ -244,5 +246,13 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
+     setStatus('idle');
+   }, []);
+ 
+-  return { messages, status, isConnected, sessionId, send, uploadAttachment, reset };
++  const stop = useCallback(() => {
++    const ws = wsRef.current;
++    if (!ws || ws.readyState !== WebSocket.OPEN) return;
++    // 后端会把这个 stop 转成 claude 的 control_request subtype=interrupt
++    ws.send(JSON.stringify({ type: 'stop' }));
++    console.log('[useClaudeChat] sent stop');
++  }, []);
++
++  return { messages, status, isConnected, sessionId, send, stop, uploadAttachment, reset };
+ }

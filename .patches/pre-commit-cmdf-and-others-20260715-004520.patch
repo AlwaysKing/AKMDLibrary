@@ -1,0 +1,1337 @@
+diff --git a/backend/internal/service/page_service.go b/backend/internal/service/page_service.go
+index dfc51b8..b27cca2 100644
+--- a/backend/internal/service/page_service.go
++++ b/backend/internal/service/page_service.go
+@@ -26,11 +26,33 @@ type PageService struct {
+ 	dbs     map[string]interface{ Close() error }
+ 	mu      sync.RWMutex
+ 
++	// pageLocks serializes read-modify-write sequences on a single page file.
++	// Key: pageID (frontmatter id). Value: *sync.Mutex dedicated to that page.
++	// Different pageIDs run fully in parallel; same pageID operations are
++	// serialized to prevent racing reads from observing a half-written file
++	// (which previously caused GetByID's repair branch to overwrite valid
++	// content with empty frontmatter).
++	pageLocks sync.Map
++
+ 	// gitSync is optional; when set, file writes notify the worker so auto-commit
+ 	// can pick them up. Safe to leave nil (default) — the hook becomes a no-op.
+ 	gitSync *GitSyncWorker
+ }
+ 
++// lockPage returns a deferred-call that unlocks the per-page mutex.
++// Usage: defer s.lockPage(pageID)()
++//
++// All read-modify-write sequences on a page file MUST be wrapped with this
++// to prevent concurrent writers from racing. The lock is process-local
++// (sync.Mutex), keyed by pageID. Lock table grows lazily; entries are cheap
++// (a *sync.Mutex pointer each) and can be ignored on page deletion.
++func (s *PageService) lockPage(pageID string) func() {
++	v, _ := s.pageLocks.LoadOrStore(pageID, &sync.Mutex{})
++	mu := v.(*sync.Mutex)
++	mu.Lock()
++	return func() { mu.Unlock() }
++}
++
+ // SetGitSyncWorker wires the auto-commit worker. Optional; call once at startup.
+ func (s *PageService) SetGitSyncWorker(w *GitSyncWorker) {
+ 	s.gitSync = w
+@@ -49,6 +71,20 @@ func (s *PageService) MarkGitDirty(spaceSlug string) {
+ 	s.markGitDirty(spaceSlug)
+ }
+ 
++// diagReadFile reads a page file. The label argument is retained for log
++// correlation but currently unused — kept so diagnostic logging can be
++// re-enabled quickly if a future regression needs investigation.
++func diagReadFile(label, filePath string) ([]byte, error) {
++	return os.ReadFile(filePath)
++}
++
++// diagWriteFile writes a page file. The label argument is retained for log
++// correlation but currently unused — kept so diagnostic logging can be
++// re-enabled quickly if a future regression needs investigation.
++func diagWriteFile(label, filePath string, content []byte) error {
++	return os.WriteFile(filePath, content, 0644)
++}
++
+ // resolveSpaceDir finds the actual directory for a space slug.
+ // Returns the full path and the actual directory name.
+ func (s *PageService) resolveSpaceDir(spaceSlug string) (string, string) {
+@@ -205,7 +241,7 @@ func (s *PageService) rebuildNodes(nodes []*model.PageNode, repo *repository.Pag
+ // If not, generates a new UUID, writes it into the frontmatter, and returns it.
+ func (s *PageService) ensurePageUUID(relPath string) string {
+ 	absPath := filepath.Join(s.docsDir, relPath)
+-	raw, err := os.ReadFile(absPath)
++	raw, err := diagReadFile("ensurePageUUID", absPath)
+ 	if err != nil {
+ 		return uuidutil.NewPageID()
+ 	}
+@@ -218,7 +254,7 @@ func (s *PageService) ensurePageUUID(relPath string) string {
+ 	// Generate and write UUID into frontmatter
+ 	fm.ID = uuidutil.NewPageID()
+ 	assembled := frontmatter.Render(fm, body)
+-	os.WriteFile(absPath, assembled, 0644)
++	diagWriteFile("ensurePageUUID", absPath, assembled)
+ 	return fm.ID
+ }
+ 
+@@ -385,6 +421,7 @@ func sortNodesByOrder(nodes []*model.PageNode) {
+ }
+ 
+ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, error) {
++	defer s.lockPage(pageID)()
+ 	repo, err := s.getRepo(spaceSlug)
+ 	if err != nil {
+ 		return nil, err
+@@ -396,7 +433,7 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
+ 	}
+ 
+ 	filePath := filepath.Join(s.docsDir, page.FilePath)
+-	raw, err := os.ReadFile(filePath)
++	raw, err := diagReadFile("GetByID", filePath)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read page content: %w", err)
+ 	}
+@@ -407,7 +444,7 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
+ 	if fm.ID == "" {
+ 		fm.ID = pageID
+ 		assembled := frontmatter.Render(fm, body)
+-		os.WriteFile(filePath, assembled, 0644)
++		diagWriteFile("GetByID.repairID", filePath, assembled)
+ 	}
+ 
+ 	if fm.Icon != "" {
+@@ -440,7 +477,7 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
+ 	maintained := s.maintainSubpageBlocks(page.Content, repo, page.FilePath)
+ 	if maintained != page.Content {
+ 		assembled := frontmatter.Render(fm, maintained)
+-		os.WriteFile(filePath, assembled, 0644)
++		diagWriteFile("GetByID.rewriteMaintain", filePath, assembled)
+ 		page.Content = maintained
+ 	}
+ 
+@@ -495,7 +532,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
+ 			fm.Icon = req.Icon
+ 		}
+ 		fileBytes := frontmatter.Render(fm, "")
+-		if err := os.WriteFile(filepath.Join(s.docsDir, childRelPath), fileBytes, 0644); err != nil {
++		if err := diagWriteFile("Create.child", filepath.Join(s.docsDir, childRelPath), fileBytes); err != nil {
+ 			return nil, fmt.Errorf("failed to create child page: %w", err)
+ 		}
+ 
+@@ -524,7 +561,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
+ 		rootFm.Icon = req.Icon
+ 	}
+ 	rootFileBytes := frontmatter.Render(rootFm, "")
+-	if err := os.WriteFile(filepath.Join(s.docsDir, relPath), rootFileBytes, 0644); err != nil {
++	if err := diagWriteFile("Create.root", filepath.Join(s.docsDir, relPath), rootFileBytes); err != nil {
+ 		return nil, fmt.Errorf("failed to create page: %w", err)
+ 	}
+ 
+@@ -539,6 +576,7 @@ func (s *PageService) Create(spaceSlug string, req *model.CreatePageRequest, spa
+ }
+ 
+ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdatePageRequest) (*model.Page, error) {
++	defer s.lockPage(pageID)()
+ 	s.markGitDirty(spaceSlug)
+ 	repo, err := s.getRepo(spaceSlug)
+ 	if err != nil {
+@@ -551,7 +589,7 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
+ 	}
+ 
+ 	filePath := filepath.Join(s.docsDir, page.FilePath)
+-	raw, err := os.ReadFile(filePath)
++	raw, err := diagReadFile("Update", filePath)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read page file: %w", err)
+ 	}
+@@ -566,7 +604,7 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
+ 	// passes through untouched here.
+ 
+ 	assembled := frontmatter.Render(fm, maintained)
+-	if err := os.WriteFile(filePath, assembled, 0644); err != nil {
++	if err := diagWriteFile("Update", filePath, assembled); err != nil {
+ 		return nil, fmt.Errorf("failed to update page content: %w", err)
+ 	}
+ 
+@@ -574,6 +612,7 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
+ }
+ 
+ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.UpdatePageMetaRequest) (*model.Page, error) {
++	defer s.lockPage(pageID)()
+ 	s.markGitDirty(spaceSlug)
+ 	repo, err := s.getRepo(spaceSlug)
+ 	if err != nil {
+@@ -586,7 +625,7 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
+ 	}
+ 
+ 	absPath := filepath.Join(s.docsDir, page.FilePath)
+-	raw, err := os.ReadFile(absPath)
++	raw, err := diagReadFile("UpdateMeta", absPath)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read page file: %w", err)
+ 	}
+@@ -666,7 +705,7 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
+ 	}
+ 
+ 	assembled := frontmatter.Render(fm, body)
+-	if err := os.WriteFile(absPath, assembled, 0644); err != nil {
++	if err := diagWriteFile("UpdateMeta", absPath, assembled); err != nil {
+ 		return nil, fmt.Errorf("failed to write frontmatter: %w", err)
+ 	}
+ 
+@@ -1008,7 +1047,7 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID
+ 
+ 	// Read the original file content + frontmatter
+ 	absPath := filepath.Join(s.docsDir, origPage.FilePath)
+-	raw, err := os.ReadFile(absPath)
++	raw, err := diagReadFile("Duplicate", absPath)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read source page: %w", err)
+ 	}
+@@ -1065,7 +1104,7 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID
+ 	newRelPath := filepath.Join(targetRelDir, newTitle+".md")
+ 	newAbsPath := filepath.Join(s.docsDir, newRelPath)
+ 	fileBytes := frontmatter.Render(newFm, body)
+-	if err := os.WriteFile(newAbsPath, fileBytes, 0644); err != nil {
++	if err := diagWriteFile("Duplicate", newAbsPath, fileBytes); err != nil {
+ 		return nil, fmt.Errorf("failed to write duplicate page: %w", err)
+ 	}
+ 
+@@ -1522,13 +1561,14 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
+ //   - afterID != nil: insert after the <sub-page> line matching afterID
+ //   - no existing <sub-page> lines: append to end
+ func (s *PageService) insertSubpageInParent(repo *repository.PageRepository, parentID string, childID string, afterID *string) {
++	defer s.lockPage(parentID)()
+ 	parent, err := repo.GetByID(parentID)
+ 	if err != nil {
+ 		return
+ 	}
+ 
+ 	filePath := filepath.Join(s.docsDir, parent.FilePath)
+-	raw, err := os.ReadFile(filePath)
++	raw, err := diagReadFile("insertSubpage", filePath)
+ 	if err != nil {
+ 		return
+ 	}
+@@ -1566,7 +1606,7 @@ func (s *PageService) insertSubpageInParent(repo *repository.PageRepository, par
+ 		}
+ 		body += target
+ 		assembled := frontmatter.Render(fm, body)
+-		os.WriteFile(filePath, assembled, 0644)
++		diagWriteFile("insertSubpage.append", filePath, assembled)
+ 		return
+ 	}
+ 
+@@ -1596,18 +1636,19 @@ func (s *PageService) insertSubpageInParent(repo *repository.PageRepository, par
+ 	newBody = strings.TrimRight(newBody, "\n")
+ 
+ 	assembled := frontmatter.Render(fm, newBody)
+-	os.WriteFile(filePath, assembled, 0644)
++	diagWriteFile("insertSubpage.insert", filePath, assembled)
+ }
+ 
+ // removeSubpageFromParent removes the subpage tag/comment for childID from parent page's content.
+ func (s *PageService) removeSubpageFromParent(repo *repository.PageRepository, parentID string, childID string) {
++	defer s.lockPage(parentID)()
+ 	parent, err := repo.GetByID(parentID)
+ 	if err != nil {
+ 		return
+ 	}
+ 
+ 	filePath := filepath.Join(s.docsDir, parent.FilePath)
+-	raw, err := os.ReadFile(filePath)
++	raw, err := diagReadFile("removeSubpage", filePath)
+ 	if err != nil {
+ 		return
+ 	}
+@@ -1631,7 +1672,7 @@ func (s *PageService) removeSubpageFromParent(repo *repository.PageRepository, p
+ 	}
+ 
+ 	assembled := frontmatter.Render(fm, newBody)
+-	os.WriteFile(filePath, assembled, 0644)
++	diagWriteFile("removeSubpage", filePath, assembled)
+ }
+ 
+ // findParentPageID determines the parent page ID from a child page's file_path.
+diff --git a/frontend/src/components/Editor/BlockNoteComponents.tsx b/frontend/src/components/Editor/BlockNoteComponents.tsx
+index a2bdb97..22fc92f 100644
+--- a/frontend/src/components/Editor/BlockNoteComponents.tsx
++++ b/frontend/src/components/Editor/BlockNoteComponents.tsx
+@@ -81,6 +81,8 @@ export function setSyntheticDragHandleTarget(
+ }
+ 
+ function setBlockSelection(blockIds: string[] | null) {
++  const stack = new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()).join(' | ');
++  console.log(`[setBlockSelection] ids=[${(blockIds || []).join(',')}] caller: ${stack}`);
+   currentSelectedIds = blockIds || [];
+   if (!blockSelectionStyleEl) {
+     blockSelectionStyleEl = document.createElement('style');
+diff --git a/frontend/src/components/Editor/FindReplaceExtension.ts b/frontend/src/components/Editor/FindReplaceExtension.ts
+index ee66bf9..775af00 100644
+--- a/frontend/src/components/Editor/FindReplaceExtension.ts
++++ b/frontend/src/components/Editor/FindReplaceExtension.ts
+@@ -1,5 +1,5 @@
+ import { Extension } from '@tiptap/core';
+-import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
++import { Plugin, PluginKey } from '@tiptap/pm/state';
+ import { Decoration, DecorationSet } from '@tiptap/pm/view';
+ 
+ /**
+@@ -97,18 +97,68 @@ function recompute(state: FindReplaceState, doc: any, keepNearPos?: number): Fin
+ }
+ 
+ /**
+- * Move the DOM selection to the match and scroll it into view.
+- * Setting the ProseMirror text selection to the match range makes the
+- * editor's built-in scrollIntoView kick in.
++ * Scroll the current match into view.
++ *
++ * This only scrolls — it deliberately does NOT touch the ProseMirror
++ * selection. Setting a text selection on the match range would trigger
++ * BlockNote's FormattingToolbarController (any non-empty text selection
++ * pops the `bn-formatting-toolbar`), which is undesirable while the user
++ * is navigating search results. Highlighting is handled separately by
++ * ProseMirror Decorations (`find-match-current` class).
++ *
++ * Implementation strategy:
++ *   1. Use `view.coordsAtPos(match.from)` to get the exact viewport
++ *      coordinates of the match position.
++ *   2. Compute the delta needed to bring those coords inside the scroll
++ *      container's visible rect and call `scrollBy` on the container.
++ *
++ * Why we can't use ProseMirror's `tr.scrollIntoView()`:
++ *   Under the BlockNote → TipTap → ProseMirror wrapper stack, with the
++ *   editor unfocused (the search input holds focus during Cmd+F) and the
++ *   real scroll container being the outer `.overflow-y-auto`, ProseMirror's
++ *   own scroll-into-view does not reliably reach the visible scroll parent.
++ *
++ * Why we can't use native `leaf.scrollIntoView({ block: 'nearest' })` on
++ * the DOM at the match position:
++ *   For `codeBlock`, `view.domAtPos()` returns a text node whose parent
++ *   is the single `<code>` element wrapping ALL of the code (newlines are
++ *   characters, not separate block elements). `<code>` is then taller
++ *   than the viewport, and `scrollIntoView({ block: 'nearest' })` on it
++ *   scrolls so the element's TOP lands at the viewport top — i.e. it
++ *   scrolls to the start of the code block, not the matched line.
++ *
++ * `coordsAtPos` is computed by ProseMirror independently of the DOM
++ * hierarchy, so it gives the correct y-coordinate of the matched line
++ * regardless of whether `domAtPos` would return the line's text node or
++ * the whole `<code>` wrapper.
+  */
+ function scrollMatchIntoView(editor: any, match: FindMatch) {
+   try {
+-    const { state, view } = editor;
+-    const sel = TextSelection.create(state.doc, match.from, match.to);
+-    const tr = state.tr.setSelection(sel).scrollIntoView();
+-    view.dispatch(tr);
++    const { view } = editor;
++    const coords = view.coordsAtPos(match.from);
++    // The editor's vertical scroll container. Matches the pattern used
++    // elsewhere in this codebase (PageEditor.tsx ~L5298, L6840).
++    const container = (view.dom.closest?.('.overflow-y-auto') as HTMLElement | null) ?? null;
++    if (container) {
++      const cRect = container.getBoundingClientRect();
++      const margin = 8;
++      if (coords.top < cRect.top + margin) {
++        // Match is above the visible area — scroll up.
++        container.scrollBy({ top: coords.top - cRect.top - margin, behavior: 'smooth' });
++      } else if (coords.bottom > cRect.bottom - margin) {
++        // Match is below the visible area — scroll down.
++        container.scrollBy({ top: coords.bottom - cRect.bottom + margin, behavior: 'smooth' });
++      }
++      return;
++    }
++    // Fallback: no `.overflow-y-auto` ancestor — use native scrollIntoView
++    // on the leaf element. Less precise for code blocks but still better
++    // than nothing.
++    const { node } = view.domAtPos(match.from);
++    const leaf = node instanceof HTMLElement ? node : node.parentElement;
++    leaf?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+   } catch {
+-    // Selection update is best-effort; never throw during search nav.
++    // Scroll is best-effort; never throw during search nav.
+   }
+ }
+ 
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index 6653ccc..1121da9 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -18,13 +18,13 @@ import { TextSelection, NodeSelection } from '@tiptap/pm/state';
+ import { Plugin, PluginKey } from '@tiptap/pm/state';
+ import { Decoration, DecorationSet } from '@tiptap/pm/view';
+ import { Extension } from '@tiptap/core';
+-import { setClipboardData, getClipboardData, addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction, setPendingSyncedPaste, getPendingSyncedPaste, clearPendingSyncedPaste, type PendingSyncedPaste } from './blockClipboardState';
++import { addPendingRestore, removePendingRestore, setSubpageUndoAction, getSubpageUndoAction, clearSubpageUndoAction, writeAkmdClipboard, readAkmdClipboard, type ClipboardPayload } from './blockClipboardState';
+ import { BookmarkBlockSpec } from './BookmarkBlock';
+ import { SubpageBlockSpec } from './SubpageBlock';
+ import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
+ import { MarkBlockSpec } from './MarkBlock';
+ import { FileContentBlockSpec } from './FileContentBlock';
+-import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves } from './SyncedBlock';
++import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves, isPageChangeSuppressed } from './SyncedBlock';
+ import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
+ import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
+ import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
+@@ -42,6 +42,7 @@ import { uploadApi } from '../../api/upload';
+ import { writeSpaceFile } from '../../api/files';
+ import { createMirror } from '../../services/mirrorStore';
+ import { useSpaceStore } from '../../stores/spaceStore';
++import { useEditorFlushStore } from '../../stores/editorFlushStore';
+ import { flushSync } from '../../services/syncModule';
+ import { clearHeaderHandleLock, getHeaderHandleLock, isHeaderMenuOpen, setHeaderHandleLock, setHeaderMenuOpen } from './tableHandleState';
+ import { showToast } from '../Toast';
+@@ -218,10 +219,15 @@ async function flushSyncedBlockMirrorsFromDocument(blocks: any[], spaceSlug: str
+   }
+ 
+   for (const mirror of mirrorsBySource.values()) {
+-    await syncedBlocksApi.update(spaceSlug, mirror.sourcePageId, mirror.sourceBlockId, {
+-      markdown: mirror.markdown,
+-      addQuoted: Array.from(mirror.quotes.values()),
+-    });
++    try {
++      await syncedBlocksApi.update(spaceSlug, mirror.sourcePageId, mirror.sourceBlockId, {
++        markdown: mirror.markdown,
++        addQuoted: Array.from(mirror.quotes.values()),
++      });
++    } catch (err: any) {
++      if (err?.response?.status === 404) continue;
++      throw err;
++    }
+   }
+ }
+ 
+@@ -385,11 +391,15 @@ function normalizeSyncedBlockSelection(
+     if (
+       syncOuter &&
+       blockOuter &&
+-      syncOuter !== blockOuter &&
+-      !isSyncedBlockOuterActive(syncOuter)
++      syncOuter !== blockOuter
+     ) {
+-      const syncId = getDirectBlockId(syncOuter);
+-      if (syncId) return [syncId];
++      // broken mirror（源已消失）的提示内容无法单独删除，选中其内部时归一化为删整个 mirror。
++      // 其他情况保持 active 检查（光标在 source/正常 mirror 内时允许编辑内部内容）。
++      const isBrokenMirror = !!syncOuter.querySelector('.bn-synced-block-mirror.is-broken');
++      if (isBrokenMirror || !isSyncedBlockOuterActive(syncOuter)) {
++        const syncId = getDirectBlockId(syncOuter);
++        if (syncId) return [syncId];
++      }
+     }
+     return uniqueIds;
+   }
+@@ -415,7 +425,9 @@ function normalizeSyncedBlockSelection(
+       (id) => id !== syncId && !descendantIdSet.has(id)
+     );
+ 
+-    if (forcedSyncedBlockIds.has(syncId) || hasSelectionOutsideThisSync) {
++    const isBrokenMirror = !!syncOuter.querySelector('.bn-synced-block-mirror.is-broken');
++    // broken mirror 的提示内容无法单独删除，选中其内部 subblock 时提升为整个 mirror。
++    if (forcedSyncedBlockIds.has(syncId) || hasSelectionOutsideThisSync || isBrokenMirror) {
+       selected.add(syncId);
+       for (const id of selectedDescendantIds) selected.delete(id);
+     } else {
+@@ -2201,7 +2213,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     url: string;
+     position: { x: number; y: number };
+   } | null>(null);
+-  const [syncedPaste, setSyncedPaste] = useState<PendingSyncedPaste | null>(null);
++  const [syncedPaste, setSyncedPaste] = useState<ClipboardPayload | null>(null);
+   const [syncedDelete, setSyncedDelete] = useState<{ block: any; quotedCount: number } | null>(null);
+   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
+   const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string; type?: 'image' | 'video' } | null>(null);
+@@ -4660,6 +4672,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+   }, [editor, readOnly]);
+ 
+   const handleChange = useCallback(() => {
++    // mirror 的 load() 在 hydrate 期间触发的 updateBlock 不应视为用户编辑
++    if (isPageChangeSuppressed()) return;
+     // Normalize column layouts after deletion:
+     // 1. remove empty columns
+     // 2. dissolve column_list when only one non-empty column remains
+@@ -4871,6 +4885,16 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     if (!container || readOnly) return;
+ 
+     const handleCopy = (e: ClipboardEvent) => {
++      // Bail out for form fields living inside the editor wrapper but outside
++      // the actual editor content (FindReplacePanel search/replace inputs,
++      // slash-menu search, link-toolbar inputs). They must handle Cmd+C via
++      // the browser/input default; otherwise the container-level capture
++      // handler would intercept the copy before the input sees it.
++      const copyTargetEl = e.target as HTMLElement | null;
++      if (copyTargetEl && (copyTargetEl.tagName === 'INPUT' || copyTargetEl.tagName === 'TEXTAREA')) {
++        return;
++      }
++
+       const selection = window.getSelection();
+       if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+ 
+@@ -4928,7 +4952,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+   const handleNormalSyncedPaste = useCallback(async () => {
+     if (!syncedPaste) return;
+     insertBlocksAtCursor(syncedPaste.blocks);
+-    clearPendingSyncedPaste();
++    // 不清理剪贴板信号：跟随系统剪贴板生命周期，用户可在多个页面继续粘贴
+     setSyncedPaste(null);
+     await persistEditorNow();
+   }, [insertBlocksAtCursor, persistEditorNow, syncedPaste]);
+@@ -4955,7 +4979,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+           pageId,
+         },
+       }]);
+-      clearPendingSyncedPaste();
++      // 覆盖系统剪贴板：blocks 改为指向 A 源的 mirror block，isSyncedCandidate=false。
++      // 后续在 C/D/E... 粘贴时不再弹框，prepareCopiedBlocksForPaste 会把这个 mirror
++      // 转成新页上的引用块（指向同一 A 源），避免重复 wrapSource 产生嵌套损坏。
++      void writeAkmdClipboard({
++        blocks: [{
++          type: 'syncedBlockMirror',
++          props: {
++            syncId: newSyncId(),
++            sourcePageId: wrapped.sourcePageId,
++            sourceBlockId: wrapped.sourceBlockId,
++            pageId: '',
++          },
++        }],
++        markdown: syncedPaste.markdown,
++        isCut: false,
++        sourceSpaceSlug: spaceSlug,
++        sourcePageId: wrapped.sourcePageId,
++        sourceBlockIds: [wrapped.sourceBlockId],
++        sourceMarkdown: syncedPaste.markdown,
++        isSyncedCandidate: false,
++      });
++      // 不清理剪贴板信号：跟随系统剪贴板生命周期，用户可在多个页面继续创建同步块引用
+       setSyncedPaste(null);
+       await persistEditorNow();
+     } catch (err) {
+@@ -4985,15 +5030,112 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     if (!container || readOnly) return;
+ 
+     const handlePaste = (e: ClipboardEvent) => {
+-      const pending = getPendingSyncedPaste();
++      // Same form-field guard as handleCopy: FindReplacePanel/ slash-menu /
++      // link-toolbar inputs must receive paste directly. Otherwise, when the
++      // clipboard happens to carry our custom akmd MIME (from any prior
++      // in-editor copy), this handler would call preventDefault() +
++      // stopImmediatePropagation() and paste the blocks into the document
++      // instead of the input the user is focused on.
++      const pasteTargetEl = e.target as HTMLElement | null;
++      if (pasteTargetEl && (pasteTargetEl.tagName === 'INPUT' || pasteTargetEl.tagName === 'TEXTAREA')) {
++        return;
++      }
++
+       const { spaceSlug, pageId } = identityRef.current;
+-      if (pending && pending.sourceSpaceSlug === spaceSlug && pending.sourcePageId !== pageId) {
++      const payload = readAkmdClipboard(e);
++
++      // 命中自定义 MIME：来自我们自己的复制
++      if (payload) {
++        // 跨页 + 候选同步块 → 弹框让用户选择
++        if (
++          payload.isSyncedCandidate &&
++          payload.sourceSpaceSlug === spaceSlug &&
++          payload.sourcePageId !== pageId
++        ) {
++          e.preventDefault();
++          e.stopImmediatePropagation();
++          setSyncedPaste(payload);
++          return;
++        }
++
++        // 其他情况：作为内部 block 粘贴
+         e.preventDefault();
+-        e.stopPropagation();
+-        setSyncedPaste(pending);
++        e.stopImmediatePropagation();
++
++        // 块选择模式：先移除选中块
++        const selectedIds = getSelectedBlockIds();
++        if (selectedIds.length > 0) {
++          removeBlocksEnhanced(editor, selectedIds.map(id => ({ id } as any)));
++          setBlockSelection(null);
++        }
++
++        const currentBlock = editor.getTextCursorPosition().block;
++
++        (async () => {
++          const { spaceSlug: currentSpaceSlug, pageId: currentPageId } = identityRef.current;
++          let pasteBlocks = JSON.parse(JSON.stringify(payload.blocks));
++          let mirrorRegistrations: SyncedMirrorRegistration[] = [];
++          if (!payload.isCut && (!payload.sourceSpaceSlug || payload.sourceSpaceSlug === currentSpaceSlug)) {
++            const prepared = prepareCopiedBlocksForPaste(
++              pasteBlocks,
++              payload.sourcePageId || currentPageId,
++              currentPageId,
++            );
++            pasteBlocks = prepared.blocks;
++            mirrorRegistrations = prepared.mirrorRegistrations;
++          }
++
++          // 非剪切：duplicate subpage pages，避免多个粘贴共享同一 page
++          if (!payload.isCut) {
++            const subpageBlocks = pasteBlocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
++            for (const block of subpageBlocks) {
++              try {
++                const newPage = await pagesApi.duplicate(currentSpaceSlug, block.props.pageId, currentPageId);
++                block.props.pageId = newPage.id;
++              } catch (err) {
++                console.error('[PageEditor] Failed to duplicate subpage:', err);
++              }
++            }
++          }
++
++          // 当前 block 为空时替换，否则在后面插入
++          const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
++
++          // 剥离 block id，让 BlockNote 创建新的
++          const blocksToInsert = pasteBlocks.map((b: any) => {
++            const { id, ...rest } = b;
++            return rest;
++          });
++          if (isEmpty) {
++            editor.replaceBlocks([currentBlock], blocksToInsert as any);
++          } else {
++            editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
++          }
++          editor.focus();
++
++          // 记录 subpage 撤销动作
++          for (const block of pasteBlocks) {
++            if (block.type === 'subpage' && block.props?.pageId) {
++              setSubpageUndoAction(block.props.pageId, { action: 'delete' });
++            }
++          }
++
++          if (mirrorRegistrations.length > 0) {
++            await registerSyncedMirrorQuotes(currentSpaceSlug, mirrorRegistrations);
++          }
++
++          // 立即保存，让 backend maintainSubpageBlocks 在 sidebar 刷新前修正 sort_order
++          await persistFileContentBlocks(editor.document, currentSpaceSlug);
++          const markdown = blocksToMarkdown(editor.document);
++          await createMirror(currentSpaceSlug, currentPageId, markdown);
++          hasChangesRef.current = false;
++          await flushSync();
++          await useSpaceStore.getState().refreshAll();
++        })();
+         return;
+       }
+ 
++      // 没有自定义 MIME：fallback 到 text/plain 处理（外部复制 / 跨浏览器 / 老数据）
+       const text = e.clipboardData?.getData('text/plain')?.trim();
+       if (!text) return;
+ 
+@@ -5212,6 +5354,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       // 注意：本 handler 注册在 capture 阶段，会先于 React 合成事件，
+       // 不放行的话会拦截掉标题的 Cmd+A / Enter 等。
+       const targetEl = e.target as HTMLElement | null;
++      // 表单字段（FindReplacePanel 搜索/替换 input、slash 菜单搜索框、
++      // 链接工具栏 input 等）虽然渲染在编辑器容器内，但不是 BlockNote
++      // 正文。必须放行让 input 自己处理 Cmd+C/Cmd+V/Enter 等，否则会被
++      // 下面的"复制选中块"等分支提前 preventDefault + stopImmediatePropagation
++      // 拦走（典型表现：搜索框 Cmd+C 复制的是编辑器里的块、Cmd+V 把块
++      // 粘贴到文档而不是 input）。
++      if (targetEl && (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA')) {
++        return;
++      }
+       const selectedIdsAtStart = getSelectedBlockIds();
+       const targetInsideEditor = !!targetEl?.closest('[data-page-editor="true"]');
+       const targetInsideSideMenu = !!targetEl?.closest('.bn-side-menu, [data-floating-ui-focusable]');
+@@ -5325,22 +5476,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         const selectedBlocks = JSON.parse(JSON.stringify(blocksForIds(editor, ids)));
+         if (selectedBlocks.length === 0) return;
+         const markdown = blocksToMarkdown(selectedBlocks as any);
+-        const { spaceSlug, pageId } = identityRef.current;
+-        setClipboardData(selectedBlocks, markdown, isCut, { spaceSlug, pageId });
+-        if (!isCut && !hasSyncedBlock(selectedBlocks)) {
+-          setPendingSyncedPaste({
+-            sourceSpaceSlug: spaceSlug,
+-            sourcePageId: pageId,
+-            sourceBlockIds: selectedBlocks.map((b: any) => b.id),
+-            sourceMarkdown: markdown,
+-            blocks: selectedBlocks,
+-          });
+-        } else {
+-          clearPendingSyncedPaste();
++        // 产出 HTML 片段写入 text/html，Notion 等外部应用优先读 text/html 才能识别块结构
++        let html = '';
++        try {
++          html = editor.blocksToHTMLLossy(selectedBlocks) || '';
++        } catch (err) {
++          console.warn('[clipboard] blocksToHTMLLossy failed:', err);
+         }
++        const { spaceSlug, pageId } = identityRef.current;
+ 
+-        // Also write to system clipboard for external paste
+-        navigator.clipboard.writeText(markdown).catch(() => {});
++        // 一次性写入系统剪贴板：自定义 MIME（结构化）+ text/html（外部富文本）+ text/plain（markdown 兼容）
++        // isSyncedCandidate 决定跨页粘贴时是否弹"创建同步块"选择框
++        void writeAkmdClipboard({
++          blocks: selectedBlocks,
++          markdown,
++          html,
++          isCut,
++          sourceSpaceSlug: spaceSlug,
++          sourcePageId: pageId,
++          sourceBlockIds: selectedBlocks.map((b: any) => b.id),
++          sourceMarkdown: markdown,
++          isSyncedCandidate: !isCut && !hasSyncedBlock(selectedBlocks),
++        });
+ 
+         if (isCut) {
+           // Cut: delete selected blocks after copying
+@@ -5353,93 +5510,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         return;
+       }
+ 
+-      // Cmd+V: paste blocks from internal clipboard
+-      if (e.key === 'v' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+-        const pending = getPendingSyncedPaste();
+-        const { spaceSlug, pageId } = identityRef.current;
+-        if (pending && pending.sourceSpaceSlug === spaceSlug && pending.sourcePageId !== pageId) {
+-          return;
+-        }
+-        const clipData = getClipboardData();
+-        if (!clipData) return; // No internal clipboard data — let BlockNote handle normal paste
+-
+-        e.preventDefault();
+-        e.stopImmediatePropagation();
+-
+-        const ids = getSelectedBlockIds();
+-        if (ids.length > 0) {
+-          // Block selection mode: replace selected blocks with clipboard content
+-          removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+-          updateSelection([]);
+-        }
+-
+-        // Insert clipboard blocks at cursor position
+-        const currentBlock = editor.getTextCursorPosition().block;
+-
+-        // Handle async: duplicate subpage pages for copy, then insert blocks
+-        (async () => {
+-          const { spaceSlug, pageId: currentPageId } = identityRef.current;
+-          let pasteBlocks = JSON.parse(JSON.stringify(clipData.blocks));
+-          let mirrorRegistrations: SyncedMirrorRegistration[] = [];
+-          if (!clipData.isCut && (!clipData.sourceSpaceSlug || clipData.sourceSpaceSlug === spaceSlug)) {
+-            const prepared = prepareCopiedBlocksForPaste(
+-              pasteBlocks,
+-              clipData.sourcePageId || currentPageId,
+-              currentPageId,
+-            );
+-            pasteBlocks = prepared.blocks;
+-            mirrorRegistrations = prepared.mirrorRegistrations;
+-          }
+-
+-          // For copy (not cut): duplicate subpage pages so paste doesn't share the same page
+-          if (!clipData.isCut) {
+-            const subpageBlocks = pasteBlocks.filter((b: any) => b.type === 'subpage' && b.props?.pageId);
+-            for (const block of subpageBlocks) {
+-              try {
+-                const newPage = await pagesApi.duplicate(spaceSlug, block.props.pageId, currentPageId);
+-                block.props.pageId = newPage.id;
+-              } catch (err) {
+-                console.error('[PageEditor] Failed to duplicate subpage:', err);
+-              }
+-            }
+-          }
+-
+-          // If current block is empty, replace it instead of inserting after it
+-          const isEmpty = !currentBlock.content || (Array.isArray(currentBlock.content) && currentBlock.content.length === 0);
+-
+-          // Strip block IDs so BlockNote creates fresh ones
+-          const blocksToInsert = pasteBlocks.map((b: any) => {
+-            const { id, ...rest } = b;
+-            return rest;
+-          });
+-          if (isEmpty) {
+-            editor.replaceBlocks([currentBlock], blocksToInsert as any);
+-          } else {
+-            editor.insertBlocks(blocksToInsert as any, currentBlock, 'after');
+-          }
+-          editor.focus();
+-
+-          // Record undo actions for pasted subpage blocks (undo should delete them)
+-          for (const block of pasteBlocks) {
+-            if (block.type === 'subpage' && block.props?.pageId) {
+-              setSubpageUndoAction(block.props.pageId, { action: 'delete' });
+-            }
+-          }
+-
+-          if (mirrorRegistrations.length > 0) {
+-            await registerSyncedMirrorQuotes(spaceSlug, mirrorRegistrations);
+-          }
+-
+-          // Save immediately so backend maintainSubpageBlocks can fix sort_order before sidebar refresh
+-          await persistFileContentBlocks(editor.document, spaceSlug);
+-          const markdown = blocksToMarkdown(editor.document);
+-          await createMirror(spaceSlug, currentPageId, markdown);
+-          hasChangesRef.current = false;
+-          await flushSync();
+-          await useSpaceStore.getState().refreshAll();
+-        })();
+-        return;
+-      }
++      // Cmd+V 的 paste 处理已全部迁移到 paste 事件 handler（capture 阶段）
++      // 见上面的 handlePaste，统一通过系统剪贴板读取数据
+ 
+       // Delete 在文本 block 末尾时的"向前合并"修正：
+       // BlockNote 默认调用 ProseMirror deleteForward，遇到下一个 atom 类 block
+@@ -5501,6 +5573,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+               e.preventDefault();
+               e.stopImmediatePropagation();
+               const nextFocusId = syncChildTarget.focusBlock?.id;
++              console.log(`[delete.fire] path=syncChild ids=[${ids.join(',')}] nextFocusId=${nextFocusId || ''}`);
+               removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+               updateSelection([]);
+               setBlockSelection(null);
+@@ -5519,6 +5592,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+           }
+           e.preventDefault();
+           e.stopImmediatePropagation();
++          console.log(`[delete.fire] path=generic ids=[${ids.join(',')}]`);
+           removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+           updateSelection([]);
+           // Clean up: blur focused buttons and dismiss floating menus
+@@ -5814,6 +5888,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       } else {
+         finalIds = result;
+       }
++      console.log(`[dragSelect] intersecting=[${intersecting.join(',')}] forced=[${Array.from(forcedSyncedBlockIds).join(',')}] normalized=[${result.join(',')}] final=[${finalIds.join(',')}]`);
+       updateSelection(finalIds);
+     };
+ 
+@@ -6912,17 +6987,37 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     };
+   }, [readOnly, handleClickBelow, findBlockByY, isInputBlock, findNearestInputBlock, editor]);
+ 
++  // Register a lightweight flush function for the router guard (useBlocker
++  // in PageViewPage). When the user navigates away from this page, the
++  // guard awaits this function before allowing the route change. The flush
++  // writes ONLY the IndexedDB mirror (fast, ~5-50ms) — HTTP uploads and
++  // server refreshes stay in the background so switches stay snappy.
++  // On success it clears hasChangesRef so the unmount cleanup below won't
++  // write a duplicate mirror.
++  useEffect(() => {
++    useEditorFlushStore.getState().setFlushFn(async () => {
++      if (!hasChangesRef.current || readOnlyRef.current) return;
++      const { spaceSlug, pageId } = identityRef.current;
++      const markdown = blocksToMarkdown(editor.document);
++      await createMirror(spaceSlug, pageId, markdown);
++      hasChangesRef.current = false;
++    });
++    return () => {
++      useEditorFlushStore.getState().setFlushFn(null);
++    };
++  }, [editor]);
++
+   // Unmount: write final mirror if there are unsaved changes
+   useEffect(() => {
+     return () => {
+       if (saveTimeoutRef.current) {
+         clearTimeout(saveTimeoutRef.current);
+       }
++      const { spaceSlug, pageId } = identityRef.current;
+       if (hasChangesRef.current && !readOnlyRef.current) {
+         try {
+           const currentBlocks = editor.document;
+           const markdown = blocksToMarkdown(currentBlocks);
+-          const { spaceSlug, pageId } = identityRef.current;
+           createMirror(spaceSlug, pageId, markdown);
+         } catch (error) {
+           console.error('Failed to create mirror on unmount:', error);
+diff --git a/frontend/src/components/Editor/SyncedBlock.tsx b/frontend/src/components/Editor/SyncedBlock.tsx
+index 24ad37e..5bee5ab 100644
+--- a/frontend/src/components/Editor/SyncedBlock.tsx
++++ b/frontend/src/components/Editor/SyncedBlock.tsx
+@@ -13,6 +13,20 @@ export async function flushPendingSyncedBlockSaves() {
+   await Promise.all(saves.map((save) => save()));
+ }
+ 
++// 模块级 hydrate 抑制标志：mirror 的 load() 调 updateBlock 期间，
++// 通过计数器告知 PageEditor 这次变更是系统 hydrate 触发，不应视为用户编辑。
++// 用计数器而非布尔，支持同页多 mirror 并发 hydrate。
++let pageChangeSuppressCount = 0;
++export function beginPageChangeSuppress() {
++  pageChangeSuppressCount += 1;
++}
++export function endPageChangeSuppress() {
++  pageChangeSuppressCount = Math.max(0, pageChangeSuppressCount - 1);
++}
++export function isPageChangeSuppressed() {
++  return pageChangeSuppressCount > 0;
++}
++
+ function shortId(id: string | undefined) {
+   return id ? id.slice(0, 8) : '未设置';
+ }
+@@ -64,21 +78,28 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+   const blockChildrenKey = useMemo(() => JSON.stringify(block.children || []), [block.children]);
+   const registryKey = `${sourcePageId}:${sourceBlockId}:${syncId}`;
+ 
++  const markBroken = () => {
++    suppressChangeRef.current = true;
++    beginPageChangeSuppress();
++    try {
++      outerEditor.updateBlock(block.id, {
++        props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
++      } as any);
++    } catch {
++      // If the block disappeared while updating, there is nothing to mark.
++    }
++    pendingSyncedBlockSaves.delete(registryKey);
++    requestAnimationFrame(() => {
++      suppressChangeRef.current = false;
++      loadedRef.current = false;
++      endPageChangeSuppress();
++    });
++    setState('broken');
++  };
++
+   const load = () => {
+     if (!slug || !sourcePageId || !sourceBlockId) {
+-      suppressChangeRef.current = true;
+-      try {
+-        outerEditor.updateBlock(block.id, {
+-          props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
+-        } as any);
+-      } catch {
+-        // If the block disappeared while loading, there is nothing to mark.
+-      }
+-      requestAnimationFrame(() => {
+-        suppressChangeRef.current = false;
+-        loadedRef.current = false;
+-      });
+-      setState('broken');
++      markBroken();
+       return;
+     }
+     setState('loading');
+@@ -86,6 +107,7 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+       .then((data) => {
+         const blocks = markdownToBlocks(data.markdown);
+         suppressChangeRef.current = true;
++        beginPageChangeSuppress();
+         outerEditor.updateBlock(block.id, {
+           props: { ...block.props, syncLoaded: 'true', syncBroken: 'false' },
+           children: blocks,
+@@ -93,29 +115,22 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+         requestAnimationFrame(() => {
+           suppressChangeRef.current = false;
+           loadedRef.current = true;
++          endPageChangeSuppress();
+         });
+         setSourceTitle(data.sourceTitle || '');
+         setState('live');
+         syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
+           markdown: data.markdown,
+           addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
+-        }).catch(() => {});
++        }).catch((err) => {
++          if (err?.response?.status === 404) {
++            markBroken();
++          }
++        });
+       })
+       .catch((err) => {
+         if (err?.response?.status === 404) {
+-          suppressChangeRef.current = true;
+-          try {
+-            outerEditor.updateBlock(block.id, {
+-              props: { ...block.props, syncLoaded: 'false', syncBroken: 'true' },
+-            } as any);
+-          } catch {
+-            // If the block disappeared while loading, there is nothing to mark.
+-          }
+-          requestAnimationFrame(() => {
+-            suppressChangeRef.current = false;
+-            loadedRef.current = false;
+-          });
+-          setState('broken');
++          markBroken();
+         } else {
+           setState('error');
+         }
+@@ -150,10 +165,18 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+           return;
+         }
+         const markdown = blocksToMarkdown(children as any[]);
+-        await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
+-          markdown,
+-          addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
+-        });
++        try {
++          await syncedBlocksApi.update(slug, sourcePageId, sourceBlockId, {
++            markdown,
++            addQuoted: [{ pageId: currentPageId, syncId }].filter((q) => q.pageId && q.syncId),
++          });
++        } catch (err: any) {
++          if (err?.response?.status === 404) {
++            markBroken();
++            return;
++          }
++          throw err;
++        }
+         pendingSyncedBlockSaves.delete(registryKey);
+         setState('saved');
+       })();
+@@ -173,6 +196,30 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [blockChildrenKey]);
+ 
++  // mirror 的 children 被全部删除时，补一个空段落占位，保持视觉可见
++  // （与刷新后状态一致）。补段落后 blockChildrenKey 变化，自动保存会把空内容推到源。
++  useEffect(() => {
++    if (!loadedRef.current || suppressChangeRef.current) return;
++    if (state === 'loading' || state === 'broken') return;
++    const children = block.children || [];
++    if (children.length === 0) {
++      suppressChangeRef.current = true;
++      beginPageChangeSuppress();
++      try {
++        outerEditor.updateBlock(block.id, {
++          children: [{ type: 'paragraph', content: [{ type: 'text', text: '', styles: {} }] }],
++        } as any);
++      } catch {
++        // block may have been removed
++      }
++      requestAnimationFrame(() => {
++        suppressChangeRef.current = false;
++        endPageChangeSuppress();
++      });
++    }
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [blockChildrenKey]);
++
+   const statusText = {
+     loading: '加载中',
+     live: '已连接',
+diff --git a/frontend/src/components/Editor/blockClipboardState.ts b/frontend/src/components/Editor/blockClipboardState.ts
+index 3e84cce..fc21c1e 100644
+--- a/frontend/src/components/Editor/blockClipboardState.ts
++++ b/frontend/src/components/Editor/blockClipboardState.ts
+@@ -1,73 +1,135 @@
+ /**
+- * Module-level clipboard state for cross-document block copy/paste.
+- * Persists across SPA page navigations (React Router).
++ * Clipboard state module.
++ *
++ * 设计：所有剪贴板数据存放在系统剪贴板的三个 representation 中：
++ *   - text/html：BlockNote 产出的 HTML + 嵌入的结构化 JSON（藏在 hidden div 的 data 属性里）
++ *   - text/plain：标准 markdown 纯文本（兼容只读 text/plain 的应用）
++ *   - web text/akmd-clipboard：同样的 JSON（兜底，Chrome 现版本 paste 事件不暴露此 MIME，但写进去无害）
++ *
++ * paste 事件从 text/html 里提取 embedded JSON；提取不到则 fallback 到 BlockNote 默认解析。
++ *
++ * 为什么不用 web text/akmd-clipboard 单独承载？
++ *   Chrome 的 ClipboardItem.write() 接受 web custom format，但 paste 事件的 clipboardData
++ *   只暴露 text/plain 和 text/html，自定义 MIME 被丢弃。所以必须把 JSON 嵌到 text/html 里。
+  */
+ 
+-let clipboardBlocks: any[] | null = null;
+-let clipboardMarkdown: string | null = null;
+-let clipboardIsCut = false;
+-let clipboardSourceSpaceSlug = '';
+-let clipboardSourcePageId = '';
++// ClipboardItem.write() 只接受 text/plain、text/html、image/png、image/svg+xml
++// 以及 Web Custom Formats（"web <type>/<name>"）。
++export const AKMD_CLIPBOARD_MIME = 'web text/akmd-clipboard';
+ 
+-export type PendingSyncedPaste = {
++// 嵌入 text/html 的 JSON 载体：<div data-akmd-clipboard="ENCODED_JSON" hidden></div>
++// 外部应用会忽略这个空 div，我们自己 paste 时用正则提取。
++const AKMD_HTML_MARKER_ATTR = 'data-akmd-clipboard';
++
++export type ClipboardPayload = {
++  v: 1;
++  /** 完整 block 结构数组（用于内部粘贴，避免再次解析 markdown） */
++  blocks: any[];
++  /** blocks 序列化后的 markdown（同时作为 text/plain 写入系统剪贴板） */
++  markdown: string;
++  /** blocks 序列化后的 HTML 片段（作为 text/html 写入系统剪贴板，供 Notion 等外部应用识别块结构） */
++  html?: string;
++  /** 是否为剪切操作 */
++  isCut: boolean;
++  /** 来源 space slug */
+   sourceSpaceSlug: string;
++  /** 来源 page id */
+   sourcePageId: string;
++  /** 来源 block id 列表 */
+   sourceBlockIds: string[];
++  /** 同步块 wrap 用的原始 markdown */
+   sourceMarkdown: string;
+-  blocks: any[];
++  /** 是否候选"创建同步块"弹框（非剪切、且不含已有 syncedBlock） */
++  isSyncedCandidate: boolean;
++  /** 写入时间戳，用于 TTL 校验 */
+   createdAt: number;
+ };
+ 
+-let pendingSyncedPaste: PendingSyncedPaste | null = null;
+-const PENDING_SYNCED_PASTE_TTL_MS = 5 * 60 * 1000;
+-
+-export function setClipboardData(
+-  blocks: any[],
+-  markdown: string,
+-  isCut: boolean,
+-  source?: { spaceSlug: string; pageId: string },
+-): void {
+-  clipboardBlocks = blocks;
+-  clipboardMarkdown = markdown;
+-  clipboardIsCut = isCut;
+-  clipboardSourceSpaceSlug = source?.spaceSlug || '';
+-  clipboardSourcePageId = source?.pageId || '';
+-}
++const TTL_MS = 5 * 60 * 1000;
+ 
+-export function getClipboardData(): { blocks: any[]; markdown: string; isCut: boolean; sourceSpaceSlug: string; sourcePageId: string } | null {
+-  if (!clipboardBlocks || clipboardBlocks.length === 0) return null;
+-  return {
+-    blocks: clipboardBlocks,
+-    markdown: clipboardMarkdown!,
+-    isCut: clipboardIsCut,
+-    sourceSpaceSlug: clipboardSourceSpaceSlug,
+-    sourcePageId: clipboardSourcePageId,
+-  };
+-}
++/**
++ * 将 payload 写入系统剪贴板：
++ *   - 优先尝试 ClipboardItem 多 MIME 写入（text/html 含嵌入 JSON + text/plain + web custom format 兜底）
++ *   - 失败时 fallback 到 writeText（仅 text/plain）
++ */
++export async function writeAkmdClipboard(
++  payload: Omit<ClipboardPayload, 'v' | 'createdAt'>,
++): Promise<void> {
++  const full: ClipboardPayload = { ...payload, v: 1, createdAt: Date.now() };
++  const json = JSON.stringify(full);
++  const jsonEncoded = encodeURIComponent(json);
++
++  // 把 JSON 嵌入 HTML 开头的 hidden div——外部应用忽略空 div，我们自己用正则提取。
++  // 即使 payload.html 为空（例如 syncedBlockSource/Mirror 这类自定义 block，
++  // BlockNote 的 blocksToHTMLLossy 不认得、返回空串），也要写 text/html，
++  // 否则 JSON 没有载体，paste 端读不到 payload。
++  const htmlWithMarker = `<div ${AKMD_HTML_MARKER_ATTR}="${jsonEncoded}" aria-hidden="true" hidden></div>${payload.html ? '\n' + payload.html : ''}`;
++
++  try {
++    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
++      const items: Record<string, Blob> = {
++        [AKMD_CLIPBOARD_MIME]: new Blob([json], { type: AKMD_CLIPBOARD_MIME }),
++        'text/plain': new Blob([payload.markdown], { type: 'text/plain' }),
++        'text/html': new Blob([htmlWithMarker], { type: 'text/html' }),
++      };
++      await navigator.clipboard.write([new ClipboardItem(items)]);
++      return;
++    }
++  } catch (err) {
++    console.warn('[clipboard] ClipboardItem write failed, falling back to text/plain:', err);
++  }
+ 
+-export function clearClipboardData(): void {
+-  clipboardBlocks = null;
+-  clipboardMarkdown = null;
+-  clipboardIsCut = false;
+-  clipboardSourceSpaceSlug = '';
+-  clipboardSourcePageId = '';
++  try {
++    await navigator.clipboard.writeText(payload.markdown);
++  } catch (err) {
++    console.warn('[clipboard] writeText fallback also failed:', err);
++  }
+ }
+ 
+-export function setPendingSyncedPaste(data: Omit<PendingSyncedPaste, 'createdAt'>): void {
+-  pendingSyncedPaste = { ...data, createdAt: Date.now() };
+-}
++/**
++ * 从 paste 事件读取 payload。
++ * 优先尝试 web text/akmd-clipboard（未来浏览器支持时直接生效）；
++ * 拿不到则从 text/html 里提取嵌入的 JSON。
++ * 校验版本号、TTL、blocks 非空，任一不满足返回 null（调用方走 fallback）。
++ */
++export function readAkmdClipboard(e: ClipboardEvent): ClipboardPayload | null {
++  const data = e.clipboardData;
++  if (!data) return null;
+ 
+-export function getPendingSyncedPaste(): PendingSyncedPaste | null {
+-  if (!pendingSyncedPaste) return null;
+-  if (Date.now() - pendingSyncedPaste.createdAt > PENDING_SYNCED_PASTE_TTL_MS) {
+-    pendingSyncedPaste = null;
+-    return null;
++  let json = '';
++
++  // 路径 1：web custom format（Chrome 现版本不暴露，但保留兼容未来）
++  try {
++    json = data.getData(AKMD_CLIPBOARD_MIME) || '';
++  } catch {
++    // ignore
+   }
+-  return pendingSyncedPaste;
+-}
+ 
+-export function clearPendingSyncedPaste(): void {
+-  pendingSyncedPaste = null;
++  // 路径 2：从 text/html 提取嵌入的 JSON
++  if (!json) {
++    const html = data.getData('text/html') || '';
++    if (!html) return null;
++    const match = html.match(/data-akmd-clipboard="([^"]*)"/);
++    if (!match) return null;
++    try {
++      json = decodeURIComponent(match[1]);
++    } catch {
++      return null;
++    }
++  }
++
++  if (!json) return null;
++
++  try {
++    const parsed = JSON.parse(json) as ClipboardPayload;
++    if (parsed.v !== 1) return null;
++    if (typeof parsed.createdAt !== 'number') return null;
++    if (Date.now() - parsed.createdAt > TTL_MS) return null;
++    if (!Array.isArray(parsed.blocks) || parsed.blocks.length === 0) return null;
++    return parsed;
++  } catch {
++    return null;
++  }
+ }
+ 
+ /**
+diff --git a/frontend/src/components/Editor/findReplace.css b/frontend/src/components/Editor/findReplace.css
+index 1323af2..a25ef40 100644
+--- a/frontend/src/components/Editor/findReplace.css
++++ b/frontend/src/components/Editor/findReplace.css
+@@ -4,11 +4,11 @@
+  */
+ 
+ .find-match {
+-  background: rgba(255, 213, 79, 0.5);
++  background: rgba(255, 213, 79, 0.3);
+   border-radius: 2px;
+ }
+ 
+ .find-match-current {
+-  background: #ffe664;
++  background: #ffc400;
+   border-radius: 2px;
+ }
+diff --git a/frontend/src/components/Sidebar/PageTreeItem.tsx b/frontend/src/components/Sidebar/PageTreeItem.tsx
+index 878ea3c..95fbfc2 100644
+--- a/frontend/src/components/Sidebar/PageTreeItem.tsx
++++ b/frontend/src/components/Sidebar/PageTreeItem.tsx
+@@ -268,6 +268,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
+       <div
+         {...dragHandleProps}
+         data-page-row
++        onClick={handleClick}
+         className={`w-full flex items-center h-[30px] rounded-md transition-colors text-left group ${
+           isDragging ? 'opacity-40' : ''
+         } ${
+@@ -296,7 +297,6 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
+ 
+         {/* Title */}
+         <span
+-          onClick={handleClick}
+           className={`text-sm font-medium truncate flex-1 cursor-pointer ${isActive ? 'text-notion-text' : 'text-notion-sidebarText'}`}
+         >
+           {page.title || '未命名页面'}
+@@ -304,7 +304,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
+ 
+         {/* More menu button */}
+         <button
+-          onClick={openMenu}
++          onClick={(e) => { e.stopPropagation(); openMenu(e); }}
+           className="flex items-center justify-center w-5 h-5 hover:bg-notion-border rounded transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+         >
+           <MoreHorizontal className="w-4 h-4 text-[#8e8b86]" />
+diff --git a/frontend/src/styles/globals.css b/frontend/src/styles/globals.css
+index e443829..f4dea12 100644
+--- a/frontend/src/styles/globals.css
++++ b/frontend/src/styles/globals.css
+@@ -3558,10 +3558,10 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ }
+ 
+ .sync-dialog {
+-  width: min(440px, calc(100vw - 32px));
++  width: min(560px, calc(100vw - 32px));
+   border-radius: 8px;
+-  background: #fffdf7;
+-  border: 1px solid rgba(150, 111, 28, 0.28);
++  background: #fff;
++  border: 1px solid rgba(55, 53, 47, 0.14);
+   box-shadow: 0 16px 40px rgba(15, 15, 15, 0.18);
+   padding: 14px;
+ }
+@@ -3571,7 +3571,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   align-items: center;
+   gap: 8px;
+   font-weight: 600;
+-  color: #3b321d;
++  color: #37352f;
+ }
+ 
+ .sync-dialog-body {
+@@ -3621,7 +3621,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+ }
+ 
+ .sync-delete-options {
+-  display: grid;
++  display: flex;
+   gap: 8px;
+   margin-top: 14px;
+ }
+@@ -3631,19 +3631,29 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   flex-direction: column;
+   align-items: flex-start;
+   gap: 3px;
+-  padding: 10px;
+-  background: #fbf1cf;
+-  color: #3b321d;
++  flex: 1 1 0;
++  min-width: 0;
++  padding: 9px 10px;
++  background: #fff;
++  border: 1px solid rgba(55, 53, 47, 0.16);
++  color: #37352f;
+   text-align: left;
+ }
+ 
+ .sync-delete-options button:hover {
+-  background: #f7e6b3;
++  background: rgba(55, 53, 47, 0.06);
+ }
+ 
+ .sync-delete-options span {
+   color: rgba(55, 53, 47, 0.64);
+   font-size: 12px;
++  line-height: 16px;
++}
++
++@media (max-width: 520px) {
++  .sync-delete-options {
++    flex-direction: column;
++  }
+ }
+ 
+ .bn-file-content-block {
+diff --git a/frontend/src/utils/markdown.ts b/frontend/src/utils/markdown.ts
+index 4b81d2a..88a5515 100644
+--- a/frontend/src/utils/markdown.ts
++++ b/frontend/src/utils/markdown.ts
+@@ -915,7 +915,11 @@ function parseInlineFormatting(text: string): any[] {
+  * Convert BlockNote blocks to markdown
+  */
+ export function blocksToMarkdown(blocks: any[]): string {
+-  return blocks.map(block => serializeBlock(block)).join('\n');
++  // 用 '\n\n' 拼接符合标准 markdown 段落分隔。
++  // 之前用单 '\n' 会让外部消费者（Notion、BlockNote 默认 paste handler 等）
++  // 把多个 paragraph 当成同一段内的软换行，从而塌成 1 个 block。
++  // markdownToBlocks 解析时空行被跳过，对单 '\n' 和 '\n\n' 都兼容，无回环风险。
++  return blocks.map(block => serializeBlock(block)).join('\n\n');
+ }
+ 
+ /**

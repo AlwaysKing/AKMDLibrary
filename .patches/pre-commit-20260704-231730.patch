@@ -1,0 +1,3059 @@
+diff --git a/Dockerfile b/Dockerfile
+index 7387f4e..f0670ee 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -26,15 +26,26 @@ COPY backend/ ./
+ RUN CGO_ENABLED=1 GOOS=linux go build -o akmdlibrary ./cmd/server
+ 
+ # Stage 3: Runtime
+-FROM alpine:3.20
++FROM debian:12-slim
+ 
+ # ca-certificates: TLS for HTTPS git remotes / API calls
+ # tzdata: localized timestamps
+-# git: per-space git operations (commit/push/pull)
++# git: per-space git operations (commit/push/pull) + claude 内部使用
++# ripgrep: claude Grep 工具依赖 rg
+ # openssh-client: ssh binary for git over SSH remotes
+-RUN apk add --no-cache ca-certificates tzdata git openssh-client
+-
+-# TODO: install Claude Code CLI (e.g., npm install -g @anthropic/claude-code) once Node.js runtime is added
++# curl: claude install.sh 下载器
++# bash: entrypoint.sh + claude 安装脚本
++# procps: pkill 等，进程管理
++RUN apt-get update && apt-get install -y --no-install-recommends \
++        ca-certificates \
++        tzdata \
++        git \
++        ripgrep \
++        openssh-client \
++        curl \
++        bash \
++        procps \
++    && rm -rf /var/lib/apt/lists/*
+ 
+ # Per-space repos are bind-mounted from the host and typically owned by a
+ # different UID than the container process. Since git 2.35+, this triggers
+@@ -43,6 +54,20 @@ RUN apk add --no-cache ca-certificates tzdata git openssh-client
+ # know the exact repo paths ahead of time.
+ RUN git config --system --add safe.directory '*'
+ 
++# 安装 Claude Code 原生二进制（不需要 Node.js）
++# install.sh 把 launcher 放在 ~/.local/bin/claude（symlink → versions/<ver>），
++# 真实二进制和依赖都在 ~/.local/share/claude/ 下。需要整个目录树对所有用户可读，
++# 否则非 root 用户 exec 会拿到 ENOENT（root 700 权限问题）。所以用 /opt/claude 作为 HOME。
++# HOME 必须用 export 才能跨管道传给 bash。
++RUN set -eux; \
++    mkdir -p /opt/claude; \
++    export HOME=/opt/claude; \
++    curl -fsSL https://claude.ai/install.sh | bash; \
++    chmod -R a+rX /opt/claude; \
++    ls -la /opt/claude/.local/bin/claude; \
++    ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude; \
++    /usr/local/bin/claude --version
++
+ WORKDIR /app
+ 
+ COPY --from=backend-builder /app/akmdlibrary /app/akmdlibrary
+@@ -52,6 +77,15 @@ COPY --from=frontend-builder /app/frontend/dist /app/html
+ COPY entrypoint.sh /app/entrypoint.sh
+ RUN chmod +x /app/entrypoint.sh
+ 
++# Built-in CLAUDE.md: 拼接 FORMATS.md + STRUCTURE.md
++# entrypoint.sh 会把它复制到运行用户的 ~/.claude/CLAUDE.md，claude 启动时自动读取
++# 这是与 admin UI 配置（--append-system-prompt）并行的内置层
++COPY docs/FORMATS.md /tmp/claude/FORMATS.md
++COPY docs/STRUCTURE.md /tmp/claude/STRUCTURE.md
++RUN printf '\n\n---\n\n' >> /tmp/claude/FORMATS.md \
++ && cat /tmp/claude/FORMATS.md /tmp/claude/STRUCTURE.md > /app/CLAUDE.md \
++ && rm -rf /tmp/claude
++
+ # Create data and docs directories
+ RUN mkdir -p /app/docs /app/data
+ 
+diff --git a/FORMATS.md b/FORMATS.md
+deleted file mode 100644
+index a125407..0000000
+--- a/FORMATS.md
++++ /dev/null
+@@ -1,617 +0,0 @@
+-# AKMDLibrary 内容格式参考
+-
+-本文件说明 AKMDLibrary 知识库**写入 MD 文件时支持的所有格式**：YAML frontmatter、标准 Markdown 块、本项目自定义的 HTML 标签（用于表达 BlockNote 编辑器中的高级块）、行内样式、媒体引用、文件路径约定。
+-
+-面向对象：知识库内容创作者、外部编辑 MD 文件的工具与 Agent、把外部内容迁入本系统的导入脚本。
+-
+-> 本文档描述的是 **MD 文件中实际持久化的语法**（编辑器保存后落盘的格式）。BlockNote 编辑器内部把这些语法解析为可视化块；外部直接编辑 MD 文件时也必须按本规范书写，否则下次打开页面会被错误解析。
+-
+----
+-
+-## 目录
+-
+-- [一、YAML Frontmatter（页面元数据）](#一yaml-frontmatter页面元数据)
+-- [二、段落与基础块](#二段落与基础块)
+-- [三、列表类块](#三列表类块)
+-- [四、引用 / 代码 / 分隔](#四引用--代码--分隔)
+-- [五、表格（`<table-block>`）](#五表格table-block)
+-- [六、折叠块（`<toggle-h>` / `<toggle-list>`）](#六折叠块toggle-h--toggle-list)
+-- [七、多列布局（`<column-list>`）](#七多列布局column-list)
+-- [八、标记 / 高亮（`<mark>`）](#八标记--高亮mark)
+-- [九、文件内容块（`<content />`）](#九文件内容块content-)
+-- [十、页面引用 / 子页面 / 书签](#十页面引用--子页面--书签)
+-- [十一、媒体块（图片 / 视频 / 音频 / 文件）](#十一媒体块图片--视频--音频--文件)
+-- [十二、行内格式](#十二行内格式)
+-- [十三、颜色调色板](#十三颜色调色板)
+-- [十四、文件与目录路径约定](#十四文件与目录路径约定)
+-- [十五、特殊语义说明](#十五特殊语义说明)
+-
+----
+-
+-## 一、YAML Frontmatter（页面元数据）
+-
+-每个页面 MD 文件**可选**地以 YAML frontmatter 开头，用 `---` 包裹。所有字段都是可选的；省略整个 frontmatter 也是合法的。
+-
+-```markdown
+----
+-id: f5effe5f25824fa784fdddf21243f08a
+-icon: "\U0001F308"
+-cover: https://images.unsplash.com/photo-xxx.jpg
+-icon_large: false
+-cover_offset: 100
+-full_page: false
+-locked: false
+-starred: true
+----
+-
+-正文从这里开始……
+-```
+-
+-| 字段 | 类型 | 说明 |
+-|------|------|------|
+-| `id` | string (32 位 hex) | 页面 UUID，系统内部用于跨页面引用。新建页面时由后端生成，**不要手填**。 |
+-| `icon` | string | 页面图标。可以是 emoji（如 `"\U0001F308"` YAML 转义形式，或直接写 `🌈`）、`http(s)://` 图片 URL、或 `./_assets/...` 本地图标路径。 |
+-| `cover` | string | 封面图。可以是 `http(s)://` URL 或 `./_assets/...` 本地路径。 |
+-| `icon_large` | bool | 为 `true` 时图标以大尺寸渲染（页面顶部大图标模式）。 |
+-| `cover_offset` | int | 封面图的纵向偏移（像素），用于聚焦封面不同区域。 |
+-| `full_page` | bool | 为 `true` 时页面内容占满全宽（默认有最大宽度限制）。 |
+-| `locked` | bool | 为 `true` 时页面被锁定，仅管理员可编辑。 |
+-| `starred` | bool | 是否出现在收藏夹。 |
+-
+-YAML 字段必须使用下划线命名（`full_page` 而非 `fullPage`）。空 frontmatter（所有字段为零值）会在保存时被后端自动省略。
+-
+----
+-
+-## 二、段落与基础块
+-
+-| 块类型 | 语法 | 示例 |
+-|--------|------|------|
+-| 段落 | 直接写文本 | `这是一个段落。` |
+-| 空段落 | 单独一行零宽空格 `​` (U+200B) | `​` |
+-| 标题 1–4 | `# ` 到 `#### ` | `## 二级标题` |
+-| 标题 5–6 | ❌ **不支持**（被禁用，保存时不会产出） | — |
+-
+-注意：
+-
+-- **空段落必须用零宽空格 `​` 占位**。直接留空行会被解析为段落分隔符（即"没有段落"），不是空段落。
+-- 标题级别只支持 1–4。从编辑器 slash 菜单插入时也只有 1–4。
+-- 标题文本支持行内格式（粗体、链接、`<span>` 等）。
+-
+----
+-
+-## 三、列表类块
+-
+-| 块类型 | 语法 | 示例 |
+-|--------|------|------|
+-| 无序列表 | `- ` 或 `* ` 开头 | `- 苹果`<br>`* 香蕉` |
+-| 有序列表 | `数字.` 开头（保存时统一写成 `1. `） | `1. 第一步` |
+-| 待办列表 | `- [ ] ` 或 `- [x] ` | `- [x] 已完成` |
+-
+-注意：
+-
+-- 有序列表保存时会**统一写为 `1. `**（Markdown 会自动递增显示），原文件里不会保留 `2. 3. 4.` 的具体数字。
+-- 列表项内容支持行内格式。
+-- 列表不支持嵌套缩进（用子页面 / 折叠块表达层级）。
+-
+----
+-
+-## 四、引用 / 代码 / 分隔
+-
+-### 引用
+-
+-```markdown
+-> 这是一段引用
+-```
+-
+-单行 `>` 开头即为引用块。多行连续引用每行都要带 `>`。
+-
+-### 代码块
+-
+-````
+-```javascript
+-function hello() {
+-  console.log('hi');
+-}
+-```
+-````
+-
+-支持的围栏语言（保存时映射到 Shiki ID）：
+-
+-| 输入别名 | 映射为 |
+-|---------|--------|
+-| `js` / `javascript` / `mjs` / `cjs` | `javascript` |
+-| `ts` / `typescript` / `tsx` | `typescript` |
+-| `jsx` | `jsx` |
+-| `py` / `python` | `python` |
+-| `rb` / `ruby` | `ruby` |
+-| `rs` / `rust` | `rust` |
+-| `go` / `golang` | `go` |
+-| `java` | `java` |
+-| `kt` / `kotlin` | `kotlin` |
+-| `swift` | `swift` |
+-| `c` / `h` | `c` |
+-| `cpp` / `cc` / `hpp` / `c++` | `cpp` |
+-| `cs` / `csharp` / `c#` | `csharp` |
+-| `php` | `php` |
+-| `sh` / `bash` / `shell` / `zsh` | `bash` |
+-| `ps1` / `powershell` | `powershell` |
+-| `sql` | `sql` |
+-| `json` | `json` |
+-| `yaml` / `yml` | `yaml` |
+-| `toml` | `toml` |
+-| `xml` / `html` / `svg` | `xml` / `html` / `svg` |
+-| `css` / `scss` / `less` | `css` / `scss` / `less` |
+-| `md` / `markdown` | `markdown` |
+-| `objc` / `objectivec` | `objective-c` |
+-| `dockerfile` | `docker` |
+-| `tex` | `latex` |
+-| 其他 | 原样保留为自定义语言 ID |
+-
+-文件名启发式（`dockerfile` → `docker`、`makefile` → `make`）仅在文件内容块中适用，普通代码块以围栏语言为准。
+-
+-### 分隔线
+-
+-```markdown
+----
+-```
+-
+-或三个以上 `*` / `-` 连写。**注意**：`---` 紧贴段落时可能被识别为 frontmatter 边界；保留空行隔开能避免歧义。
+-
+----
+-
+-## 五、表格（`<table-block>`）
+-
+-普通 GFM pipe 表格**不支持**。所有表格必须用自定义 `<table-block>` 标签包裹，否则会被解析为普通段落。两种格式可混用：
+-
+-### 格式 A：管道格式（无合并单元格）
+-
+-```markdown
+-<table-block>
+-| 姓名 | 年龄 | 城市 |
+-| --- | --- | --- |
+-| 张三 | 28 | 北京 |
+-| 李四 | 35 | 上海 |
+-</table-block>
+-```
+-
+-- 第一行：表头。
+-- 第二行：分隔行 `| --- | --- |`。
+-- 后续行：数据。
+-
+-可选功能：
+-
+-- **列宽**（像素）：写进分隔行，`| 120 | --- | 240 |` 表示第 1 列 120px、第 3 列 240px、中间列自适应。
+-- **单元格背景色**：写在单元格文本前，`{bg:blue}文本`。颜色名见 [第十三节](#十三颜色调色板)。
+-- **转义管道符**：单元格内的 `|` 写成 `\|`。
+-
+-### 格式 B：JSON 格式（有合并单元格时使用）
+-
+-```markdown
+-<table-block>
+-{
+-  "widths": [120, null, 240],
+-  "rows": [
+-    {
+-      "cells": [
+-        { "text": "标题1", "cs": 2, "rs": 1, "bg": "default" },
+-        { "text": "标题3", "cs": 1, "rs": 1, "bg": "default" }
+-      ]
+-    }
+-  ]
+-}
+-</table-block>
+-```
+-
+-字段：
+-
+-| 字段 | 类型 | 说明 |
+-|------|------|------|
+-| `widths` | `(number \| null)[]` | 可选。每列像素宽度，`null` 表示自适应。 |
+-| `rows` | `Row[]` | 行数组。也可省略 `widths` 直接写 `[Row, Row, ...]`。 |
+-| `rows[].cells[].text` | string | 单元格文本（支持行内格式）。 |
+-| `rows[].cells[].cs` | number | colspan，默认 1。 |
+-| `rows[].cells[].rs` | number | rowspan，默认 1。 |
+-| `rows[].cells[].bg` | string | 单元格背景色，默认 `default`。 |
+-
+-**触发 JSON 格式的条件**：表格中任一单元格 `colspan > 1` 或 `rowspan > 1`，保存时自动用 JSON。无合并时优先用管道格式（人类可读性更好）。
+-
+----
+-
+-## 六、折叠块（`<toggle-h>` / `<toggle-list>`）
+-
+-### 折叠标题 `<toggle-h>`
+-
+-```markdown
+-<toggle-h level="2">
+-<title>标题文本</title>
+-<content>
+-子内容（任意块）
+-</content>
+-</toggle-h>
+-```
+-
+-- `level` 取值 1–4，对应 H1–H4 级别的折叠标题。
+-- `<title>` 必填，支持行内格式。
+-- `<content>` 必填（可空），内部递归嵌套任意块。
+-- 支持嵌套：`<content>` 内可再放 `<toggle-h>`。
+-
+-### 折叠列表项 `<toggle-list>`
+-
+-```markdown
+-<toggle-list>
+-<title>列表项标题</title>
+-<content>
+-- 子项 1
+-- 子项 2
+-</content>
+-</toggle-list>
+-```
+-
+-- 没有 level 属性。
+-- 其余规则同 `<toggle-h>`。
+-
+-注意：标签必须**独占一行**（解析器按行匹配），如 `<toggle-h level="2">` 不能与下面的 `<title>` 写在同一行。
+-
+----
+-
+-## 七、多列布局（`<column-list>`）
+-
+-```markdown
+-<column-list ratios="50,50">
+-<column ratio="50">
+-左列内容（任意块）
+-</column>
+-<column ratio="50">
+-右列内容（任意块）
+-</column>
+-</column-list>
+-```
+-
+-| 属性 | 位置 | 说明 |
+-|------|------|------|
+-| `ratios` | `<column-list>` | 逗号分隔的比例字符串（如 `"30,70"`、`"25,50,25"`）。整体省略时默认 `"50,50"`。 |
+-| `ratio` | `<column>` | 当前列的宽度比例（整数）。 |
+-
+-规则：
+-
+-- `<column-list>` 必须包裹所有 `<column>`，列数不限。
+-- 每列内部递归嵌套任意块（段落、列表、表格、折叠、嵌套列布局等都可）。
+-- 所有列都为空时，整块在保存时被自动省略。
+-- `<column>` 标签必须独占内容的边界（与 `<toggle-h>` 一样按行匹配）。
+-
+----
+-
+-## 八、标记 / 高亮（`<mark>`）
+-
+-类似 Notion 的 callout / 高亮块，渲染为带左边框和背景色的块。
+-
+-```markdown
+-<mark color="blue">
+-这是一段蓝色高亮文本，可包含**粗体**等行内格式。
+-</mark>
+-```
+-
+-```markdown
+-<mark>不带 color 属性时使用默认灰色样式</mark>
+-```
+-
+-| 属性 | 取值 | 说明 |
+-|------|------|------|
+-| `color` | 颜色名（见 [十三](#十三颜色调色板)）或 `default` | 决定文字色、背景色、左边框色。省略时等同 `default`。 |
+-
+-支持单行或跨行。跨行时开始标签和结束标签各占一行（或与文本同行也可，解析器支持两种）。
+-
+-`<mark>` 内的内容是**行内**（inline），不能放块级元素；要做带块内容的高亮框，用 `<column-list>` 单列 + `<mark>`，或用表格单格 + 背景色。
+-
+----
+-
+-## 九、文件内容块（`<content />`）
+-
+-引用当前 space 下 `_files/` 目录里的文本文件，在页面中以代码块风格显示文件内容；用户在页面里编辑该块时，**保存页面会同步写回文件**。
+-
+-### 自闭合形式（推荐）
+-
+-```markdown
+-<content file="_files/config.json" lang="json" />
+-```
+-
+-| 属性 | 说明 |
+-|------|------|
+-| `file` | 文件路径，必须以 `_files/` 开头，相对当前 space 目录。 |
+-| `lang` | 显示语言（围栏语言映射同代码块），默认 `text`。 |
+-
+-### 配对形式（仅旧版兼容）
+-
+-````markdown
+-<content file="_files/config.json" lang="json">
+-{
+-  "name": "demo"
+-}
+-</content>
+-````
+-
+-配对形式中的**正文内容会被解析器丢弃**——文件实际内容总是从 `_files/` 实时读取。这是设计上的硬约束：MD 文件本身永远不存储文件正文，避免双向同步歧义。
+-
+-规则：
+-
+-- 路径必须在 `_files/` 下（防穿越）。
+-- 文件大小限制：上传 10MB；页面加载注入 1MB，超出则块显示"加载失败"。
+-- 修改块内容 → 保存页面 → 后端把新内容写回 `_files/<path>`。
+-- 外部用 SSH 等工具改了 `_files/` 下文件 → 下次打开页面天然反映最新内容。
+-- 在编辑器内"解除引用"后，块退化为普通代码块。
+-
+----
+-
+-## 十、页面引用 / 子页面 / 书签
+-
+-这三类块用类似的"自闭合标签 + data 属性"语法。**旧版 HTML 注释语法仍可读取**（向后兼容），但保存时统一写为新版标签形式。
+-
+-### 页面引用 `<page-ref>`
+-
+-```markdown
+-<page-ref data-id="f5effe5f25824fa784fdddf21243f08a"></page-ref>
+-```
+-
+-- `data-id`：被引用页面的 32 位 hex UUID（即目标页面 frontmatter 的 `id` 字段）。
+-- 旧版：`<!-- pageref:f5effe5f25824fa784fdddf21243f08a -->`（可读取，保存时改写为新版）。
+-- 双击渲染后的页面引用块会跳转到目标页面。
+-
+-### 子页面 `<sub-page>`
+-
+-```markdown
+-<sub-page data-id="abc123..."></sub-page>
+-```
+-
+-- `data-id`：子页面的 UUID。
+-- 旧版：`<!-- subpage:UUID -->`。
+-- 与"页面引用"的区别：子页面在编辑器内插入时会**自动创建一个新页面**（成为当前页面的子页面，文件实际落在父页面同名文件夹下），并自动填入 `data-id`；页面引用则是引用**已存在**的任意页面。
+-- 子页面的物理文件由后端 `maintainSubpageBlocks` 维护，**不要手编 frontmatter 的 `id` 来伪造子页面关系**。
+-
+-### 书签 `<book-mark>`
+-
+-```markdown
+-<book-mark data-url="https://example.com/article"></book-mark>
+-```
+-
+-- `data-url`：外部 URL。
+-- 旧版：`<!-- bookmark:https://example.com/article -->`。
+-- 渲染时由后端抓取 og:title / og:description / og:image / favicon，以卡片形式显示。
+-
+-注意：以上三种标签的 UUID 长度严格 32 位 hex；写错会按普通段落处理。
+-
+----
+-
+-## 十一、媒体块（图片 / 视频 / 音频 / 文件）
+-
+-每类媒体都支持新版自定义标签（推荐）和旧版 markdown fallback（仅用于读取兼容，保存时统一改写为新版）。
+-
+-### 图片 `<image-block>`
+-
+-```markdown
+-<image-block url="./_assets/abc/def/photo.png" caption="说明文字" width="600" align="center"></image-block>
+-```
+-
+-| 属性 | 必填 | 说明 |
+-|------|------|------|
+-| `url` | ✅ | 图片地址。可以是 `http(s)://`、`./_assets/...`、`_assets/...`、`/_assets/...`。 |
+-| `caption` | | 图片说明（图题）。 |
+-| `width` | | 显示宽度（像素）。 |
+-| `align` | | 对齐方式：`left` / `center` / `right`，默认 `center`。 |
+-
+-**旧版（仅读取兼容）**：
+-
+-- `![caption](url)`
+-- `![caption](url "title-text")` —— `title` 会作为 caption
+-- `![caption](url)<!-- img:600&center -->` —— 带 width 和 align 的注释形式
+-
+-### 视频 `<video-block>`
+-
+-```markdown
+-<video-block url="./_assets/abc/def/clip.mp4" caption="演示视频" width="800" align="center"></video-block>
+-```
+-
+-属性同 `<image-block>`。**旧版**：`![caption](url)<!-- video:800&center -->`。
+-
+-### 音频 `<audio-block>`
+-
+-```markdown
+-<audio-block url="./_assets/abc/def/song.mp3" name="歌曲名" caption="副标题" preview="true"></audio-block>
+-```
+-
+-| 属性 | 必填 | 说明 |
+-|------|------|------|
+-| `url` | ✅ | 音频地址。 |
+-| `name` | | 文件名 / 主标题。 |
+-| `caption` | | 副标题 / 描述。 |
+-| `preview` | | `true` / `false`，是否显示波形预览，默认 `true`。 |
+-
+-**旧版**：`![name](url)<!-- audio:caption&true -->`。
+-
+-### 文件附件 `<file-block>`
+-
+-```markdown
+-<file-block url="./_assets/abc/def/doc.pdf" name="文档.pdf" caption="可选说明"></file-block>
+-```
+-
+-| 属性 | 必填 | 说明 |
+-|------|------|------|
+-| `url` | ✅ | 文件地址。 |
+-| `name` | | 显示文件名。 |
+-| `caption` | | 可选描述。 |
+-
+-**旧版**：`[name](url)<!-- file:caption -->`。
+-
+----
+-
+-## 十二、行内格式
+-
+-| 格式 | 语法 | 示例 |
+-|------|------|------|
+-| 粗体 | `**text**` | `**重要**` |
+-| 斜体 | `*text*` | `*强调*` |
+-| 行内代码 | `` `code` `` | `` `var x = 1` `` |
+-| 链接 | `[text](url)` | `[Google](https://google.com)` |
+-| 提及（@页面） | `[mention:UUID](UUID)`（系统内部生成，含零宽前缀） | 一般不要手写，由编辑器 @ 触发 |
+-| 颜色 / 删除线 / 下划线 | `<span text-color="..." bg-color="..." strike="true" underline="true">text</span>` | `<span text-color="red" underline="true">红字下划线</span>` |
+-
+-注意：
+-
+-- 粗体 / 斜体 / 行内代码 可以**叠加**，但嵌套顺序影响渲染（系统会按 code → bold → italic → link 的顺序嵌套）。
+-- `<span>` 的属性都是可选的，但至少要有 1 个属性才会被保留。
+-- `<span>` 内部还可以嵌套粗体 / 斜体 / 代码 / 链接，例如 `<span text-color="blue">蓝色 **粗体**</span>`。
+-- 提及链接用零宽字符前缀（U+200B U+200B）+ UUID 作为链接文本来识别；手写不推荐，应通过编辑器的 `@` 命令生成。
+-
+----
+-
+-## 十三、颜色调色板
+-
+-`<mark color>`、`<span text-color>` / `<span bg-color>`、表格单元格 `bg` 都使用同一套颜色名：
+-
+-| 颜色名 | 用途 |
+-|--------|------|
+-| `default` | 默认（普通文字色、透明背景） |
+-| `gray` | 灰 |
+-| `brown` | 棕 |
+-| `red` | 红 |
+-| `orange` | 橙 |
+-| `yellow` | 黄 |
+-| `green` | 绿 |
+-| `blue` | 蓝 |
+-| `purple` | 紫 |
+-| `pink` | 粉 |
+-
+-`<mark>` 块的渲染：每种颜色对应一套（文字色、浅背景、深左边框），由前端 CSS 固定映射，无法自定义颜色值。
+-`<span>` 的 `text-color` / `bg-color` 同样只能用上述颜色名。
+-
+----
+-
+-## 十四、文件与目录路径约定
+-
+-### 资源 `_assets/`
+-
+-每个**页面**（即每个 `.md` 文件）可以在同名文件夹的 `_assets/` 下存放图片、视频、音频、文件附件：
+-
+-```
+-docs/<space-slug>/
+-├── 我的页面.md                    ← 页面
+-├── 我的页面/                      ← 该页面的子目录（含资源）
+-│   ├── _assets/
+-│   │   └── <uuid1>/<uuid2>/photo.png
+-│   └── 子页面.md
+-└── _files/                        ← space 级共享文件池（见下）
+-```
+-
+-引用方式（媒体块的 `url` 属性）：
+-
+-- `./_assets/uuid1/uuid2/photo.png` ← 推荐（最明确）
+-- `_assets/uuid1/uuid2/photo.png`
+-- `/_assets/uuid1/uuid2/photo.png`
+-
+-三种写法都解析到同一文件。前端会自动转换为 `/api/spaces/<slug>/pages/<pageId>/assets/<path>` 调用后端。
+-
+-### 共享文件 `_files/`
+-
+-每个 **space** 在根目录下有 `_files/` 子目录作为 space 级共享文本文件池，供 `<content />` 块引用：
+-
+-```
+-docs/<space-slug>/_files/
+-├── config.json
+-├── scripts/
+-│   └── deploy.sh
+-└── notes/
+-    └── meeting.md
+-```
+-
+-`<content file="_files/...">` 路径必须以 `_files/` 开头，相对 space 目录；支持任意深度的子目录。`_files/` 下的文件可由外部工具（SSH、git 等）直接编辑，下次加载页面天然反映最新内容。
+-
+-### 忽略规则
+-
+-- 以 `.` 开头的文件和文件夹（如 `.DS_Store`、`.git/`）会被扫描器忽略。
+-- `_assets/`、`_files/` 不作为页面或 space 处理。
+-
+-### 目录 → 数据映射
+-
+-```
+-docs/                              ← Space 根目录
+-├── <space-name>/                  ← 一个 Space（= 直接子文件夹）
+-│   ├── README.md                  ← 一个 Page（= .md 文件）
+-│   ├── README/                    ← 与 .md 同名的文件夹 = 该 Page 的子页面目录
+-│   │   └── 子页面.md
+-│   ├── _assets/                   ← 资源
+-│   └── _files/                    ← 共享文件
+-└── ...
+-```
+-
+----
+-
+-## 十五、特殊语义说明
+-
+-### 空段落的零宽空格
+-
+-MD 文件中**连续空行**会被解析器视为段落分隔（即"没有段落"）。要表达"这里有一个空段落"，必须在该行写一个**零宽空格 `​` (U+200B)**：
+-
+-```markdown
+-第一段
+-
+-​
+-（上面是一个空段落）
+-第三段
+-```
+-
+-### 标签必须按行匹配
+-
+-`<toggle-h>`、`<toggle-list>`、`<column-list>`、`<column>`、`<table-block>`、`<mark>` 的开始 / 结束标签**必须独占一行**（标签前后的空白允许，但不能与其他文本同行）。这是为了与下方子内容明确分隔。例外：`<mark>` 允许与文本同行（单行形式 `<mark color="blue">文本</mark>`）。
+-
+-### HTML 属性的转义
+-
+-所有自定义标签的属性值都用双引号 `"`。属性值内的特殊字符按下表转义：
+-
+-| 原字符 | 转义为 |
+-|--------|--------|
+-| `&` | `&amp;` |
+-| `"` | `&quot;` |
+-| `<` | `&lt;` |
+-| `>` | `&gt;` |
+-
+-例如：文件名含双引号时写 `name="file &quot;v2&quot;.pdf"`。
+-
+-### BlockNote 内部 ID 与磁盘文件不直接对应
+-
+-- 页面 UUID 存在 frontmatter 的 `id` 字段，**不**出现在 .md 文件名中。
+-- 子页面关系通过"父 .md 同名文件夹"在文件系统表达，**不**通过 .md 内的 id 链。
+-- `<page-ref>` / `<sub-page>` 引用页面时只认 UUID，目标页面被改名 / 移动位置不影响引用。
+-
+-### 不支持的常见 Markdown 语法
+-
+-- ❌ GFM pipe 表格（必须用 `<table-block>` 包裹）
+-- ❌ 5/6 级标题（仅支持 1–4 级）
+-- ❌ 嵌套缩进列表（用子页面 / 折叠块表达层级）
+-- ❌ 脚注 `[^1]`
+-- ❌ 定义列表
+-- ❌ 任务列表带 emoji 自定义符号（只有 `- [ ]` / `- [x]`）
+-- ❌ 数学公式（KaTeX/MathJax 未集成）
+-- ❌ 原生 HTML（除本文档列出的自定义标签外，其他 HTML 标签按字面文本处理）
+-
+----
+-
+-## 附录：自定义标签速查表
+-
+-| 标签 | 形式 | 必填属性 | 用途 |
+-|------|------|---------|------|
+-| `<table-block>` | 配对 | — | 包裹表格（pipe 或 JSON） |
+-| `<toggle-h level="N">` | 配对 | `level` | 折叠标题 |
+-| `<toggle-list>` | 配对 | — | 折叠列表项 |
+-| `<column-list ratios="...">` | 配对 | — | 多列容器 |
+-| `<column ratio="N">` | 配对 | — | 单列 |
+-| `<mark color="...">` | 配对 / 单行 | — | 高亮块 |
+-| `<content file="..." lang="..." />` | 自闭合 | `file` | 文件内容块 |
+-| `<page-ref data-id="UUID" />` | 自闭合（成对写） | `data-id` | 页面引用 |
+-| `<sub-page data-id="UUID" />` | 自闭合（成对写） | `data-id` | 子页面 |
+-| `<book-mark data-url="URL" />` | 自闭合（成对写） | `data-url` | 书签 |
+-| `<image-block url="..." ... />` | 自闭合（成对写） | `url` | 图片 |
+-| `<video-block url="..." ... />` | 自闭合（成对写） | `url` | 视频 |
+-| `<audio-block url="..." ... />` | 自闭合（成对写） | `url` | 音频 |
+-| `<file-block url="..." ... />` | 自闭合（成对写） | `url` | 文件附件 |
+-| `<span text-color="..." ...>` | 行内配对 | — | 行内颜色 / 删除线 / 下划线 |
+-
+-"自闭合（成对写）"指：实际落盘写成 `<image-block ...></image-block>`，但语义上无 body 内容；标签中间不要写任何东西。
+diff --git a/backend/cmd/server/main.go b/backend/cmd/server/main.go
+index bc07948..01d9b7b 100644
+--- a/backend/cmd/server/main.go
++++ b/backend/cmd/server/main.go
+@@ -93,7 +93,7 @@ func main() {
+ 	if err := claudeConfigStore.EnsureDefaults(); err != nil {
+ 		log.Printf("Warning: failed to init claude config: %v", err)
+ 	}
+-	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, authService, docsDir)
++	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, pageService, authService, docsDir)
+ 	bookmarkService := service.NewBookmarkService(bookmarkRepo)
+ 	searchService := service.NewSearchService(docsDir)
+ 
+@@ -146,6 +146,8 @@ func main() {
+ 	r.Get("/api/site-settings", siteSettingHandler.Get)
+ 	// Claude WebSocket（独立鉴权——浏览器 WS 不能用 Authorization header）
+ 	r.Get("/api/spaces/{slug}/claude/ws", claudeHandler.ChatWS)
++	// Claude 附件上传（multipart，5MB 上限，鉴权同 WS：query param ?token=）
++	r.Post("/api/spaces/{slug}/claude/attachments", claudeHandler.UploadAttachment)
+ 
+ 	// Protected routes
+ 	r.Group(func(r chi.Router) {
+diff --git a/backend/internal/handler/claude_handler.go b/backend/internal/handler/claude_handler.go
+index 83bd2dc..10d9d21 100644
+--- a/backend/internal/handler/claude_handler.go
++++ b/backend/internal/handler/claude_handler.go
+@@ -3,6 +3,7 @@ package handler
+ import (
+ 	"context"
+ 	"encoding/json"
++	"io"
+ 	"log"
+ 	"net/http"
+ 
+@@ -56,13 +57,16 @@ func (h *ClaudeHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
+ // 注意：本路由不挂 RequireAuth middleware（浏览器 WS 无法设置 Authorization header）。
+ // 鉴权由 handler 内部从 query param ?token= 校验 + space member 校验。
+ func (h *ClaudeHandler) ChatWS(w http.ResponseWriter, r *http.Request) {
++	log.Printf("[claude ws] request received: slug=%s", chi.URLParam(r, "slug"))
+ 	token := r.URL.Query().Get("token")
+ 	if token == "" {
++		log.Printf("[claude ws] rejected: token missing")
+ 		http.Error(w, "token required", http.StatusUnauthorized)
+ 		return
+ 	}
+ 	userID, err := h.manager.VerifyToken(token)
+ 	if err != nil {
++		log.Printf("[claude ws] rejected: invalid token: %v", err)
+ 		http.Error(w, "invalid token", http.StatusUnauthorized)
+ 		return
+ 	}
+@@ -75,6 +79,7 @@ func (h *ClaudeHandler) ChatWS(w http.ResponseWriter, r *http.Request) {
+ 
+ 	spaceDir, canWrite, err := h.manager.ResolveSpaceAndPermission(slug, userID)
+ 	if err != nil {
++		log.Printf("[claude ws] rejected: %v", err)
+ 		http.Error(w, err.Error(), http.StatusForbidden)
+ 		return
+ 	}
+@@ -86,12 +91,14 @@ func (h *ClaudeHandler) ChatWS(w http.ResponseWriter, r *http.Request) {
+ 		log.Printf("[claude ws] upgrade failed: %v", err)
+ 		return
+ 	}
++	log.Printf("[claude ws] connected: user=%d slug=%s dir=%s write=%v", userID, slug, spaceDir, canWrite)
+ 
+ 	ctx, cancel := context.WithCancel(r.Context())
+ 	defer cancel()
+ 
+ 	sess, err := h.manager.StartSession(ctx, claude.StartSessionParams{
+ 		Conn:         c,
++		SpaceSlug:    slug,
+ 		SpaceDir:     spaceDir,
+ 		UserCanWrite: canWrite,
+ 	})
+@@ -105,3 +112,75 @@ func (h *ClaudeHandler) ChatWS(w http.ResponseWriter, r *http.Request) {
+ 
+ 	sess.HandleWebSocket(ctx, c)
+ }
++
++// UploadAttachment POST /api/spaces/{slug}/claude/attachments
++// 接收 multipart/form-data 中的文件，单文件 ≤ 5MB，落到对应 session 的 attachDir。
++// 返回 attachmentId 和（去重后的）filename，前端在发消息时引用 attachmentId，
++// 同时把 filename 作为 @filename 标记插到聊天输入框。
++//
++// 鉴权策略与 ChatWS 一致：浏览器 multipart 无法稳定设置 Authorization，
++// 用 query param ?token= + ?sessionId= 校验。
++func (h *ClaudeHandler) UploadAttachment(w http.ResponseWriter, r *http.Request) {
++	token := r.URL.Query().Get("token")
++	if token == "" {
++		http.Error(w, "token required", http.StatusUnauthorized)
++		return
++	}
++	userID, err := h.manager.VerifyToken(token)
++	if err != nil {
++		http.Error(w, "invalid token", http.StatusUnauthorized)
++		return
++	}
++	sessionID := r.URL.Query().Get("sessionId")
++	if sessionID == "" {
++		http.Error(w, "sessionId required", http.StatusBadRequest)
++		return
++	}
++	slug := chi.URLParam(r, "slug")
++	if slug == "" {
++		http.Error(w, "slug required", http.StatusBadRequest)
++		return
++	}
++	// 校验用户对该 space 有访问权（与 WS 一致）
++	if _, _, err := h.manager.ResolveSpaceAndPermission(slug, userID); err != nil {
++		http.Error(w, err.Error(), http.StatusForbidden)
++		return
++	}
++
++	// 5MB 上限
++	if err := r.ParseMultipartForm(5 << 20); err != nil {
++		http.Error(w, "parse multipart failed (max 5MB): "+err.Error(), http.StatusBadRequest)
++		return
++	}
++	file, header, err := r.FormFile("file")
++	if err != nil {
++		http.Error(w, "missing 'file' field", http.StatusBadRequest)
++		return
++	}
++	defer file.Close()
++
++	// 二次校验单文件大小
++	if header.Size > 5<<20 {
++		http.Error(w, "file too large (max 5MB)", http.StatusBadRequest)
++		return
++	}
++
++	data, err := io.ReadAll(file)
++	if err != nil {
++		http.Error(w, "read file failed: "+err.Error(), http.StatusInternalServerError)
++		return
++	}
++
++	attachmentID, storedFilename, err := h.manager.SaveAttachment(sessionID, header.Filename, data)
++	if err != nil {
++		log.Printf("[claude upload] save failed: %v", err)
++		http.Error(w, "save attachment failed: "+err.Error(), http.StatusInternalServerError)
++		return
++	}
++
++	w.Header().Set("Content-Type", "application/json")
++	json.NewEncoder(w).Encode(map[string]string{
++		"attachmentId": attachmentID,
++		"filename":     storedFilename,
++	})
++}
+diff --git a/backend/internal/middleware/error_logging.go b/backend/internal/middleware/error_logging.go
+index 9537e29..d6ad6b0 100644
+--- a/backend/internal/middleware/error_logging.go
++++ b/backend/internal/middleware/error_logging.go
+@@ -1,8 +1,11 @@
+ package middleware
+ 
+ import (
++	"bufio"
+ 	"bytes"
++	"errors"
+ 	"log"
++	"net"
+ 	"net/http"
+ 	"strings"
+ )
+@@ -32,6 +35,23 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
+ 	return r.ResponseWriter.Write(b)
+ }
+ 
++// Hijack 转发到底层 ResponseWriter，使 WebSocket 升级能正常工作。
++// 没有这个方法，coder/websocket 的 Accept 会因类型断言失败拿到 501。
++func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
++	hj, ok := r.ResponseWriter.(http.Hijacker)
++	if !ok {
++		return nil, nil, errors.New("ResponseWriter does not implement Hijacker")
++	}
++	return hj.Hijack()
++}
++
++// Flush 同样转发，确保流式响应（如 SSE）能立即发送。
++func (r *statusRecorder) Flush() {
++	if fl, ok := r.ResponseWriter.(http.Flusher); ok {
++		fl.Flush()
++	}
++}
++
+ // ErrorLogging logs any 5xx response to stdout along with the response
+ // body (which carries the handler's err.Error() message). It is
+ // intentionally minimal: no structured logging, no request ID, no
+diff --git a/backend/internal/service/claude/manager.go b/backend/internal/service/claude/manager.go
+index 803c32b..d7ae5fb 100644
+--- a/backend/internal/service/claude/manager.go
++++ b/backend/internal/service/claude/manager.go
+@@ -4,7 +4,10 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"log"
++	"os"
+ 	"path/filepath"
++	"strings"
+ 	"sync"
+ 
+ 	"github.com/coder/websocket"
+@@ -17,32 +20,44 @@ type tokenVerifier interface {
+ 	VerifyToken(tokenString string) (int, error)
+ }
+ 
++// pageRepoResolver 是 PageService 满足的最小接口（按 slug 取 pageRepo）。
++type pageRepoResolver interface {
++	GetRepo(spaceSlug string) (*repository.PageRepository, error)
++}
++
+ // Manager 持有所有运行中 session 的引用 + 启动 session 所需依赖。
+ type Manager struct {
+-	mu         sync.Mutex
+-	sessions   map[*websocket.Conn]*Session
+-	config     *ConfigStore
+-	memberRepo *repository.MemberRepository
+-	spaceRepo  *repository.SpaceRepository
+-	auth       tokenVerifier
+-	docsDir    string
++	mu          sync.Mutex
++	sessions    map[*websocket.Conn]*Session
++	config      *ConfigStore
++	memberRepo  *repository.MemberRepository
++	spaceRepo   *repository.SpaceRepository
++	pageService pageRepoResolver
++	auth        tokenVerifier
++	docsDir     string
++	tmpRoot     string // 附件根目录：os.TempDir()/akmdlibrary/session
+ }
+ 
+-// NewManager 构造 manager。auth 通常传 *service.AuthService。
++// NewManager 构造 manager。auth 通常传 *service.AuthService，pageService 通常传 *service.PageService。
+ func NewManager(
+ 	config *ConfigStore,
+ 	memberRepo *repository.MemberRepository,
+ 	spaceRepo *repository.SpaceRepository,
++	pageService pageRepoResolver,
+ 	auth tokenVerifier,
+ 	docsDir string,
+ ) *Manager {
+ 	return &Manager{
+-		sessions:   map[*websocket.Conn]*Session{},
+-		config:     config,
+-		memberRepo: memberRepo,
+-		spaceRepo:  spaceRepo,
+-		auth:       auth,
+-		docsDir:    docsDir,
++		sessions:    map[*websocket.Conn]*Session{},
++		config:      config,
++		memberRepo:  memberRepo,
++		spaceRepo:   spaceRepo,
++		pageService: pageService,
++		auth:        auth,
++		docsDir:     docsDir,
++		// 固定路径而非 os.TempDir()：macOS 上 TempDir 是 /var/folders/... 不直观，
++		// 用 /tmp/akmdlibrary/session 调试方便，跨平台兼容（Linux/Docker 都有 /tmp）。
++		tmpRoot: filepath.Join("/tmp", "akmdlibrary", "session"),
+ 	}
+ }
+ 
+@@ -66,12 +81,39 @@ func (m *Manager) ResolveSpaceAndPermission(slug string, userID int) (string, bo
+ 		return "", false, fmt.Errorf("not a member of this space")
+ 	}
+ 	spaceDir := filepath.Join(m.docsDir, space.Name) // 与现有 space_service 一致：目录用 Name
++	// 解析成绝对路径，避免子进程 cwd 是相对路径造成歧义。
++	if abs, err := filepath.Abs(spaceDir); err == nil {
++		spaceDir = abs
++	}
++	// 解析 symlink：userdata/docs/<name> 可能是软链接指向真实目录。
++	// 子进程启动后 os.Getwd() 会返回真实路径，如果我们传给 claude 的"当前文件"路径
++	// 是未解析的 symlink 路径，会导致 claude 困惑、Glob 上层目录触发 permission 拒绝。
++	if real, err := filepath.EvalSymlinks(spaceDir); err == nil {
++		spaceDir = real
++	}
+ 	canWrite := member.Role == "editor" || member.Role == "admin"
+ 	return spaceDir, canWrite, nil
+ }
+ 
+ // StartSession 创建并启动一个 session，注册到 manager。
++// 启动后通过 OnSessionInit 回调把 sessionID 推给前端，前端用此 id 调上传接口。
+ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (*Session, error) {
++	sessionID := NewSessionID()
++	attachDir := filepath.Join(m.tmpRoot, sessionID)
++	if err := os.MkdirAll(attachDir, 0o700); err != nil {
++		return nil, fmt.Errorf("create attach dir: %w", err)
++	}
++
++	// 按 space slug 解析对应 pageRepo（每个 space 一个 db）
++	var pageRepo *repository.PageRepository
++	if m.pageService != nil && params.SpaceSlug != "" {
++		if repo, err := m.pageService.GetRepo(params.SpaceSlug); err == nil {
++			pageRepo = repo
++		} else {
++			log.Printf("[claude manager] get page repo for slug=%s failed: %v", params.SpaceSlug, err)
++		}
++	}
++
+ 	cb := SessionCallbacks{
+ 		OnStatus: func(status string) {
+ 			data, _ := json.Marshal(EventStatus{Type: "status", Status: status})
+@@ -91,23 +133,35 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
+ 		},
+ 	}
+ 	sess := NewSession(SessionParams{
++		SessionID:    sessionID,
+ 		SpaceDir:     params.SpaceDir,
++		AttachDir:    attachDir,
+ 		EnvOverrides: m.config.LoadSettingsEnv(),
+ 		SystemPrompt: m.config.LoadSystemPrompt(),
+ 		UserCanWrite: params.UserCanWrite,
+ 		ToolConfig:   m.config.LoadToolConfig(),
++		PageRepo:     pageRepo,
+ 		Callbacks:    cb,
+ 	})
+ 	if err := sess.Start(ctx); err != nil {
++		// 启动失败也要清理已创建的 attachDir
++		_ = os.RemoveAll(attachDir)
+ 		return nil, err
+ 	}
++
++	// 推 session_init，前端拿到后才能上传附件
++	initData, _ := json.Marshal(EventSessionInit{Type: "session_init", SessionID: sessionID})
++	if err := params.Conn.Write(ctx, websocket.MessageText, initData); err != nil {
++		log.Printf("[claude manager] push session_init failed: %v", err)
++	}
++
+ 	m.mu.Lock()
+ 	m.sessions[params.Conn] = sess
+ 	m.mu.Unlock()
+ 	return sess, nil
+ }
+ 
+-// StopSession 在 WS 关闭时调用：杀子进程、移除映射。
++// StopSession 在 WS 关闭时调用：杀子进程、移除映射、清理附件目录。
+ func (m *Manager) StopSession(conn *websocket.Conn) {
+ 	m.mu.Lock()
+ 	sess := m.sessions[conn]
+@@ -118,8 +172,70 @@ func (m *Manager) StopSession(conn *websocket.Conn) {
+ 	}
+ }
+ 
++// SessionByConn 暴露给 HTTP 上传 handler 用：根据 WS 连接查 session。
++// 注意：上传 handler 拿不到 WS 连接，用 SessionByID 替代。
++func (m *Manager) SessionByConn(conn *websocket.Conn) *Session {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	return m.sessions[conn]
++}
++
++// SessionByID 通过 sessionID 查 session（HTTP 上传接口使用）。
++func (m *Manager) SessionByID(sessionID string) *Session {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	for _, s := range m.sessions {
++		if s.SessionID() == sessionID {
++			return s
++		}
++	}
++	return nil
++}
++
++// SaveAttachment 把上传的文件落到对应 session 的 attachDir。
++// 返回 attachmentID 和最终文件名（含 ID 前缀）。
++//
++// 文件名去重策略：同名文件依次加 " (1)"、" (2)"... 后缀。
++func (m *Manager) SaveAttachment(sessionID, originalFilename string, data []byte) (attachmentID, storedFilename string, err error) {
++	sess := m.SessionByID(sessionID)
++	if sess == nil {
++		return "", "", fmt.Errorf("session not found: %s", sessionID)
++	}
++	attachDir := sess.AttachDir()
++	if attachDir == "" {
++		return "", "", fmt.Errorf("session has no attachDir")
++	}
++
++	attachmentID = NewSessionID() // 复用 uuid 生成器；attachmentID 也用 uuid
++	uniqueName := dedupeFilename(attachDir, originalFilename)
++	storedFilename = attachmentID + "_" + uniqueName
++	fullPath := filepath.Join(attachDir, storedFilename)
++
++	if err := os.WriteFile(fullPath, data, 0o600); err != nil {
++		return "", "", fmt.Errorf("write attachment: %w", err)
++	}
++	return attachmentID, uniqueName, nil
++}
++
++// dedupeFilename 在 attachDir 内若已存在 originalFilename，自动加 " (N)" 后缀。
++func dedupeFilename(attachDir, filename string) string {
++	target := filename
++	if _, err := os.Stat(filepath.Join(attachDir, target)); os.IsNotExist(err) {
++		return target
++	}
++	ext := filepath.Ext(filename)
++	base := strings.TrimSuffix(filename, ext)
++	for i := 1; ; i++ {
++		candidate := fmt.Sprintf("%s (%d)%s", base, i, ext)
++		if _, err := os.Stat(filepath.Join(attachDir, candidate)); os.IsNotExist(err) {
++			return candidate
++		}
++	}
++}
++
+ type StartSessionParams struct {
+ 	Conn         *websocket.Conn
++	SpaceSlug    string
+ 	SpaceDir     string
+ 	UserCanWrite bool
+ }
+diff --git a/backend/internal/service/claude/permission.go b/backend/internal/service/claude/permission.go
+index 39fbd9d..810c5b9 100644
+--- a/backend/internal/service/claude/permission.go
++++ b/backend/internal/service/claude/permission.go
+@@ -11,6 +11,7 @@ type PermissionInput struct {
+ 	ToolInput    map[string]any // 工具参数原始 map
+ 	UserCanWrite bool           // 用户对该 space 是否有写权限
+ 	SpaceDir     string         // space 绝对路径（resolve 后）
++	AttachDir    string         // 当前 session 附件目录（/tmp/.../session/<id>）—— Read 工具额外允许
+ 	ToolConfig   ToolConfig     // 全局工具开关
+ }
+ 
+@@ -41,7 +42,11 @@ func Check(in PermissionInput) PermissionResult {
+ 		if rawPath == "" {
+ 			return PermissionResult{Allowed: true} // 没有路径字段（罕见），不阻断
+ 		}
+-		if !isPathInsideSpace(rawPath, in.SpaceDir) {
++		// Read 工具额外允许访问当前 session 的附件目录（图片/文件附件存放在这里）
++		if in.AttachDir != "" && isPathInside(rawPath, in.AttachDir) {
++			return PermissionResult{Allowed: true, Path: rawPath}
++		}
++		if !isPathInside(rawPath, in.SpaceDir) {
+ 			return PermissionResult{Allowed: false, Reason: "路径不在当前空间范围内: " + rawPath, Path: rawPath}
+ 		}
+ 		return PermissionResult{Allowed: true, Path: rawPath}
+@@ -87,17 +92,23 @@ func extractReadPath(toolName string, input map[string]any) string {
+ // isPathInsideSpace 判断 rawPath（可能是相对/绝对路径）解析后是否落在 spaceDir 内。
+ // 不跟随 symlink（symlink 可能逃逸到 space 外）。
+ func isPathInsideSpace(rawPath, spaceDir string) bool {
+-	if rawPath == "" {
++	return isPathInside(rawPath, spaceDir)
++}
++
++// isPathInside 是 isPathInsideSpace 的通用版本，把 rawPath 解析到 base 后判断是否落在 base 内。
++// 如果 rawPath 是相对路径，按 base 解析（与 cwd 无关，base 一般是 SpaceDir 或 AttachDir）。
++func isPathInside(rawPath, base string) bool {
++	if rawPath == "" || base == "" {
+ 		return false
+ 	}
+ 	abs := rawPath
+ 	if !filepath.IsAbs(abs) {
+-		abs = filepath.Join(spaceDir, abs)
++		abs = filepath.Join(base, abs)
+ 	}
+ 	abs = filepath.Clean(abs)
+-	spaceDirClean := filepath.Clean(spaceDir)
+-	if abs == spaceDirClean {
++	baseClean := filepath.Clean(base)
++	if abs == baseClean {
+ 		return true
+ 	}
+-	return strings.HasPrefix(abs, spaceDirClean+string(filepath.Separator))
++	return strings.HasPrefix(abs, baseClean+string(filepath.Separator))
+ }
+diff --git a/backend/internal/service/claude/permission_test.go b/backend/internal/service/claude/permission_test.go
+index 2c74634..7627b68 100644
+--- a/backend/internal/service/claude/permission_test.go
++++ b/backend/internal/service/claude/permission_test.go
+@@ -110,3 +110,29 @@ func TestSpaceDirResolution(t *testing.T) {
+ 		t.Error("joined subpath should be inside")
+ 	}
+ }
++
++func TestCheck_ReadAllowsAttachDir(t *testing.T) {
++	// AttachDir 内的文件应该允许 Read（claude 读取 session 附件）
++	r := Check(PermissionInput{
++		ToolName:  "Read",
++		ToolInput: map[string]any{"file_path": "/tmp/akmdlibrary/session/abc/att_xxx_image.png"},
++		SpaceDir:  "/app/docs/demo",
++		AttachDir: "/tmp/akmdlibrary/session/abc",
++	})
++	if !r.Allowed {
++		t.Errorf("expected attach dir access allowed, got deny: %s", r.Reason)
++	}
++}
++
++func TestCheck_ReadDeniesOtherTmpPath(t *testing.T) {
++	// AttachDir 外的 /tmp 路径仍应被拒绝
++	r := Check(PermissionInput{
++		ToolName:  "Read",
++		ToolInput: map[string]any{"file_path": "/etc/passwd"},
++		SpaceDir:  "/app/docs/demo",
++		AttachDir: "/tmp/akmdlibrary/session/abc",
++	})
++	if r.Allowed {
++		t.Error("path outside space & attach dir should be denied")
++	}
++}
+diff --git a/backend/internal/service/claude/protocol.go b/backend/internal/service/claude/protocol.go
+index cc76f24..072f24c 100644
+--- a/backend/internal/service/claude/protocol.go
++++ b/backend/internal/service/claude/protocol.go
+@@ -10,17 +10,41 @@ type UserMessage struct {
+ 	Message json.RawMessage `json:"message"`
+ }
+ 
+-func NewUserMessage(text string) *UserMessage {
++// ContentBlock 是 message.content 数组里的元素。Type 决定剩余字段。
++// 我们支持 text 与 image 两种；其他类型（tool_use/tool_result）claude 自己产出，
++// 后端只需要在解析时识别。
++type ContentBlock struct {
++	Type string `json:"type"`
++
++	// type=text
++	Text string `json:"text,omitempty"`
++
++	// type=image：claude 的 image source 用 base64 内联
++	Source *ImageSource `json:"source,omitempty"`
++}
++
++// ImageSource 是 image block 的 source 字段。
++type ImageSource struct {
++	Type      string `json:"type"`       // 固定 "base64"
++	MediaType string `json:"media_type"` // "image/png" | "image/jpeg" | "image/gif" | "image/webp"
++	Data      string `json:"data"`       // base64 编码（不含 data:image/... 前缀）
++}
++
++// NewUserMessageFromBlocks 用预拼装的 content blocks 构造 user message。
++func NewUserMessageFromBlocks(blocks []ContentBlock) *UserMessage {
+ 	body := map[string]any{
+-		"role": "user",
+-		"content": []map[string]any{
+-			{"type": "text", "text": text},
+-		},
++		"role":    "user",
++		"content": blocks,
+ 	}
+ 	raw, _ := json.Marshal(body)
+ 	return &UserMessage{Type: "user", Message: raw}
+ }
+ 
++// NewUserMessage 兼容旧调用：单个 text block。
++func NewUserMessage(text string) *UserMessage {
++	return NewUserMessageFromBlocks([]ContentBlock{{Type: "text", Text: text}})
++}
++
+ // ControlResponse 是回答 claude 权限请求的应答。
+ type ControlResponse struct {
+ 	Type     string         `json:"type"` // 固定 "control_response"
+@@ -117,9 +141,26 @@ type EventError struct {
+ 	Message string `json:"message"`
+ }
+ 
++// EventSessionInit 在 WS 握手成功 + session 启动后立刻发给前端。
++// 前端拿到 sessionId 后才能调上传接口（附件按 session 隔离）。
++type EventSessionInit struct {
++	Type      string `json:"type"` // "session_init"
++	SessionID string `json:"session_id"`
++}
++
+ // ===== 前端协议（前端 → 后端 WS 帧） =====
+ 
++// ClientMessage 是前端 WS 发来的消息。
++// Context/Attachments 是可选字段（向后兼容老前端）。
+ type ClientMessage struct {
+-	Type    string `json:"type"` // "user_message"
+-	Content string `json:"content"`
++	Type        string             `json:"type"` // "user_message"
++	Content     string             `json:"content"`
++	Context     *ClientContext     `json:"context,omitempty"`
++	Attachments []string           `json:"attachments,omitempty"` // attachment uuid 列表
++}
++
++// ClientContext 描述用户当前 UI 状态。
++type ClientContext struct {
++	ActivePageID string `json:"activePageId,omitempty"` // pages 表 id（字符串）
++	Selection    string `json:"selection,omitempty"`    // 用户在编辑器选中的文本（原样透传）
+ }
+diff --git a/backend/internal/service/claude/session.go b/backend/internal/service/claude/session.go
+index 296656d..5f81790 100644
+--- a/backend/internal/service/claude/session.go
++++ b/backend/internal/service/claude/session.go
+@@ -3,14 +3,21 @@ package claude
+ import (
+ 	"bufio"
+ 	"context"
++	"encoding/base64"
+ 	"encoding/json"
+ 	"fmt"
+ 	"io"
+ 	"log"
++	"os"
+ 	"os/exec"
++	"path/filepath"
++	"strings"
+ 	"sync"
+ 
+ 	"github.com/coder/websocket"
++	"github.com/google/uuid"
++
++	"github.com/alwaysking/akmdlibrary/internal/repository"
+ )
+ 
+ // SessionCallbacks 是 session 向 handler 回调的接口。
+@@ -29,31 +36,40 @@ type Session struct {
+ 	stdoutMu     sync.Mutex // 保护 stdin 写入
+ 	wg           sync.WaitGroup
+ 	cancel       context.CancelFunc
++	sessionID    string
+ 	spaceDir     string
++	attachDir    string
+ 	userWrite    bool
+ 	toolCfg      ToolConfig
+ 	sysPrompt    string
+ 	envOverrides map[string]string
++	pageRepo     *repository.PageRepository
+ 	callbacks    SessionCallbacks
+ }
+ 
+ type SessionParams struct {
+-	SpaceDir     string            // 子进程 cwd
+-	EnvOverrides map[string]string // settings.json.env 的覆盖
++	SessionID    string                         // 由 manager 生成
++	SpaceDir     string                         // 子进程 cwd
++	AttachDir    string                         // /tmp/.../session/<id>，由 manager 创建好
++	EnvOverrides map[string]string              // settings.json.env 的覆盖
+ 	SystemPrompt string
+ 	UserCanWrite bool
+ 	ToolConfig   ToolConfig
++	PageRepo     *repository.PageRepository
+ 	Callbacks    SessionCallbacks
+ }
+ 
+ // NewSession 创建（不启动）一个 session。
+ func NewSession(p SessionParams) *Session {
+ 	return &Session{
++		sessionID:    p.SessionID,
+ 		spaceDir:     p.SpaceDir,
++		attachDir:    p.AttachDir,
+ 		userWrite:    p.UserCanWrite,
+ 		toolCfg:      p.ToolConfig,
+ 		sysPrompt:    p.SystemPrompt,
+ 		envOverrides: p.EnvOverrides,
++		pageRepo:     p.PageRepo,
+ 		callbacks:    p.Callbacks,
+ 	}
+ }
+@@ -66,10 +82,15 @@ func (s *Session) Start(ctx context.Context) error {
+ 
+ 	args := []string{
+ 		"--print",
++		"--verbose",
+ 		"--output-format", "stream-json",
+ 		"--input-format", "stream-json",
+ 		"--permission-prompt-tool", "stdio",
+ 	}
++	// 把 sessionID 同时作为 claude 的 session_id（日志关联方便；不影响持久化策略）
++	if s.sessionID != "" {
++		args = append(args, "--session-id", s.sessionID)
++	}
+ 	if s.sysPrompt != "" {
+ 		args = append(args, "--append-system-prompt", s.sysPrompt)
+ 	}
+@@ -182,6 +203,7 @@ func (s *Session) handleControlRequest(line []byte) {
+ 		ToolInput:    cr.Request.Input,
+ 		UserCanWrite: s.userWrite,
+ 		SpaceDir:     s.spaceDir,
++		AttachDir:    s.attachDir,
+ 		ToolConfig:   s.toolCfg,
+ 	})
+ 	// 回应 claude
+@@ -207,13 +229,140 @@ func (s *Session) writeJSON(v any) {
+ 	}
+ }
+ 
+-// SendUserMessage 接收用户文本，转成 stdin 格式发出。
+-func (s *Session) SendUserMessage(text string) {
++// SendUserMessage 接收用户文本 + 可选 context + 可选附件列表，拼装成 content blocks 发给 claude。
++//
++// 拼装顺序：
++//   1. 当前文档（如果 context.ActivePageID 不为空）：text block
++//   2. 选中文本（如果 context.Selection 不为空）：text block
++//   3. 每个附件：图片走 image block（直接看），其他文件走 text block（告诉路径）
++//   4. 用户提示词原文（含 @filename 标记，原样透传）
++func (s *Session) SendUserMessage(text string, ctx *ClientContext, attachments []string) {
+ 	s.callbacks.OnStatus("answering")
+-	s.writeJSON(NewUserMessage(text))
++
++	blocks := s.buildContextBlocks(text, ctx, attachments)
++	s.writeJSON(NewUserMessageFromBlocks(blocks))
++}
++
++// buildContextBlocks 把 UI 状态翻译成 claude 的 content blocks。
++func (s *Session) buildContextBlocks(text string, ctx *ClientContext, attachments []string) []ContentBlock {
++	var blocks []ContentBlock
++
++	// 当前文档：page id → file_path → 绝对路径
++	if ctx != nil && ctx.ActivePageID != "" && s.pageRepo != nil {
++		if page, err := s.pageRepo.GetByID(ctx.ActivePageID); err == nil && page != nil {
++			absPath := filepath.Join(s.spaceDir, page.FilePath)
++			blocks = append(blocks, ContentBlock{
++				Type: "text",
++				Text: fmt.Sprintf("当前文件: %s", absPath),
++			})
++		}
++	}
++
++	// 选中文本
++	if ctx != nil && strings.TrimSpace(ctx.Selection) != "" {
++		blocks = append(blocks, ContentBlock{
++			Type: "text",
++			Text: fmt.Sprintf("当前选中的内容:\n\n%s", ctx.Selection),
++		})
++	}
++
++	// 附件：每个附件都建立 @filename 到内容的明确映射
++	for _, attID := range attachments {
++		attPath, attFilename, ok := s.resolveAttachment(attID)
++		if !ok {
++			blocks = append(blocks, ContentBlock{
++				Type: "text",
++				Text: fmt.Sprintf("(用户引用了附件 %s，但文件不存在)", attID),
++			})
++			continue
++		}
++
++		if mediaType, ok := imageMediaType(attFilename); ok {
++			// 图片：image block + 紧跟的 text block 标注 @filename 映射
++			if imgBlock, err := buildImageBlock(attPath, mediaType); err == nil {
++				blocks = append(blocks, imgBlock)
++				blocks = append(blocks, ContentBlock{
++					Type: "text",
++					Text: fmt.Sprintf("（上方图片对应用户引用的 @%s）", attFilename),
++				})
++				continue
++			}
++		}
++
++		// 其他文件：text block 告诉路径 + @filename 映射
++		blocks = append(blocks, ContentBlock{
++			Type: "text",
++			Text: fmt.Sprintf("用户上传了文件 @%s，路径: %s", attFilename, attPath),
++		})
++	}
++
++	// 用户提示词（原样透传，@filename 让 claude 根据前面的块自己推理）
++	blocks = append(blocks, ContentBlock{Type: "text", Text: text})
++
++	if len(blocks) == 0 {
++		blocks = []ContentBlock{{Type: "text", Text: text}}
++	}
++	return blocks
++}
++
++// resolveAttachment 在 attachDir 里查找附件路径。
++// 命名约定：<attachmentID>_<originalFilename>
++func (s *Session) resolveAttachment(attachmentID string) (path, filename string, ok bool) {
++	if s.attachDir == "" || attachmentID == "" {
++		return "", "", false
++	}
++	entries, err := os.ReadDir(s.attachDir)
++	if err != nil {
++		return "", "", false
++	}
++	prefix := attachmentID + "_"
++	for _, e := range entries {
++		if e.IsDir() {
++			continue
++		}
++		if strings.HasPrefix(e.Name(), prefix) {
++			full := filepath.Join(s.attachDir, e.Name())
++			original := strings.TrimPrefix(e.Name(), prefix)
++			return full, original, true
++		}
++	}
++	return "", "", false
+ }
+ 
+-// Stop 终止子进程。
++// imageMediaType 用扩展名判断是否是 claude 支持的图片格式。
++func imageMediaType(filename string) (string, bool) {
++	ext := strings.ToLower(filepath.Ext(filename))
++	switch ext {
++	case ".png":
++		return "image/png", true
++	case ".jpg", ".jpeg":
++		return "image/jpeg", true
++	case ".gif":
++		return "image/gif", true
++	case ".webp":
++		return "image/webp", true
++	default:
++		return "", false
++	}
++}
++
++// buildImageBlock 读图片文件 base64 编码成 image block。
++func buildImageBlock(path, mediaType string) (ContentBlock, error) {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return ContentBlock{}, err
++	}
++	return ContentBlock{
++		Type: "image",
++		Source: &ImageSource{
++			Type:      "base64",
++			MediaType: mediaType,
++			Data:      base64.StdEncoding.EncodeToString(data),
++		},
++	}, nil
++}
++
++// Stop 终止子进程并清理附件目录。
+ func (s *Session) Stop() {
+ 	if s.cancel != nil {
+ 		s.cancel()
+@@ -224,6 +373,11 @@ func (s *Session) Stop() {
+ 	if s.stdin != nil {
+ 		_ = s.stdin.Close()
+ 	}
++	if s.attachDir != "" {
++		if err := os.RemoveAll(s.attachDir); err != nil {
++			log.Printf("[claude session] cleanup attachDir %s failed: %v", s.attachDir, err)
++		}
++	}
+ }
+ 
+ // HandleWebSocket 把前端 WS 消息桥接到 session。
+@@ -244,7 +398,16 @@ func (s *Session) HandleWebSocket(ctx context.Context, c *websocket.Conn) {
+ 			continue
+ 		}
+ 		if msg.Type == "user_message" {
+-			s.SendUserMessage(msg.Content)
++			s.SendUserMessage(msg.Content, msg.Context, msg.Attachments)
+ 		}
+ 	}
+ }
++
++// SessionID 暴露给 manager 用于 HTTP 上传接口。
++func (s *Session) SessionID() string { return s.sessionID }
++
++// AttachDir 暴露给 manager 用于上传接口写入文件。
++func (s *Session) AttachDir() string { return s.attachDir }
++
++// 生成新的 sessionID（暴露给 manager）
++func NewSessionID() string { return uuid.NewString() }
+diff --git a/backend/internal/service/page_service.go b/backend/internal/service/page_service.go
+index 010e042..d139c67 100644
+--- a/backend/internal/service/page_service.go
++++ b/backend/internal/service/page_service.go
+@@ -121,6 +121,11 @@ func (s *PageService) getRepo(spaceSlug string) (*repository.PageRepository, err
+ 	return repo, nil
+ }
+ 
++// GetRepo 公开 getRepo，给 claude manager 用来按 spaceSlug 取 pageRepo（每个 space 一个 db）。
++func (s *PageService) GetRepo(spaceSlug string) (*repository.PageRepository, error) {
++	return s.getRepo(spaceSlug)
++}
++
+ // CloseAll closes all open space database connections.
+ func (s *PageService) CloseAll() {
+ 	s.mu.Lock()
+diff --git a/entrypoint.sh b/entrypoint.sh
+index ec68674..c1ecf75 100755
+--- a/entrypoint.sh
++++ b/entrypoint.sh
+@@ -1,9 +1,55 @@
+ #!/bin/bash
+ set -e
+ 
++# ===== claude 二进制可访问性预检（fail fast） =====
++# 验证 claude 真的能被运行用户 exec。参考 DocAgent 项目踩过的坑：
++#  - claude 装在 /opt/claude 下，目录权限不对非 root 用户读不到 → ENOENT
++#  - install.sh 装的是 launcher 软链，realpath 才是真实二进制，两路径都要可 exec
++CLAUDE_BIN="${CLAUDE_BIN:-/usr/local/bin/claude}"
++
++preflight_claude() {
++    local AS_USER="$1"  # 空 = 当前用户
++    if [ ! -e "$CLAUDE_BIN" ]; then
++        echo "[entrypoint] 警告: $CLAUDE_BIN 不存在，claude 集成不可用" >&2
++        return 0
++    fi
++    local REAL; REAL=$(readlink -f "$CLAUDE_BIN")
++    if [ -z "$AS_USER" ] || [ "$(id -un)" = "$AS_USER" ]; then
++        if "$CLAUDE_BIN" --version >/dev/null 2>&1; then
++            echo "[entrypoint] claude 预检 OK（当前用户 exec $CLAUDE_BIN）"
++            return 0
++        fi
++    else
++        # 用 su 切到目标用户跑一次 --version
++        if su -s /bin/bash "$AS_USER" -c "$CLAUDE_BIN --version >/dev/null 2>&1"; then
++            echo "[entrypoint] claude 预检 OK（用户 $AS_USER 可 exec $CLAUDE_BIN）"
++            return 0
++        fi
++    fi
++    echo "错误: claude 二进制预检失败" >&2
++    echo "--- 诊断信息 ---" >&2
++    echo "symlink: $CLAUDE_BIN" >&2
++    ls -la "$CLAUDE_BIN" >&2 || true
++    echo "realpath: $REAL" >&2
++    ls -la "$REAL" >&2 || true
++    echo "ldd $REAL:" >&2
++    ldd "$REAL" >&2 || true
++    echo "file $REAL:" >&2
++    file "$REAL" >&2 || true
++    exit 1
++}
++
+ # ===== 模式判断 =====
+ if [ -z "$USER_NAME" ] && [ -z "$USER_ID" ] && [ -z "$GROUP_NAME" ] && [ -z "$GROUP_ID" ]; then
+     echo "[entrypoint] 未配置 USER_*/GROUP_* 环境变量，以当前用户直接启动"
++    # 把内置 CLAUDE.md 放到当前用户的 ~/.claude/，claude 启动时自动读取
++    CURRENT_HOME="${HOME:-/root}"
++    mkdir -p "$CURRENT_HOME/.claude"
++    if [ -f /app/CLAUDE.md ]; then
++        cp -f /app/CLAUDE.md "$CURRENT_HOME/.claude/CLAUDE.md"
++        echo "[entrypoint] 已部署内置 CLAUDE.md 到 $CURRENT_HOME/.claude/CLAUDE.md"
++    fi
++    preflight_claude ""
+     exec "$@"
+ fi
+ 
+@@ -47,10 +93,20 @@ fi
+ rm -f "$HOME_DIR/.claude/settings.json"
+ ln -sf /app/data/claude/settings.json "$HOME_DIR/.claude/settings.json"
+ 
++# ===== 部署内置 CLAUDE.md（FORMATS.md + STRUCTURE.md，构建时拼好） =====
++# 每次容器启动用 /app/CLAUDE.md 覆盖一次，保证和镜像版本一致
++if [ -f /app/CLAUDE.md ]; then
++    cp -f /app/CLAUDE.md "$HOME_DIR/.claude/CLAUDE.md"
++    echo "[entrypoint] 已部署内置 CLAUDE.md 到 $HOME_DIR/.claude/CLAUDE.md"
++fi
++
+ # ===== 修正权限（含 symlink 自身） =====
+ chown -h "$USER_NAME:$GROUP_NAME" "$HOME_DIR/.claude/settings.json"
+ chown -R "$USER_NAME:$GROUP_NAME" "$HOME_DIR/.claude"
+ chown -R "$USER_NAME:$GROUP_NAME" /app/data /app/docs
+ 
++# ===== 切换用户前预检（用目标用户验证 claude 可 exec） =====
++preflight_claude "$USER_NAME"
++
+ # ===== 切换用户后执行原 command =====
+ exec su "$USER_NAME" -c 'exec "$@"' su-exec "$@"
+diff --git a/frontend/src/api/claude.ts b/frontend/src/api/claude.ts
+index 12ee653..4a2c8cb 100644
+--- a/frontend/src/api/claude.ts
++++ b/frontend/src/api/claude.ts
+@@ -11,6 +11,11 @@ export interface ClaudeAdminConfig {
+   tool_config: ClaudeToolConfig;
+ }
+ 
++export interface ClaudeAttachmentUploadResult {
++  attachmentId: string;
++  filename: string;
++}
++
+ export const claudeApi = {
+   getConfig: async (): Promise<ClaudeAdminConfig> => {
+     const response = await apiClient.get<ClaudeAdminConfig>('/admin/claude/config');
+@@ -20,4 +25,25 @@ export const claudeApi = {
+   updateConfig: async (config: ClaudeAdminConfig): Promise<void> => {
+     await apiClient.put('/admin/claude/config', config);
+   },
++
++  /**
++   * 上传聊天附件到指定 session。返回 attachmentId 与（去重后的）filename。
++   * 注意：不走 apiClient 默认 Authorization header，因为后端用 query param 校验。
++   */
++  uploadAttachment: async (
++    spaceSlug: string,
++    sessionId: string,
++    file: File,
++  ): Promise<ClaudeAttachmentUploadResult> => {
++    const token = localStorage.getItem('token') || '';
++    const form = new FormData();
++    form.append('file', file);
++    const url = `/api/spaces/${encodeURIComponent(spaceSlug)}/claude/attachments?token=${encodeURIComponent(token)}&sessionId=${encodeURIComponent(sessionId)}`;
++    const resp = await fetch(url, { method: 'POST', body: form });
++    if (!resp.ok) {
++      const msg = await resp.text().catch(() => '');
++      throw new Error(`upload failed: ${resp.status} ${msg}`);
++    }
++    return resp.json();
++  },
+ };
+diff --git a/frontend/src/components/ClaudeChat/ChatPanel.tsx b/frontend/src/components/ClaudeChat/ChatPanel.tsx
+index 88d5f98..e744d01 100644
+--- a/frontend/src/components/ClaudeChat/ChatPanel.tsx
++++ b/frontend/src/components/ClaudeChat/ChatPanel.tsx
+@@ -1,29 +1,161 @@
+-import { useEffect, useRef, useState } from 'react';
++import { useEffect, useRef, useState, DragEvent } from 'react';
+ import { X } from 'lucide-react';
+ import { MessageList } from './MessageList';
+-import { MessageInput } from './MessageInput';
+-import { useClaudeChat } from '../../hooks/useClaudeChat';
++import { MessageInput, PendingAttachment, nextLocalId, MAX_SIZE } from './MessageInput';
++import { useClaudeChat, ChatAttachment } from '../../hooks/useClaudeChat';
+ 
+ interface Props {
+   spaceSlug: string;
++  /** 是否显示。关闭时通过 CSS hidden 隐藏而非卸载，保留 WS 与面板状态 */
++  open: boolean;
+   onClose: () => void;
+ }
+ 
+-export function ChatPanel({ spaceSlug, onClose }: Props) {
+-  const { messages, status, send } = useClaudeChat({ spaceSlug, enabled: true });
+-  const [pos, setPos] = useState({ x: window.innerWidth - 400, y: window.innerHeight - 560 });
++const MIN_W = 320;
++const MIN_H = 360;
++// 面板与窗口边的最小留白：拖动/缩放/窗口缩放都遵循
++const EDGE_MARGIN = 8;
++
++/** 从当前 URL 提取 page id（路由 /:space/p/:id） */
++function getCurrentPageId(): string | undefined {
++  const m = window.location.pathname.match(/\/p\/([^/]+)$/);
++  return m?.[1];
++}
++
++/** resize 起点：记录起始鼠标坐标、起始尺寸、起始左上角坐标、哪个角 */
++interface ResizeStart {
++  mx: number;
++  my: number;
++  w: number;
++  h: number;
++  px: number;
++  py: number;
++  corner: 'tl' | 'br';
++}
++
++export function ChatPanel({ spaceSlug, open, onClose }: Props) {
++  const { messages, status, send, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true });
++  // 初始位置：让面板距右边缘和底边缘各 20px（与 size 460x520 配合）
++  const [pos, setPos] = useState({ x: window.innerWidth - 480, y: window.innerHeight - 540 });
++  const [size, setSize] = useState({ w: 460, h: 520 });
+   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
++  const resizeRef = useRef<ResizeStart | null>(null);
++
++  // 用 ref 镜像 pos/size，让全局事件回调（mousemove / window resize）能读到最新值，
++  // 而不必把 pos/size 放进 useEffect deps（那样每次拖动都要重新 bind/unbind）。
++  const posRef = useRef(pos);
++  const sizeRef = useRef(size);
++  posRef.current = pos;
++  sizeRef.current = size;
++
++  // 附件 pendings 状态提升到面板级：整个面板都是 drop target
++  const [pendings, setPendings] = useState<PendingAttachment[]>([]);
++  const [dragOver, setDragOver] = useState(false);
++
++  const uploadOne = async (file: File) => {
++    if (file.size > MAX_SIZE) {
++      const localId = nextLocalId();
++      setPendings(prev => [...prev, {
++        localId,
++        filename: file.name,
++        status: 'error',
++        error: `${file.name} 超过 5MB 上限`,
++      }]);
++      return;
++    }
++    const localId = nextLocalId();
++    // 占位 uploading 状态
++    setPendings(prev => [...prev, { localId, filename: file.name, status: 'uploading' }]);
++    try {
++      const { attachmentId, filename } = await uploadAttachment(file);
++      // 后端可能给去重后的 filename，更新本地
++      setPendings(prev => prev.map(p =>
++        p.localId === localId
++          ? { ...p, status: 'done', attachmentId, filename }
++          : p
++      ));
++    } catch (e: any) {
++      setPendings(prev => prev.map(p =>
++        p.localId === localId
++          ? { ...p, status: 'error', error: e?.message || '上传失败' }
++          : p
++      ));
++    }
++  };
++
++  const handleFiles = (files: FileList | File[] | null) => {
++    if (!files || files.length === 0) return;
++    Array.from(files).forEach(uploadOne);
++  };
+ 
+-  // 拖拽
++  const removePending = (localId: string) => {
++    setPendings(prev => prev.filter(p => p.localId !== localId));
++  };
++
++  // 整个面板的 drop 处理：拖到面板任何区域都能上传
++  const onDrop = (e: DragEvent) => {
++    e.preventDefault();
++    e.stopPropagation(); // 防止冒泡到文档页编辑器
++    setDragOver(false);
++    if (status === 'answering') return;
++    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
++      handleFiles(e.dataTransfer.files);
++    }
++  };
++
++  const onDragOver = (e: DragEvent) => {
++    // 必须 preventDefault 才能让 drop 生效；否则浏览器走默认（打开文件）
++    e.preventDefault();
++    e.stopPropagation();
++    if (status !== 'answering') setDragOver(true);
++  };
++
++  const onDragLeave = (e: DragEvent) => {
++    // 仅当离开整个容器才取消高亮（避免子元素触发 dragleave）
++    if (e.currentTarget === e.target) setDragOver(false);
++  };
++
++  // 拖拽 + 调整大小（用 ref 读取最新值，避免 size 进 deps 导致反复 bind）
+   useEffect(() => {
+     const onMove = (e: MouseEvent) => {
+-      if (!dragRef.current) return;
+-      setPos({
+-        x: Math.max(0, Math.min(window.innerWidth - 380, e.clientX - dragRef.current.dx)),
+-        y: Math.max(0, Math.min(window.innerHeight - 100, e.clientY - dragRef.current.dy)),
+-      });
++      if (dragRef.current) {
++        const { w, h } = sizeRef.current;
++        const maxX = window.innerWidth - w - EDGE_MARGIN;
++        const maxY = window.innerHeight - h - EDGE_MARGIN;
++        setPos({
++          x: Math.max(EDGE_MARGIN, Math.min(maxX, e.clientX - dragRef.current.dx)),
++          y: Math.max(EDGE_MARGIN, Math.min(maxY, e.clientY - dragRef.current.dy)),
++        });
++        return;
++      }
++      const r = resizeRef.current;
++      if (r) {
++        const dx = e.clientX - r.mx;
++        const dy = e.clientY - r.my;
++        if (r.corner === 'br') {
++          // 右下角：尺寸随鼠标变化，左上角不动；右侧/底部至少留 EDGE_MARGIN
++          const newW = Math.max(MIN_W, Math.min(window.innerWidth - r.px - EDGE_MARGIN, r.w + dx));
++          const newH = Math.max(MIN_H, Math.min(window.innerHeight - r.py - EDGE_MARGIN, r.h + dy));
++          setSize({ w: newW, h: newH });
++        } else {
++          // 左上角：右下角不动，反算尺寸与新的左上角；左/上至少留 EDGE_MARGIN
++          const fixedRight = r.px + r.w;
++          const fixedBottom = r.py + r.h;
++          const newW = Math.max(MIN_W, r.w - dx);
++          const newH = Math.max(MIN_H, r.h - dy);
++          const newX = Math.max(EDGE_MARGIN, Math.min(fixedRight - MIN_W, fixedRight - newW));
++          const newY = Math.max(EDGE_MARGIN, Math.min(fixedBottom - MIN_H, fixedBottom - newH));
++          setSize({ w: fixedRight - newX, h: fixedBottom - newY });
++          setPos({ x: newX, y: newY });
++        }
++      }
++    };
++    const onUp = () => {
++      dragRef.current = null;
++      resizeRef.current = null;
++      document.body.style.cursor = '';
++      document.body.style.userSelect = '';
+     };
+-    const onUp = () => { dragRef.current = null; };
+     window.addEventListener('mousemove', onMove);
+     window.addEventListener('mouseup', onUp);
+     return () => {
+@@ -32,31 +164,128 @@ export function ChatPanel({ spaceSlug, onClose }: Props) {
+     };
+   }, []);
+ 
++  // 浏览器窗口缩放：面板跟随最近的边移动
++  // 例如默认锚定右下角，窗口扩大时面板跟着右下移；缩小时反向避让
++  // 关键：判断"原来更靠近哪边"必须用变化前的窗口尺寸，否则窗口扩大时
++  // panel 与右边的"新距离"会变大、误判成贴左，导致面板不跟随
++  const prevWinRef = useRef({ w: window.innerWidth, h: window.innerHeight });
++  useEffect(() => {
++    const onResize = () => {
++      const curPos = posRef.current;
++      const curSize = sizeRef.current;
++      const prevW = prevWinRef.current.w;
++      const prevH = prevWinRef.current.h;
++
++      // 窗口可能变得比面板还小：先把 size 夹到可见范围（至少留 EDGE_MARGIN）
++      const maxW = Math.max(MIN_W, window.innerWidth - EDGE_MARGIN * 2);
++      const maxH = Math.max(MIN_H, window.innerHeight - EDGE_MARGIN * 2);
++      const newW = Math.min(curSize.w, maxW);
++      const newH = Math.min(curSize.h, maxH);
++
++      // 用"变化前"的窗口尺寸算面板到各边的原距离，判断原来贴哪边
++      const distLeft = curPos.x;
++      const distRight = prevW - (curPos.x + curSize.w);
++      const distTop = curPos.y;
++      const distBottom = prevH - (curPos.y + curSize.h);
++
++      let newX: number;
++      if (distRight <= distLeft) {
++        // 原来贴右：保持右边缘距离（不小于 EDGE_MARGIN）
++        const keepRight = Math.max(EDGE_MARGIN, distRight);
++        newX = window.innerWidth - newW - keepRight;
++      } else {
++        // 原来贴左：保持左边缘距离
++        newX = Math.max(EDGE_MARGIN, distLeft);
++      }
++      newX = Math.min(newX, window.innerWidth - newW - EDGE_MARGIN);
++
++      let newY: number;
++      if (distBottom <= distTop) {
++        const keepBottom = Math.max(EDGE_MARGIN, distBottom);
++        newY = window.innerHeight - newH - keepBottom;
++      } else {
++        newY = Math.max(EDGE_MARGIN, distTop);
++      }
++      newY = Math.min(newY, window.innerHeight - newH - EDGE_MARGIN);
++
++      setSize({ w: newW, h: newH });
++      setPos({ x: newX, y: newY });
++      prevWinRef.current = { w: window.innerWidth, h: window.innerHeight };
++    };
++    window.addEventListener('resize', onResize);
++    return () => window.removeEventListener('resize', onResize);
++  }, []);
++
+   const startDrag = (e: React.MouseEvent) => {
+     dragRef.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+   };
+ 
++  const startResize = (e: React.MouseEvent, corner: 'tl' | 'br') => {
++    e.preventDefault();
++    e.stopPropagation();
++    resizeRef.current = { mx: e.clientX, my: e.clientY, w: size.w, h: size.h, px: pos.x, py: pos.y, corner };
++    document.body.style.cursor = corner === 'br' ? 'nwse-resize' : 'nwse-resize'; // 两个角视觉上都用斜向光标
++    document.body.style.userSelect = 'none';
++  };
++
++  // 包装 send：发送时附带当前 page id（URL 提取，让 claude 知道用户在哪个文档）
++  const handleSend = (text: string, attachments?: ChatAttachment[]) => {
++    send(text, { activePageId: getCurrentPageId() }, attachments);
++  };
++
+   return (
+     <div
+-      className="fixed z-50 w-[380px] h-[520px] bg-notion-bg border border-notion-border rounded-lg shadow-2xl flex flex-col overflow-hidden"
+-      style={{ left: pos.x, top: pos.y }}
++      onDrop={onDrop}
++      onDragOver={onDragOver}
++      onDragLeave={onDragLeave}
++      data-claude-chat="true"
++      className={`fixed z-50 bg-notion-bg border border-notion-border rounded-lg shadow-2xl flex flex-col overflow-hidden${open ? '' : ' hidden'}`}
++      style={{ left: pos.x, top: pos.y, width: size.w, height: size.h }}
+     >
++      {dragOver && (
++        <div className="absolute inset-0 pointer-events-none border-2 border-dashed border-blue-400 rounded flex items-center justify-center bg-blue-50/80 z-20">
++          <span className="text-sm text-blue-700">松开以上传文件</span>
++        </div>
++      )}
+       <div
+         onMouseDown={startDrag}
+         className="px-3 py-2 bg-notion-text text-white flex items-center justify-between cursor-move select-none"
+       >
+-        <span className="text-sm font-medium">Claude</span>
++        <span className="text-sm font-medium">Agent</span>
+         <button onClick={onClose} className="p-1 hover:bg-white/20 rounded" title="关闭">
+           <X className="w-4 h-4" />
+         </button>
+       </div>
+-      {status === 'answering' && (
+-        <div className="px-3 py-1 text-xs text-notion-textSecondary bg-notion-hover border-b border-notion-border">
+-          Claude 正在思考...
+-        </div>
+-      )}
+-      <MessageList messages={messages} />
+-      <MessageInput onSend={send} disabled={status === 'answering'} />
++      <MessageList messages={messages} status={status} />
++      <MessageInput
++        onSend={handleSend}
++        disabled={status === 'answering'}
++        uploadAttachment={uploadAttachment}
++        pendings={pendings}
++        onRemovePending={removePending}
++        onFiles={handleFiles}
++      />
++
++      {/* 左上角调整大小：hover 才显示 */}
++      <div
++        onMouseDown={(e) => startResize(e, 'tl')}
++        className="absolute top-0 left-0 w-3 h-3 cursor-nwse-resize opacity-0 hover:opacity-100 hover:bg-blue-500/60 z-30 transition-opacity outline-none select-none focus:outline-none"
++        title="拖动调整大小"
++      >
++        <svg viewBox="0 0 10 10" className="w-full h-full text-white pointer-events-none">
++          <path d="M1 9 L9 1 M5 9 L9 5" stroke="currentColor" strokeWidth="1" />
++        </svg>
++      </div>
++      {/* 右下角调整大小：hover 才显示 */}
++      <div
++        onMouseDown={(e) => startResize(e, 'br')}
++        className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize opacity-0 hover:opacity-100 hover:bg-blue-500/60 z-30 transition-opacity outline-none select-none focus:outline-none"
++        title="拖动调整大小"
++      >
++        <svg viewBox="0 0 10 10" className="w-full h-full text-white pointer-events-none">
++          <path d="M9 1 L1 9 M9 5 L5 9" stroke="currentColor" strokeWidth="1" />
++        </svg>
++      </div>
+     </div>
+   );
+ }
+diff --git a/frontend/src/components/ClaudeChat/FloatingButton.tsx b/frontend/src/components/ClaudeChat/FloatingButton.tsx
+index ed8a8f9..e0d94b8 100644
+--- a/frontend/src/components/ClaudeChat/FloatingButton.tsx
++++ b/frontend/src/components/ClaudeChat/FloatingButton.tsx
+@@ -4,8 +4,8 @@ export function FloatingButton({ onClick }: { onClick: () => void }) {
+   return (
+     <button
+       onClick={onClick}
+-      className="fixed bottom-6 right-6 z-40 w-12 h-12 rounded-full bg-notion-text text-white shadow-lg hover:bg-notion-text/90 flex items-center justify-center"
+-      title="Claude 助手"
++      className="fixed bottom-6 right-6 z-40 w-12 h-12 rounded-full bg-notion-text text-white shadow-lg opacity-50 hover:opacity-100 transition-opacity flex items-center justify-center"
++      title="Agent 助手"
+     >
+       <Bot className="w-6 h-6" />
+     </button>
+diff --git a/frontend/src/components/ClaudeChat/MessageInput.tsx b/frontend/src/components/ClaudeChat/MessageInput.tsx
+index a1e61ea..77610e0 100644
+--- a/frontend/src/components/ClaudeChat/MessageInput.tsx
++++ b/frontend/src/components/ClaudeChat/MessageInput.tsx
+@@ -1,18 +1,53 @@
+-import { useState, KeyboardEvent } from 'react';
+-import { Send } from 'lucide-react';
++import { useRef, useState, KeyboardEvent, ChangeEvent, ClipboardEvent } from 'react';
++import { Send, Paperclip, Loader2, X } from 'lucide-react';
++import { ChatAttachment } from '../../hooks/useClaudeChat';
+ 
+ interface Props {
+-  onSend: (text: string) => void;
++  onSend: (text: string, attachments?: ChatAttachment[]) => void;
+   disabled: boolean;
++  uploadAttachment: (file: File) => Promise<{ attachmentId: string; filename: string }>;
++  // 由 ChatPanel 提升上来的附件状态（整个面板都是 drop target）
++  pendings: PendingAttachment[];
++  onRemovePending: (localId: string) => void;
++  onFiles: (files: FileList | File[] | null) => void;
+ }
+ 
+-export function MessageInput({ onSend, disabled }: Props) {
++export const MAX_SIZE = 5 * 1024 * 1024; // 5MB
++
++/** 单个附件在 UI 中的状态机：uploading → done | error */
++export interface PendingAttachment {
++  /** 前端临时 id，仅用于 react key */
++  localId: string;
++  filename: string;
++  status: 'uploading' | 'done' | 'error';
++  /** 上传成功后的后端 attachmentId（done 时有值） */
++  attachmentId?: string;
++  /** 失败时的错误信息 */
++  error?: string;
++}
++
++let localIdCounter = 0;
++export function nextLocalId() {
++  localIdCounter += 1;
++  return `pa_${Date.now()}_${localIdCounter}`;
++}
++
++export function MessageInput({ onSend, disabled, pendings, onRemovePending, onFiles }: Props) {
+   const [text, setText] = useState('');
++  const fileInputRef = useRef<HTMLInputElement>(null);
+ 
+   const submit = () => {
+     if (!text.trim() || disabled) return;
+-    onSend(text);
++    // 只取上传完成的附件，进行中的附件不阻塞发送（用户应等上传完再发）
++    const ready = pendings.filter(p => p.status === 'done' && p.attachmentId);
++    onSend(
++      text,
++      ready.length > 0 ? ready.map(p => ({ attachmentId: p.attachmentId!, filename: p.filename })) : undefined,
++    );
+     setText('');
++    // pendings 由 ChatPanel 持有，发送后由 ChatPanel 清空
++    // 这里通过 onRemovePending 逐个清掉
++    pendings.forEach(p => onRemovePending(p.localId));
+   };
+ 
+   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+@@ -22,25 +57,125 @@ export function MessageInput({ onSend, disabled }: Props) {
+     }
+   };
+ 
++  const onFilePick = (e: ChangeEvent<HTMLInputElement>) => {
++    onFiles(e.target.files);
++    e.target.value = ''; // 允许重复选择同一文件
++  };
++
++  // 粘贴：仅处理图片（clipboard API 对文件类型有限支持，图片是最常见用例）
++  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
++    const items = e.clipboardData?.items;
++    if (!items) return;
++    const imageFiles: File[] = [];
++    for (let i = 0; i < items.length; i++) {
++      const item = items[i];
++      if (item.kind === 'file' && item.type.startsWith('image/')) {
++        const f = item.getAsFile();
++        if (f) {
++          // 浏览器给的粘贴文件名通常是 "image.png" 这种，重命名带时间戳避免冲突
++          const ext = f.name.split('.').pop() || 'png';
++          const renamed = new File([f], `pasted-${Date.now()}.${ext}`, { type: f.type });
++          imageFiles.push(renamed);
++        }
++      }
++    }
++    if (imageFiles.length > 0) {
++      e.preventDefault(); // 阻止默认粘贴（避免把图片二进制当文本插入）
++      onFiles(imageFiles);
++    }
++  };
++
++  const hasUploading = pendings.some(p => p.status === 'uploading');
++  const canSend = !disabled && !hasUploading && (text.trim().length > 0 || pendings.some(p => p.status === 'done'));
++
+   return (
+-    <div className="border-t border-notion-border p-2 flex items-end gap-2">
+-      <textarea
+-        value={text}
+-        onChange={(e) => setText(e.target.value)}
+-        onKeyDown={onKeyDown}
+-        rows={1}
+-        placeholder={disabled ? 'Claude 正在回答...' : '输入消息，Enter 发送'}
+-        className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm resize-none max-h-32 focus:outline-none focus:ring-1 focus:ring-blue-500"
+-        disabled={disabled}
+-      />
++    <div className="border-t border-notion-border px-3 py-2 flex flex-col gap-1">
++      {pendings.length > 0 && (
++        <div className="flex flex-wrap gap-1">
++          {pendings.map(p => (
++            <AttachmentChip key={p.localId} attachment={p} onRemove={() => onRemovePending(p.localId)} />
++          ))}
++        </div>
++      )}
++      <div className="flex items-end gap-2">
++        <button
++          type="button"
++          onClick={() => fileInputRef.current?.click()}
++          disabled={disabled}
++          className="p-2 text-notion-textSecondary hover:bg-notion-hover rounded disabled:opacity-30"
++          title="上传附件"
++        >
++          <Paperclip className="w-4 h-4" />
++        </button>
++        <input
++          ref={fileInputRef}
++          type="file"
++          multiple
++          className="hidden"
++          onChange={onFilePick}
++        />
++        <textarea
++          value={text}
++          onChange={(e) => setText(e.target.value)}
++          onKeyDown={onKeyDown}
++          onPaste={onPaste}
++          rows={1}
++          placeholder={disabled ? 'Agent 正在回答...' : '输入消息，Enter 发送，拖拽/粘贴/点📎上传文件'}
++          className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm resize-none max-h-32 focus:outline-none focus:ring-1 focus:ring-blue-500"
++          disabled={disabled}
++        />
++        <button
++          onClick={submit}
++          disabled={!canSend}
++          className="p-2 bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-30"
++          title={hasUploading ? '附件上传中...' : '发送'}
++        >
++          <Send className="w-4 h-4" />
++        </button>
++      </div>
++    </div>
++  );
++}
++
++/** 附件 chip：上传中显示 spinner，完成显示 📎+filename，失败显示错误 */
++function AttachmentChip({ attachment, onRemove }: { attachment: PendingAttachment; onRemove: () => void }) {
++  const base = 'text-xs px-1.5 py-0.5 rounded flex items-center gap-1 max-w-[180px]';
++  if (attachment.status === 'uploading') {
++    return (
++      <span className={`${base} bg-blue-100 text-blue-700`}>
++        <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
++        <span className="truncate">{attachment.filename}</span>
++      </span>
++    );
++  }
++  if (attachment.status === 'error') {
++    return (
++      <span className={`${base} bg-red-100 text-red-700`} title={attachment.error}>
++        <span className="truncate">⚠ {attachment.filename}</span>
++        <button
++          type="button"
++          onClick={onRemove}
++          className="text-red-500 hover:text-red-800 flex-shrink-0"
++          title="移除"
++        >
++          <X className="w-3 h-3" />
++        </button>
++      </span>
++    );
++  }
++  // done
++  return (
++    <span className={`${base} bg-blue-100 text-blue-800`}>
++      <Paperclip className="w-3 h-3 flex-shrink-0" />
++      <span className="truncate">{attachment.filename}</span>
+       <button
+-        onClick={submit}
+-        disabled={disabled || !text.trim()}
+-        className="p-2 bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-30"
+-        title="发送"
++        type="button"
++        onClick={onRemove}
++        className="text-blue-500 hover:text-blue-800 flex-shrink-0"
++        title="移除"
+       >
+-        <Send className="w-4 h-4" />
++        <X className="w-3 h-3" />
+       </button>
+-    </div>
++    </span>
+   );
+ }
+diff --git a/frontend/src/components/ClaudeChat/MessageList.tsx b/frontend/src/components/ClaudeChat/MessageList.tsx
+index 407710e..1445cf4 100644
+--- a/frontend/src/components/ClaudeChat/MessageList.tsx
++++ b/frontend/src/components/ClaudeChat/MessageList.tsx
+@@ -1,10 +1,23 @@
+-import { ChatMessage } from '../../hooks/useClaudeChat';
++import { useEffect, useRef } from 'react';
++import { ChatMessage, ChatStatus } from '../../hooks/useClaudeChat';
+ 
+-export function MessageList({ messages }: { messages: ChatMessage[] }) {
+-  if (messages.length === 0) {
++interface Props {
++  messages: ChatMessage[];
++  status: ChatStatus;
++}
++
++export function MessageList({ messages, status }: Props) {
++  const bottomRef = useRef<HTMLDivElement>(null);
++
++  // 新消息或思考状态变化时滚到底部
++  useEffect(() => {
++    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
++  }, [messages.length, status]);
++
++  if (messages.length === 0 && status !== 'answering') {
+     return (
+       <div className="flex-1 flex items-center justify-center text-sm text-notion-textSecondary">
+-        向 Claude 提问关于这个空间的问题
++        向 Agent 提问关于这个空间的问题
+       </div>
+     );
+   }
+@@ -16,6 +29,15 @@ export function MessageList({ messages }: { messages: ChatMessage[] }) {
+             <div key={m.id} className="flex justify-end">
+               <div className="max-w-[85%] px-3 py-1.5 bg-blue-500 text-white rounded-lg text-sm whitespace-pre-wrap">
+                 {m.content}
++                {m.attachments && m.attachments.length > 0 && (
++                  <div className="mt-1 pt-1 border-t border-white/30 flex flex-wrap gap-1">
++                    {m.attachments.map((a, i) => (
++                      <span key={i} className="text-xs px-1 py-0.5 bg-white/20 rounded">
++                        📎 {a.filename}
++                      </span>
++                    ))}
++                  </div>
++                )}
+               </div>
+             </div>
+           );
+@@ -39,6 +61,16 @@ export function MessageList({ messages }: { messages: ChatMessage[] }) {
+           </div>
+         );
+       })}
++      {status === 'answering' && (
++        <div className="flex">
++          <div className="px-3 py-2.5 bg-white border border-notion-border rounded-lg inline-flex items-center gap-1">
++            <span className="w-1.5 h-1.5 rounded-full bg-notion-textSecondary/60 animate-bounce [animation-delay:-0.3s]" />
++            <span className="w-1.5 h-1.5 rounded-full bg-notion-textSecondary/60 animate-bounce [animation-delay:-0.15s]" />
++            <span className="w-1.5 h-1.5 rounded-full bg-notion-textSecondary/60 animate-bounce" />
++          </div>
++        </div>
++      )}
++      <div ref={bottomRef} />
+     </div>
+   );
+ }
+diff --git a/frontend/src/components/ClaudeChat/index.tsx b/frontend/src/components/ClaudeChat/index.tsx
+index 4d13e94..6ab8c24 100644
+--- a/frontend/src/components/ClaudeChat/index.tsx
++++ b/frontend/src/components/ClaudeChat/index.tsx
+@@ -9,7 +9,7 @@ export function ClaudeChat() {
+   const { user, isAuthenticated } = useAuthStore();
+   const currentSpace = useSpaceStore(s => s.currentSpace);
+ 
+-  // 切换 space 自动关闭面板
++  // 切换 space 自动隐藏面板（WS 会在 useClaudeChat 的 space 变化副作用里断开）
+   useEffect(() => {
+     setOpen(false);
+   }, [currentSpace?.slug]);
+@@ -20,10 +20,16 @@ export function ClaudeChat() {
+   // 当前 space 未启用 claude 不显示
+   if (!currentSpace || !currentSpace.feature_flags?.claude) return null;
+ 
++  // 关键：ChatPanel 始终挂载，关闭只是 CSS 隐藏
++  // 这样 WS / 消息状态 / 面板位置尺寸 都保留，不随关闭而丢失
+   return (
+     <>
+       {!open && <FloatingButton onClick={() => setOpen(true)} />}
+-      {open && <ChatPanel spaceSlug={currentSpace.slug} onClose={() => setOpen(false)} />}
++      <ChatPanel
++        spaceSlug={currentSpace.slug}
++        open={open}
++        onClose={() => setOpen(false)}
++      />
+     </>
+   );
+ }
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index d8d7e30..c5af36d 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -4017,6 +4017,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const hasFiles = !!e.dataTransfer?.types?.includes('Files');
+       if (!hasFiles) return;
+ 
++      // 落点在 Claude 聊天面板上：放行，让聊天面板处理
++      const overEl = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
++      if (overEl?.closest('[data-claude-chat="true"]')) return;
++
+       e.preventDefault();
+       e.stopPropagation();
+       if (e.dataTransfer) {
+@@ -4030,10 +4034,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const files = Array.from(e.dataTransfer?.files || []);
+       if (files.length === 0) return;
+ 
++      // 落点在 Claude 聊天面板上：放行，让聊天面板处理
++      const dropTarget = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
++      if (dropTarget?.closest('[data-claude-chat="true"]')) return;
++
+       e.preventDefault();
+       e.stopPropagation();
+ 
+-      const dropTarget = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+       const targetBlockEl = dropTarget?.closest('[data-id]') as HTMLElement | null;
+       const targetBlockId = targetBlockEl?.getAttribute('data-id') || null;
+ 
+@@ -4676,6 +4683,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     // Keyboard: Escape toggles selection, Delete/Backspace removes selected blocks
+     // Uses module-level getSelectedBlockIds() to avoid stale closure issues
+     const handleKeyDown = (e: KeyboardEvent) => {
++      // 焦点在 Claude 聊天面板内（textarea 等）：放行，让输入框原生处理
++      const targetEl = e.target as HTMLElement | null;
++      if (targetEl?.closest('[data-claude-chat="true"]')) return;
++
+       // Cmd+A / Ctrl+A: two-step select all (block text → all blocks)
+       if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.altKey) {
+         e.preventDefault();
+diff --git a/frontend/src/components/Layout/Sidebar.tsx b/frontend/src/components/Layout/Sidebar.tsx
+index f3f86ad..4beca80 100644
+--- a/frontend/src/components/Layout/Sidebar.tsx
++++ b/frontend/src/components/Layout/Sidebar.tsx
+@@ -104,30 +104,17 @@ export default function Sidebar({ onToggle }: SidebarProps) {
+           {/* 设置组 */}
+           <p className="px-2 pt-1 pb-0.5 text-[11px] font-medium text-notion-sidebarSecHeader uppercase tracking-wider">设置</p>
+           {isAdminRole && (
+-            <>
+-              <button
+-                onClick={() => navigate('/admin?tab=site')}
+-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
+-                  adminTab === 'site'
+-                    ? 'bg-notion-hover text-notion-text font-medium'
+-                    : 'text-notion-text hover:bg-notion-hover'
+-                }`}
+-              >
+-                <Settings className="w-4 h-4" />
+-                <span>站点设置</span>
+-              </button>
+-              <button
+-                onClick={() => navigate('/admin?tab=claude')}
+-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
+-                  adminTab === 'claude'
+-                    ? 'bg-notion-hover text-notion-text font-medium'
+-                    : 'text-notion-text hover:bg-notion-hover'
+-                }`}
+-              >
+-                <Bot className="w-4 h-4" />
+-                <span>Claude</span>
+-              </button>
+-            </>
++            <button
++              onClick={() => navigate('/admin?tab=site')}
++              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
++                adminTab === 'site'
++                  ? 'bg-notion-hover text-notion-text font-medium'
++                  : 'text-notion-text hover:bg-notion-hover'
++              }`}
++            >
++              <Settings className="w-4 h-4" />
++              <span>站点设置</span>
++            </button>
+           )}
+           <button
+             onClick={() => navigate('/admin?tab=profile')}
+@@ -167,6 +154,17 @@ export default function Sidebar({ onToggle }: SidebarProps) {
+                 <Database className="w-4 h-4" />
+                 <span>空间管理</span>
+               </button>
++              <button
++                onClick={() => navigate('/admin?tab=claude')}
++                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
++                  adminTab === 'claude'
++                    ? 'bg-notion-hover text-notion-text font-medium'
++                    : 'text-notion-text hover:bg-notion-hover'
++                }`}
++              >
++                <Bot className="w-4 h-4" />
++                <span>Agent管理</span>
++              </button>
+             </>
+           )}
+           <button
+diff --git a/frontend/src/hooks/useClaudeChat.ts b/frontend/src/hooks/useClaudeChat.ts
+index dcf2323..426a34f 100644
+--- a/frontend/src/hooks/useClaudeChat.ts
++++ b/frontend/src/hooks/useClaudeChat.ts
+@@ -1,4 +1,5 @@
+ import { useCallback, useEffect, useRef, useState } from 'react';
++import { claudeApi } from '../api/claude';
+ 
+ export type ChatStatus = 'idle' | 'answering' | 'error';
+ 
+@@ -7,6 +8,13 @@ export interface ChatMessage {
+   role: 'user' | 'assistant' | 'system';
+   content: string;
+   variant?: 'denied' | 'error'; // system 消息的子类型
++  attachments?: { filename: string }[]; // 用户消息附带的文件名列表（仅 UI 展示）
++}
++
++/** 当前 UI 状态，发给后端拼装到 claude message 前置 block */
++export interface ChatContext {
++  activePageId?: string;
++  selection?: string;
+ }
+ 
+ interface UseClaudeChatOptions {
+@@ -18,10 +26,20 @@ interface UseClaudeChatReturn {
+   messages: ChatMessage[];
+   status: ChatStatus;
+   isConnected: boolean;
+-  send: (text: string) => void;
++  sessionId: string | null;
++  /** 发送消息：text + 可选 context + 可选附件列表 */
++  send: (text: string, context?: ChatContext, attachments?: ChatAttachment[]) => void;
++  /** 上传附件到当前 session，返回 attachmentId 与去重后的 filename */
++  uploadAttachment: (file: File) => Promise<{ attachmentId: string; filename: string }>;
+   reset: () => void;
+ }
+ 
++/** 发送时引用的附件（前端把 attachmentId 与 filename 一起保留，便于 UI 显示） */
++export interface ChatAttachment {
++  attachmentId: string;
++  filename: string;
++}
++
+ let msgIdCounter = 0;
+ function nextId() {
+   msgIdCounter += 1;
+@@ -32,33 +50,79 @@ export function useClaudeChat({ spaceSlug, enabled }: UseClaudeChatOptions): Use
+   const [messages, setMessages] = useState<ChatMessage[]>([]);
+   const [status, setStatus] = useState<ChatStatus>('idle');
+   const [isConnected, setIsConnected] = useState(false);
++  const [sessionId, setSessionId] = useState<string | null>(null);
+   const wsRef = useRef<WebSocket | null>(null);
+ 
+-  // 切换 space 或 enabled 变化 → 重置
+-  useEffect(() => {
+-    if (!enabled || !spaceSlug) {
+-      return;
+-    }
++  // session_init 之前用户拖的文件暂存这里，session_init 后自动 flush
++  const pendingQueueRef = useRef<Array<{
++    file: File;
++    resolve: (r: { attachmentId: string; filename: string }) => void;
++    reject: (e: Error) => void;
++  }>>([]);
++
++  // WS 未连时入队的待发送消息，WS onopen 后 flush
++  const pendingSendRef = useRef<Array<{ text: string; context?: ChatContext; attachments?: ChatAttachment[] }>>([]);
++
++  // 在 connect 内读取最新 spaceSlug/enabled，避免把 connect 加进 useEffect deps
++  const cfgRef = useRef({ spaceSlug, enabled });
++  cfgRef.current = { spaceSlug, enabled };
++
++  // 创建 WS 连接（lazy：仅在 send 时触发）
++  const connect = useCallback(() => {
++    if (wsRef.current) return; // 已经在连/已连
++    const { spaceSlug: slug, enabled: en } = cfgRef.current;
++    if (!en || !slug) return;
+     const token = localStorage.getItem('token');
+     if (!token) return;
+ 
+-    setMessages([]);
+-    setStatus('idle');
+-
+-    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/spaces/${encodeURIComponent(spaceSlug)}/claude/ws?token=${encodeURIComponent(token)}`;
++    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/spaces/${encodeURIComponent(slug)}/claude/ws?token=${encodeURIComponent(token)}`;
++    console.log('[useClaudeChat] connecting to', wsUrl);
+     const ws = new WebSocket(wsUrl);
+     wsRef.current = ws;
+ 
+-    ws.onopen = () => setIsConnected(true);
+-    ws.onclose = () => {
+-      setIsConnected(false);
+-      wsRef.current = null;
++    ws.onopen = () => {
++      console.log('[useClaudeChat] WS open');
++      if (wsRef.current !== ws) return;
++      setIsConnected(true);
++      // flush 队列中待发送的消息
++      const queue = pendingSendRef.current;
++      pendingSendRef.current = [];
++      queue.forEach(m => {
++        if (ws.readyState === WebSocket.OPEN) {
++          ws.send(JSON.stringify({
++            type: 'user_message',
++            content: m.text,
++            context: m.context || {},
++            attachments: m.attachments?.map(a => a.attachmentId) || [],
++          }));
++        }
++      });
++    };
++    ws.onclose = (e) => {
++      console.log('[useClaudeChat] WS close:', e.code, e.reason);
++      // 只在自己仍是当前连接时才清，避免 StrictMode 双 mount 时
++      // ws1 的异步 onclose 把 ws2 的 wsRef 引用清掉导致 send 静默失败
++      if (wsRef.current === ws) {
++        wsRef.current = null;
++        setIsConnected(false);
++        setSessionId(null);
++      }
++    };
++    ws.onerror = (e) => {
++      console.error('[useClaudeChat] WS error:', e);
++      if (wsRef.current === ws) setStatus('error');
+     };
+-    ws.onerror = () => setStatus('error');
+     ws.onmessage = (ev) => {
+       let msg: any;
+       try { msg = JSON.parse(ev.data); } catch { return; }
+       switch (msg.type) {
++        case 'session_init':
++          console.log('[useClaudeChat] session_init', msg.session_id);
++          if (wsRef.current === ws) {
++            setSessionId(msg.session_id);
++            flushPendingUploads(msg.session_id);
++          }
++          break;
+         case 'status':
+           setStatus(msg.status === 'answering' ? 'answering' : 'idle');
+           break;
+@@ -85,25 +149,90 @@ export function useClaudeChat({ spaceSlug, enabled }: UseClaudeChatOptions): Use
+           break;
+       }
+     };
++  }, []);
+ 
++  // 切 space / enabled 变化 / 卸载：关闭 WS 并重置
++  // 注意：这里不 auto-connect，由 send 触发 lazy connect
++  useEffect(() => {
++    setMessages([]);
++    setStatus('idle');
++    setSessionId(null);
+     return () => {
+-      ws.close();
+-      wsRef.current = null;
++      if (wsRef.current) {
++        wsRef.current.close();
++        wsRef.current = null;
++      }
++      setIsConnected(false);
++      setSessionId(null);
++      pendingSendRef.current = [];
+     };
+   }, [spaceSlug, enabled]);
+ 
+-  const send = useCallback((text: string) => {
++  const send = useCallback((text: string, context?: ChatContext, attachments?: ChatAttachment[]) => {
+     const trimmed = text.trim();
+-    if (!trimmed || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
++    if (!trimmed) return;
+     if (status === 'answering') return;
+-    setMessages(prev => [...prev, { id: nextId(), role: 'user', content: trimmed }]);
+-    wsRef.current.send(JSON.stringify({ type: 'user_message', content: trimmed }));
+-  }, [status]);
++
++    // 用户消息 bubble 上附带附件文件名（仅 UI 展示用，后端会通过 attachmentId 解析）
++    const fileMeta = attachments?.map(a => ({ filename: a.filename })) || [];
++    setMessages(prev => [...prev, {
++      id: nextId(),
++      role: 'user',
++      content: trimmed,
++      attachments: fileMeta.length > 0 ? fileMeta : undefined,
++    }]);
++
++    // WS 未连：入队 + 触发 lazy connect，等 onopen flush
++    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
++      pendingSendRef.current.push({ text: trimmed, context, attachments });
++      connect();
++      return;
++    }
++
++    wsRef.current.send(JSON.stringify({
++      type: 'user_message',
++      content: trimmed,
++      context: context || {},
++      attachments: attachments?.map(a => a.attachmentId) || [],
++    }));
++  }, [status, connect]);
++
++  const uploadAttachment = useCallback(async (file: File) => {
++    if (!spaceSlug) {
++      throw new Error('space 未就绪，无法上传');
++    }
++    // session 没 ready：把文件加入 pending 队列，返回 Promise
++    // 等 session_init 触发后自动 flush 上传并 resolve
++    if (!sessionId) {
++      console.log('[useClaudeChat] session 未就绪，文件入队:', file.name);
++      return new Promise<{ attachmentId: string; filename: string }>((resolve, reject) => {
++        pendingQueueRef.current.push({ file, resolve, reject });
++      });
++    }
++    return claudeApi.uploadAttachment(spaceSlug, sessionId, file);
++  }, [spaceSlug, sessionId]);
++
++  // session_init 后 flush 队列
++  const flushPendingUploads = (sid: string) => {
++    if (!spaceSlug) return;
++    const queue = pendingQueueRef.current;
++    if (queue.length === 0) return;
++    console.log(`[useClaudeChat] flush ${queue.length} 个待上传文件`);
++    pendingQueueRef.current = [];
++    queue.forEach(async ({ file, resolve, reject }) => {
++      try {
++        const r = await claudeApi.uploadAttachment(spaceSlug, sid, file);
++        resolve(r);
++      } catch (e: any) {
++        reject(e instanceof Error ? e : new Error(String(e)));
++      }
++    });
++  };
+ 
+   const reset = useCallback(() => {
+     setMessages([]);
+     setStatus('idle');
+   }, []);
+ 
+-  return { messages, status, isConnected, send, reset };
++  return { messages, status, isConnected, sessionId, send, uploadAttachment, reset };
+ }
+diff --git a/frontend/src/pages/AdminPage.tsx b/frontend/src/pages/AdminPage.tsx
+index cd31609..2c77fd6 100644
+--- a/frontend/src/pages/AdminPage.tsx
++++ b/frontend/src/pages/AdminPage.tsx
+@@ -162,17 +162,21 @@ export default function AdminPage() {
+   const logoFileRef = useRef<HTMLInputElement>(null);
+ 
+   // ---- Claude 配置状态 ----
+-  const [, setClaudeConfig] = useState<ClaudeAdminConfig | null>(null);
++  const [claudeConfig, setClaudeConfig] = useState<ClaudeAdminConfig | null>(null);
+   const [claudeEnvToken, setClaudeEnvToken] = useState('');
+   const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
+   const [claudeEnvModel, setClaudeEnvModel] = useState('');
+   const [claudeSettingsRaw, setClaudeSettingsRaw] = useState('');
+   const [claudeSettingsError, setClaudeSettingsError] = useState('');
++  const [claudeShowFullSettings, setClaudeShowFullSettings] = useState(false);
+   const [claudeSystemPrompt, setClaudeSystemPrompt] = useState('');
+   const [claudeAllowBash, setClaudeAllowBash] = useState(false);
+   const [claudeAllowWeb, setClaudeAllowWeb] = useState(false);
+-  const [claudeSaving, setClaudeSaving] = useState(false);
+-  const [claudeMsg, setClaudeMsg] = useState('');
++  const [claudeTokenSaving, setClaudeTokenSaving] = useState(false);
++  const [claudeTokenMsg, setClaudeTokenMsg] = useState('');
++  const [claudePromptSaving, setClaudePromptSaving] = useState(false);
++  const [claudePromptMsg, setClaudePromptMsg] = useState('');
++  const [claudeToolMsg, setClaudeToolMsg] = useState('');
+ 
+   // ---- 图标选择器点击外部关闭 ----
+   useEffect(() => {
+@@ -326,7 +330,10 @@ export default function AdminPage() {
+       setClaudeSystemPrompt(cfg.system_prompt ?? '');
+       setClaudeAllowBash(cfg.tool_config?.allow_bash ?? false);
+       setClaudeAllowWeb(cfg.tool_config?.allow_web ?? false);
+-    }).catch(() => setClaudeMsg('加载 Claude 配置失败'));
++      setClaudeTokenMsg('');
++      setClaudePromptMsg('');
++      setClaudeToolMsg('');
++    }).catch(() => setClaudeTokenMsg('加载 Claude 配置失败'));
+   }, [activeTab]);
+ 
+   const updateFaviconLink = (url: string | null) => {
+@@ -1183,7 +1190,7 @@ export default function AdminPage() {
+ 
+         {/* 功能开关（仅编辑模式） */}
+         {isEditing && (
+-          <div className="mb-3 pb-3 border-b border-notion-border space-y-2">
++          <div className="mb-3 pb-3 border-b border-notion-border flex items-center gap-6">
+             <label className="flex items-center gap-2 cursor-pointer select-none">
+               <input
+                 type="checkbox"
+@@ -1200,7 +1207,7 @@ export default function AdminPage() {
+                 onChange={(e) => handleToggleClaudeFeature(e.target.checked)}
+                 className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+               />
+-              <span className="text-sm text-notion-text">Claude 助手</span>
++              <span className="text-sm text-notion-text">Agent助手</span>
+             </label>
+           </div>
+         )}
+@@ -1905,9 +1912,9 @@ export default function AdminPage() {
+     }
+   };
+ 
+-  const handleSaveClaudeConfig = async () => {
+-    setClaudeSaving(true);
+-    setClaudeMsg('');
++  const handleSaveTokenConfig = async () => {
++    setClaudeTokenSaving(true);
++    setClaudeTokenMsg('');
+     try {
+       let parsedSettings: Record<string, any>;
+       try {
+@@ -1917,87 +1924,176 @@ export default function AdminPage() {
+       }
+       const cfg: ClaudeAdminConfig = {
+         settings_json: parsedSettings,
++        system_prompt: claudeConfig?.system_prompt ?? '',
++        tool_config: claudeConfig?.tool_config ?? { allow_bash: false, allow_web: false },
++      };
++      await claudeApi.updateConfig(cfg);
++      setClaudeConfig(cfg);
++      setClaudeTokenMsg('已保存');
++    } catch (e: any) {
++      setClaudeTokenMsg(e.message || '保存失败');
++    } finally {
++      setClaudeTokenSaving(false);
++    }
++  };
++
++  const handleResetTokenConfig = () => {
++    if (!claudeConfig) return;
++    setClaudeEnvToken(claudeConfig.settings_json?.env?.ANTHROPIC_AUTH_TOKEN ?? '');
++    setClaudeEnvBaseUrl(claudeConfig.settings_json?.env?.ANTHROPIC_BASE_URL ?? '');
++    setClaudeEnvModel(claudeConfig.settings_json?.env?.ANTHROPIC_MODEL ?? '');
++    setClaudeSettingsRaw(JSON.stringify(claudeConfig.settings_json ?? {}, null, 2));
++    setClaudeSettingsError('');
++    setClaudeTokenMsg('');
++  };
++
++  const handleSaveSystemPrompt = async () => {
++    setClaudePromptSaving(true);
++    setClaudePromptMsg('');
++    try {
++      const cfg: ClaudeAdminConfig = {
++        settings_json: claudeConfig?.settings_json ?? {},
+         system_prompt: claudeSystemPrompt,
+-        tool_config: { allow_bash: claudeAllowBash, allow_web: claudeAllowWeb },
++        tool_config: claudeConfig?.tool_config ?? { allow_bash: false, allow_web: false },
+       };
+       await claudeApi.updateConfig(cfg);
+       setClaudeConfig(cfg);
+-      setClaudeMsg('已保存');
++      setClaudePromptMsg('已保存');
+     } catch (e: any) {
+-      setClaudeMsg(e.message || '保存失败');
++      setClaudePromptMsg(e.message || '保存失败');
+     } finally {
+-      setClaudeSaving(false);
++      setClaudePromptSaving(false);
++    }
++  };
++
++  const handleResetSystemPrompt = () => {
++    if (!claudeConfig) return;
++    setClaudeSystemPrompt(claudeConfig.system_prompt ?? '');
++    setClaudePromptMsg('');
++  };
++
++  const handleToggleTool = async (key: 'allow_bash' | 'allow_web', value: boolean) => {
++    // 即时提交：先 optimistic UI，失败则回滚
++    const prevBash = claudeAllowBash;
++    const prevWeb = claudeAllowWeb;
++    if (key === 'allow_bash') setClaudeAllowBash(value);
++    else setClaudeAllowWeb(value);
++    setClaudeToolMsg('');
++    try {
++      const cfg: ClaudeAdminConfig = {
++        settings_json: claudeConfig?.settings_json ?? {},
++        system_prompt: claudeConfig?.system_prompt ?? '',
++        tool_config: {
++          allow_bash: key === 'allow_bash' ? value : prevBash,
++          allow_web: key === 'allow_web' ? value : prevWeb,
++        },
++      };
++      await claudeApi.updateConfig(cfg);
++      setClaudeConfig(cfg);
++    } catch (e: any) {
++      // 回滚
++      setClaudeAllowBash(prevBash);
++      setClaudeAllowWeb(prevWeb);
++      setClaudeToolMsg('工具权限保存失败: ' + (e.message || ''));
+     }
+   };
+ 
+   const renderClaudeConfig = () => {
+     return (
+       <>
+-        <h1 className="text-xl font-semibold text-notion-text mb-6">Claude 助手配置</h1>
++        <h1 className="text-xl font-semibold text-notion-text mb-6">Agent配置</h1>
+         <div className="space-y-6">
+-          {/* 环境变量快速配置 */}
++          {/* 令牌配置（合并 settings.json 完整编辑） */}
+           <section className="bg-white rounded-lg p-5 border border-notion-border">
+-            <h2 className="text-sm font-medium text-notion-text mb-3">环境变量（写入 settings.json.env）</h2>
+-            <div className="space-y-3">
+-              <div>
+-                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_AUTH_TOKEN</label>
+-                <input
+-                  type="password"
+-                  value={claudeEnvToken}
+-                  onChange={(e) => { setClaudeEnvToken(e.target.value); syncEnvToSettings('ANTHROPIC_AUTH_TOKEN', e.target.value); }}
+-                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+-                  autoComplete="off"
+-                />
+-              </div>
+-              <div>
+-                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_BASE_URL</label>
+-                <input
+-                  type="text"
+-                  value={claudeEnvBaseUrl}
+-                  onChange={(e) => { setClaudeEnvBaseUrl(e.target.value); syncEnvToSettings('ANTHROPIC_BASE_URL', e.target.value); }}
+-                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+-                />
++            <div className="flex items-center justify-between mb-3">
++              <div className="flex items-center gap-2">
++                <h2 className="text-sm font-medium text-notion-text">令牌配置</h2>
++                <button
++                  type="button"
++                  onClick={() => setClaudeShowFullSettings(!claudeShowFullSettings)}
++                  className={`px-2 py-0.5 text-xs border rounded transition-colors ${
++                    claudeShowFullSettings
++                      ? 'bg-blue-500 text-white border-blue-500'
++                      : 'text-notion-textSecondary border-notion-border hover:bg-notion-hover'
++                  }`}
++                >
++                  显示完整 settings.json
++                </button>
+               </div>
+-              <div>
+-                <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_MODEL</label>
+-                <input
+-                  type="text"
+-                  value={claudeEnvModel}
+-                  onChange={(e) => { setClaudeEnvModel(e.target.value); syncEnvToSettings('ANTHROPIC_MODEL', e.target.value); }}
+-                  className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
+-                />
++              <div className="flex items-center gap-2">
++                <button
++                  type="button"
++                  onClick={handleResetTokenConfig}
++                  disabled={claudeTokenSaving}
++                  className="px-3 py-1 text-xs text-notion-text border border-notion-border rounded hover:bg-notion-hover disabled:opacity-50"
++                >
++                  还原
++                </button>
++                <button
++                  type="button"
++                  onClick={handleSaveTokenConfig}
++                  disabled={claudeTokenSaving}
++                  className="px-3 py-1 text-xs bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-50"
++                >
++                  {claudeTokenSaving ? '保存中...' : '保存'}
++                </button>
+               </div>
+             </div>
+-          </section>
+ 
+-          {/* settings.json 完整编辑 */}
+-          <section className="bg-white rounded-lg p-5 border border-notion-border">
+-            <h2 className="text-sm font-medium text-notion-text mb-3">settings.json 完整内容</h2>
+-            <textarea
+-              value={claudeSettingsRaw}
+-              onChange={(e) => setClaudeSettingsRaw(e.target.value)}
+-              rows={12}
+-              className="w-full px-3 py-2 border border-notion-border rounded text-xs font-mono"
+-              spellCheck={false}
+-            />
+-            {claudeSettingsError && (
+-              <div className="text-xs text-red-600 mt-1">{claudeSettingsError}</div>
++            {claudeShowFullSettings ? (
++              <>
++                <textarea
++                  value={claudeSettingsRaw}
++                  onChange={(e) => setClaudeSettingsRaw(e.target.value)}
++                  rows={12}
++                  className="w-full px-3 py-2 border border-notion-border rounded text-xs font-mono"
++                  spellCheck={false}
++                />
++                {claudeSettingsError && (
++                  <div className="text-xs text-red-600 mt-1">{claudeSettingsError}</div>
++                )}
++              </>
++            ) : (
++              <div className="space-y-3">
++                <div>
++                  <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_AUTH_TOKEN</label>
++                  <input
++                    type="password"
++                    value={claudeEnvToken}
++                    onChange={(e) => { setClaudeEnvToken(e.target.value); syncEnvToSettings('ANTHROPIC_AUTH_TOKEN', e.target.value); }}
++                    className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
++                    autoComplete="off"
++                  />
++                </div>
++                <div>
++                  <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_BASE_URL</label>
++                  <input
++                    type="text"
++                    value={claudeEnvBaseUrl}
++                    onChange={(e) => { setClaudeEnvBaseUrl(e.target.value); syncEnvToSettings('ANTHROPIC_BASE_URL', e.target.value); }}
++                    className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
++                  />
++                </div>
++                <div>
++                  <label className="block text-xs text-notion-textSecondary mb-1">ANTHROPIC_MODEL</label>
++                  <input
++                    type="text"
++                    value={claudeEnvModel}
++                    onChange={(e) => { setClaudeEnvModel(e.target.value); syncEnvToSettings('ANTHROPIC_MODEL', e.target.value); }}
++                    className="w-full px-3 py-2 border border-notion-border rounded text-sm font-mono"
++                  />
++                </div>
++              </div>
+             )}
+-          </section>
+ 
+-          {/* 系统提示词 */}
+-          <section className="bg-white rounded-lg p-5 border border-notion-border">
+-            <h2 className="text-sm font-medium text-notion-text mb-3">默认系统提示词</h2>
+-            <textarea
+-              value={claudeSystemPrompt}
+-              onChange={(e) => setClaudeSystemPrompt(e.target.value)}
+-              rows={6}
+-              className="w-full px-3 py-2 border border-notion-border rounded text-sm"
+-              placeholder="每次会话启动时通过 --append-system-prompt 传给 Claude"
+-            />
++            {claudeTokenMsg && (
++              <div className={`text-xs mt-2 ${claudeTokenMsg.includes('失败') || claudeTokenMsg.includes('合法') ? 'text-red-600' : 'text-green-600'}`}>
++                {claudeTokenMsg}
++              </div>
++            )}
+           </section>
+ 
+-          {/* 工具权限开关 */}
++          {/* 工具权限开关（变换即提交） */}
+           <section className="bg-white rounded-lg p-5 border border-notion-border">
+             <h2 className="text-sm font-medium text-notion-text mb-3">工具权限</h2>
+             <div className="space-y-2">
+@@ -2005,7 +2101,7 @@ export default function AdminPage() {
+                 <input
+                   type="checkbox"
+                   checked={claudeAllowBash}
+-                  onChange={(e) => setClaudeAllowBash(e.target.checked)}
++                  onChange={(e) => handleToggleTool('allow_bash', e.target.checked)}
+                   className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+                 />
+                 <span className="text-sm text-notion-text">允许 Bash 工具（默认拒绝，启用前请评估风险）</span>
+@@ -2014,29 +2110,53 @@ export default function AdminPage() {
+                 <input
+                   type="checkbox"
+                   checked={claudeAllowWeb}
+-                  onChange={(e) => setClaudeAllowWeb(e.target.checked)}
++                  onChange={(e) => handleToggleTool('allow_web', e.target.checked)}
+                   className="w-4 h-4 rounded border-notion-border text-notion-text focus:ring-blue-500"
+                 />
+                 <span className="text-sm text-notion-text">允许网络工具（WebSearch / WebFetch）</span>
+               </label>
+             </div>
++            {claudeToolMsg && (
++              <div className="text-xs text-red-600 mt-2">{claudeToolMsg}</div>
++            )}
+           </section>
+ 
+-          <div className="flex items-center gap-3">
+-            <button
+-              type="button"
+-              onClick={handleSaveClaudeConfig}
+-              disabled={claudeSaving}
+-              className="px-4 py-2 bg-notion-text text-white rounded text-sm hover:bg-notion-text/90 disabled:opacity-50"
+-            >
+-              {claudeSaving ? '保存中...' : '保存'}
+-            </button>
+-            {claudeMsg && (
+-              <span className={`text-sm ${claudeMsg.includes('失败') || claudeMsg.includes('合法') ? 'text-red-600' : 'text-green-600'}`}>
+-                {claudeMsg}
+-              </span>
++          {/* 默认系统提示词 */}
++          <section className="bg-white rounded-lg p-5 border border-notion-border">
++            <div className="flex items-center justify-between mb-3">
++              <h2 className="text-sm font-medium text-notion-text">默认系统提示词</h2>
++              <div className="flex items-center gap-2">
++                <button
++                  type="button"
++                  onClick={handleResetSystemPrompt}
++                  disabled={claudePromptSaving}
++                  className="px-3 py-1 text-xs text-notion-text border border-notion-border rounded hover:bg-notion-hover disabled:opacity-50"
++                >
++                  还原
++                </button>
++                <button
++                  type="button"
++                  onClick={handleSaveSystemPrompt}
++                  disabled={claudePromptSaving}
++                  className="px-3 py-1 text-xs bg-notion-text text-white rounded hover:bg-notion-text/90 disabled:opacity-50"
++                >
++                  {claudePromptSaving ? '保存中...' : '保存'}
++                </button>
++              </div>
++            </div>
++            <textarea
++              value={claudeSystemPrompt}
++              onChange={(e) => setClaudeSystemPrompt(e.target.value)}
++              rows={6}
++              className="w-full px-3 py-2 border border-notion-border rounded text-sm"
++              placeholder="每次会话启动时通过 --append-system-prompt 传给 Claude"
++            />
++            {claudePromptMsg && (
++              <div className={`text-xs mt-2 ${claudePromptMsg.includes('失败') ? 'text-red-600' : 'text-green-600'}`}>
++                {claudePromptMsg}
++              </div>
+             )}
+-          </div>
++          </section>
+         </div>
+       </>
+     );
+diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
+index be4590d..4732b68 100644
+--- a/frontend/vite.config.ts
++++ b/frontend/vite.config.ts
+@@ -12,6 +12,7 @@ export default defineConfig({
+       '/api': {
+         target: 'http://localhost:8801',
+         changeOrigin: true,
++        ws: true,
+       },
+     },
+   },
