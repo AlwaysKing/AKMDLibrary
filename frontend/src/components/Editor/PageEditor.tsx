@@ -183,9 +183,48 @@ function isToggleBlock(block: any): boolean {
   return block?.type === 'toggleListItem' || (block?.type === 'heading' && block?.props?.isToggleable);
 }
 
-function downgradeEmptyToggleBlock(editor: any, block: any): boolean {
-  if (!isToggleBlock(block) || !isEmptyTextBlock(block)) return false;
+function getInlinePlainText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  return content.map((item: any) => {
+    if (typeof item?.text === 'string') return item.text;
+    if (Array.isArray(item?.content)) return getInlinePlainText(item.content);
+    return '';
+  }).join('');
+}
+
+function shouldDowngradeToggleForDelete(event: KeyboardEvent, editor: any, block: any): boolean {
+  if (!isToggleBlock(block)) return false;
   if (!Array.isArray(block.children) || block.children.length === 0) return false;
+  if (block.type === 'heading' && event.key === 'Backspace') {
+    const selection = editor?.prosemirrorView?.state?.selection;
+    if (selection?.empty && selection.$head?.parentOffset === 0) {
+      return true;
+    }
+  }
+  if (isEmptyTextBlock(block)) return true;
+
+  const titleText = getInlinePlainText(block.content);
+  if (!titleText) return true;
+
+  const pmView = editor?.prosemirrorView;
+  const selection = pmView?.state?.selection;
+  if (!selection) return false;
+
+  if (!selection.empty) {
+    const selectedText = pmView.state.doc.textBetween(selection.from, selection.to, '');
+    return selectedText === titleText;
+  }
+
+  if (titleText.length !== 1) return false;
+  const offset = selection.$head?.parentOffset;
+  if (typeof offset !== 'number') return false;
+  return (event.key === 'Backspace' && offset > 0) || (event.key === 'Delete' && offset === 0);
+}
+
+function downgradeToggleBlock(editor: any, block: any): boolean {
+  if (!isToggleBlock(block)) return false;
+  if (!Array.isArray(block.children) || block.children.length === 0) return false;
+  const shouldClearTitle = isEmptyTextBlock(block);
 
   if (block.type === 'heading') {
     editor.updateBlock(block, {
@@ -194,12 +233,14 @@ function downgradeEmptyToggleBlock(editor: any, block: any): boolean {
         ...(block.props || {}),
         isToggleable: false,
       },
+      content: shouldClearTitle ? [] : block.content,
       children: block.children,
     } as any);
   } else {
     editor.updateBlock(block, {
       type: 'paragraph',
       props: {},
+      content: shouldClearTitle ? [] : block.content,
       children: block.children,
     } as any);
   }
@@ -567,7 +608,7 @@ const NOTION_TOGGLE_HEADING_PATHS: Record<number, string> = {
   1: 'M7.085 5.4a.577.577 0 1 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm11.506 3.225a.55.55 0 0 1 .064.32l.003.055v5.6a.55.55 0 1 1-1.1 0V9.815l-1.386.756a.55.55 0 1 1-.527-.966l2.2-1.2a.55.55 0 0 1 .746.22M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
   2: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
   3: 'M6.508 4.823c.318 0 .577.258.577.577v3.823h5.645V5.4a.577.577 0 0 1 1.154 0v9.2a.577.577 0 1 1-1.154 0v-4.223H7.086V14.6a.577.577 0 1 1-1.154 0V5.4c0-.319.258-.577.577-.577m10.775 4.415c-.644 0-1.105.316-1.256.631a.55.55 0 1 1-.992-.474c.377-.79 1.292-1.257 2.248-1.257.626 0 1.214.193 1.657.532s.765.846.765 1.45c0 .58-.297 1.072-.715 1.41l.05.036c.468.353.81.883.81 1.514 0 .63-.342 1.16-.81 1.514-.47.354-1.093.556-1.757.556-1.005 0-1.953-.47-2.368-1.264a.55.55 0 1 1 .976-.508c.178.341.685.672 1.392.672.448 0 .833-.138 1.094-.334.26-.197.372-.427.372-.636s-.111-.44-.372-.636c-.26-.196-.646-.334-1.094-.334h-.424a.55.55 0 0 1 0-1.1h.33a1 1 0 0 1 .094-.008c.406 0 .754-.127.989-.306.234-.18.333-.388.333-.576s-.099-.397-.333-.576c-.235-.18-.583-.306-.99-.306M.962 11.14c0 .455.495.735.885.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.885.5z',
-  4: 'M7.085 5.4a.577.577 0 0 0-1.154 0v9.2a.577.577 0 1 0 1.154 0v-4.223h5.646V14.6a.577.577 0 1 0 1.154 0V5.4a.577.577 0 0 0-1.154 0v3.823H7.085zm8.955 4.588c.17-.409.645-.75 1.244-.75.793 0 1.322.559 1.322 1.106a.98.98 0 0 1-.271.667l-3.41 3.187a.55.55 0 0 0 .375.952h4a.55.55 0 1 0 0-1.1h-2.606l2.406-2.248.024-.024a2.08 2.08 0 0 0 .582-1.434c0-1.277-1.151-2.206-2.422-2.206-1 0-1.902.57-2.26 1.426a.55.55 0 1 0 1.016.424M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
+  4: 'M17.19 8.149c.596-.558 1.598-.145 1.598.7v3.282h.462a.55.55 0 1 1 0 1.1h-.462v1.219a.55.55 0 1 1-1.1 0v-1.22h-2.856a.55.55 0 0 1-.55-.55v-.007a.5.5 0 0 1 .08-.31l2.734-4.026.01-.014.024-.035.018-.022.018-.023.01-.01zm-1.421 3.982h1.919V9.305zM6.508 4.823c.318 0 .577.258.577.577v3.823h5.646V5.4a.577.577 0 0 1 1.154 0v9.2a.577.577 0 1 1-1.154 0v-4.223H7.085V14.6a.577.577 0 1 1-1.154 0V5.4c0-.319.258-.577.577-.577M.961 11.14c0 .455.496.735.886.502l1.9-1.14a.585.585 0 0 0 0-1.003l-1.9-1.14a.585.585 0 0 0-.886.5z',
 };
 
 // Notion heading icon — uses exact Notion SVG paths (viewBox 0 0 20 20)
@@ -5694,7 +5735,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           !e.shiftKey &&
           !e.metaKey &&
           !e.ctrlKey &&
-          downgradeEmptyToggleBlock(editor, currentBlock)
+          shouldDowngradeToggleForDelete(e, editor, currentBlock) &&
+          downgradeToggleBlock(editor, currentBlock)
         ) {
           e.preventDefault();
           e.stopImmediatePropagation();
