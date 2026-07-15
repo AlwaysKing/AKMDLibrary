@@ -260,6 +260,21 @@ const SideMenuButton: React.FC<{
       if (lastAddButtonInsert?.blockId === blockId && now - lastAddButtonInsert.at < 250) return;
       lastAddButtonInsert = { blockId, at: now };
 
+      const block = editor.getBlock?.(blockId);
+      const isToggleBlock = block?.type === 'toggleListItem' || (block?.type === 'heading' && block?.props?.isToggleable);
+      const hasChildren = Array.isArray(block?.children) && block.children.length > 0;
+      const blockOuter = buttonRef.current?.closest('.bn-block-outer') ||
+        document.querySelector(`.bn-block-outer:has(> [data-id="${blockId}"])`);
+      const toggleWrapper = blockOuter?.querySelector('.bn-toggle-wrapper');
+      const isExpandedEmptyToggle = isToggleBlock && !hasChildren && toggleWrapper?.getAttribute('data-show-children') === 'true';
+
+      if (isExpandedEmptyToggle) {
+        const updatedBlock = editor.updateBlock(blockId, { children: [{}] } as any);
+        editor.focus();
+        editor.setTextCursorPosition(updatedBlock.children[0].id, 'end');
+        return;
+      }
+
       // Insert a new empty paragraph block after the current block
       const newBlocks = editor.insertBlocks([{ type: 'paragraph' }], blockId, 'after');
       if (newBlocks.length > 0) {
