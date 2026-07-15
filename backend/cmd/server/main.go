@@ -287,9 +287,11 @@ func main() {
 	r.Get("/api/covers/*", uploadHandler.ServeCover)
 
 	// Public site assets (favicon, logo)
-	// IMPORTANT: `pwa-icon` must be registered before `{filename}` so chi matches it
-	// as a precise route rather than falling through to the wildcard.
-	r.Get("/api/site-assets/pwa-icon", siteSettingHandler.ServePWAIcon)
+	// IMPORTANT: literal PWA-icon paths must be registered before `{filename}`
+	// so chi matches them precisely rather than falling through to the wildcard.
+	r.Get("/api/site-assets/pwa-icon-192.png", siteSettingHandler.ServePWAIconSizedStatic("192"))
+	r.Get("/api/site-assets/pwa-icon-512.png", siteSettingHandler.ServePWAIconSizedStatic("512"))
+	r.Get("/api/site-assets/pwa-icon-512-maskable.png", siteSettingHandler.ServePWAIconSizedStatic("512-maskable"))
 	r.Get("/api/site-assets/{filename}", siteSettingHandler.ServeAsset)
 
 	// Public PWA manifest (dynamic — reflects current site name + favicon)

@@ -83,6 +83,18 @@ function App() {
           document.head.appendChild(link);
         }
         link.href = settings.favicon;
+
+        // Sync apple-touch-icon to the generated 512 PNG so iOS "Add to Home
+        // Screen" reflects custom favicon uploads. The endpoint serves the
+        // generated variant when a custom favicon exists; index.html's static
+        // default still applies otherwise.
+        let apple = document.querySelector("link[rel='apple-touch-icon']") as HTMLLinkElement | null;
+        if (!apple) {
+          apple = document.createElement('link');
+          apple.rel = 'apple-touch-icon';
+          document.head.appendChild(apple);
+        }
+        apple.href = '/api/site-assets/pwa-icon-512.png';
       }
       if (settings.site_name) {
         document.title = settings.site_name;

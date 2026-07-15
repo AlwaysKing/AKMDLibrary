@@ -3,6 +3,10 @@
 *.png
 # 例外：README 截图需要进 git
 !docs/screenshots/*.png
+# 例外：PWA 默认图标随仓库分发
+!frontend/public/icons/*.png
+# 例外：imageutil 单测源图
+!backend/internal/imageutil/testdata/*.png
 .DS_Store
 .chrome-debug-profile/
 .claude/
@@ -26,6 +30,12 @@ docs/*
 !docs/screenshots/
 !docs/FORMATS.md
 !docs/STRUCTURE.md
+# 项目设计文档与 superpowers 计划文档
+!docs/DESIGN.md
+!docs/PLAN.md
+!docs/PWA-SUPPORT-DESIGN.md
+!docs/SYNCED-BLOCK-DESIGN.md
+!docs/superpowers/
 drag-test-1
 drag-test-handle
 frontend/.next/
