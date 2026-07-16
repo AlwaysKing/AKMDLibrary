@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -131,6 +132,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
+	r.Use(pageDebugRequestLogger)
 	r.Use(middleware.ErrorLogging)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -338,6 +340,26 @@ func main() {
 	if err := http.ListenAndServe(":"+port, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func pageDebugRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isPageDebugPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		log.Printf("[page-debug] http.start method=%s path=%s rawQuery=%s remote=%s contentLength=%d", r.Method, r.URL.Path, r.URL.RawQuery, r.RemoteAddr, r.ContentLength)
+		next.ServeHTTP(w, r)
+		log.Printf("[page-debug] http.done method=%s path=%s elapsed=%s", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+func isPageDebugPath(path string) bool {
+	return strings.HasPrefix(path, "/api/spaces/") &&
+		strings.Contains(path, "/pages/") &&
+		!strings.Contains(path, "/pages/starred") &&
+		!strings.Contains(path, "/pages/recent")
 }
 
 func getEnv(key, defaultVal string) string {

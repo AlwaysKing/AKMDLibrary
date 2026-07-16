@@ -3,7 +3,9 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
 )
@@ -59,15 +61,20 @@ func (r *PageRepository) Create(page *model.Page) (*model.Page, error) {
 }
 
 func (r *PageRepository) GetByID(id string) (*model.Page, error) {
+	start := time.Now()
+	log.Printf("[page-debug] repo.GetByID start id=%s", id)
 	query := `SELECT ` + pageColumns + ` FROM pages WHERE id = ?`
 
 	page, err := scanPage(r.db.QueryRow(query, id))
 	if err == sql.ErrNoRows {
+		log.Printf("[page-debug] repo.GetByID not-found id=%s elapsed=%s", id, time.Since(start))
 		return nil, fmt.Errorf("page not found")
 	}
 	if err != nil {
+		log.Printf("[page-debug] repo.GetByID error id=%s err=%v elapsed=%s", id, err, time.Since(start))
 		return nil, fmt.Errorf("failed to get page: %w", err)
 	}
+	log.Printf("[page-debug] repo.GetByID done id=%s filePath=%s elapsed=%s", id, page.FilePath, time.Since(start))
 	return page, nil
 }
 
@@ -207,8 +214,15 @@ func (r *PageRepository) MaxSortOrder() (float64, error) {
 
 // TouchAccess updates last_accessed_at to now for a page (tracks recent access)
 func (r *PageRepository) TouchAccess(id string) error {
+	start := time.Now()
+	log.Printf("[page-debug] repo.TouchAccess start id=%s", id)
 	_, err := r.db.Exec("UPDATE pages SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?", id)
-	return err
+	if err != nil {
+		log.Printf("[page-debug] repo.TouchAccess error id=%s err=%v elapsed=%s", id, err, time.Since(start))
+		return err
+	}
+	log.Printf("[page-debug] repo.TouchAccess done id=%s elapsed=%s", id, time.Since(start))
+	return nil
 }
 
 // ListStarred returns all starred pages
@@ -236,6 +250,8 @@ func (r *PageRepository) ListStarred() ([]*model.Page, error) {
 // parentRelDir is the relative directory path (e.g., "my-space" for root or "my-space/Parent/Child" for nested).
 // It matches only "*.md" files directly in that directory (no nested subdirectories).
 func (r *PageRepository) GetSiblings(parentRelDir string) ([]*model.Page, error) {
+	start := time.Now()
+	log.Printf("[page-debug] repo.GetSiblings start parentRelDir=%s", parentRelDir)
 	pattern := parentRelDir + "/%.md"
 	// Exclude nested paths: only entries with no extra "/" after the prefix
 	query := `SELECT ` + pageColumns + ` FROM pages WHERE file_path LIKE ? ESCAPE '\' AND file_path NOT LIKE ? ESCAPE '\' ORDER BY sort_order ASC, created_at ASC`
@@ -248,6 +264,7 @@ func (r *PageRepository) GetSiblings(parentRelDir string) ([]*model.Page, error)
 
 	rows, err := r.db.Query(query, pattern, nestedPattern)
 	if err != nil {
+		log.Printf("[page-debug] repo.GetSiblings query-error parentRelDir=%s err=%v elapsed=%s", parentRelDir, err, time.Since(start))
 		return nil, fmt.Errorf("failed to get siblings: %w", err)
 	}
 	defer rows.Close()
@@ -256,10 +273,16 @@ func (r *PageRepository) GetSiblings(parentRelDir string) ([]*model.Page, error)
 	for rows.Next() {
 		page, err := scanPage(rows)
 		if err != nil {
+			log.Printf("[page-debug] repo.GetSiblings scan-error parentRelDir=%s err=%v elapsed=%s", parentRelDir, err, time.Since(start))
 			return nil, fmt.Errorf("failed to scan page: %w", err)
 		}
 		pages = append(pages, page)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("[page-debug] repo.GetSiblings rows-error parentRelDir=%s err=%v elapsed=%s", parentRelDir, err, time.Since(start))
+		return nil, fmt.Errorf("failed to iterate siblings: %w", err)
+	}
+	log.Printf("[page-debug] repo.GetSiblings done parentRelDir=%s count=%d elapsed=%s", parentRelDir, len(pages), time.Since(start))
 	return pages, nil
 }
 
@@ -271,26 +294,39 @@ type SortOrderUpdate struct {
 
 // UpdateSortOrders batch-updates sort_order for multiple pages in a single transaction.
 func (r *PageRepository) UpdateSortOrders(updates []SortOrderUpdate) error {
+	start := time.Now()
+	log.Printf("[page-debug] repo.UpdateSortOrders start count=%d", len(updates))
 	tx, err := r.db.Begin()
 	if err != nil {
+		log.Printf("[page-debug] repo.UpdateSortOrders begin-error count=%d err=%v elapsed=%s", len(updates), err, time.Since(start))
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
+	log.Printf("[page-debug] repo.UpdateSortOrders after-begin count=%d elapsed=%s", len(updates), time.Since(start))
 
 	stmt, err := tx.Prepare("UPDATE pages SET sort_order = ? WHERE id = ?")
 	if err != nil {
 		tx.Rollback()
+		log.Printf("[page-debug] repo.UpdateSortOrders prepare-error count=%d err=%v elapsed=%s", len(updates), err, time.Since(start))
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, u := range updates {
+		log.Printf("[page-debug] repo.UpdateSortOrders before-exec id=%s sortOrder=%f elapsed=%s", u.ID, u.SortOrder, time.Since(start))
 		if _, err := stmt.Exec(u.SortOrder, u.ID); err != nil {
 			tx.Rollback()
+			log.Printf("[page-debug] repo.UpdateSortOrders exec-error id=%s err=%v elapsed=%s", u.ID, err, time.Since(start))
 			return fmt.Errorf("failed to update sort_order: %w", err)
 		}
 	}
 
-	return tx.Commit()
+	log.Printf("[page-debug] repo.UpdateSortOrders before-commit count=%d elapsed=%s", len(updates), time.Since(start))
+	if err := tx.Commit(); err != nil {
+		log.Printf("[page-debug] repo.UpdateSortOrders commit-error count=%d err=%v elapsed=%s", len(updates), err, time.Since(start))
+		return err
+	}
+	log.Printf("[page-debug] repo.UpdateSortOrders done count=%d elapsed=%s", len(updates), time.Since(start))
+	return nil
 }
 
 // UpdateFilePathPrefix updates all file_path values that start with oldPrefix to start with newPrefix.

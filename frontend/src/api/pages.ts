@@ -51,7 +51,17 @@ export const pagesApi = {
   },
 
   get: async (spaceSlug: string, pageId: string, signal?: AbortSignal): Promise<Page> => {
+    const startedAt = performance.now();
+    console.debug('[page-debug] pagesApi.get start', { spaceSlug, pageId });
     const response = await apiClient.get<Page>(`/spaces/${spaceSlug}/pages/${pageId}`, { signal });
+    console.debug('[page-debug] pagesApi.get done', {
+      spaceSlug,
+      pageId,
+      status: response.status,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      filePath: response.data?.file_path,
+      contentBytes: response.data?.content?.length ?? 0,
+    });
     return response.data;
   },
 

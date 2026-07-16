@@ -2,9 +2,11 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alwaysking/akmdlibrary/internal/middleware"
 	"github.com/alwaysking/akmdlibrary/internal/model"
@@ -29,17 +31,36 @@ func NewPageHandler(pageService *service.PageService, spaceService *service.Spac
 // checkSpaceAccess verifies the user is a member of the given space.
 // All users (including admin) must be space members to access content.
 func (h *PageHandler) checkSpaceAccess(w http.ResponseWriter, r *http.Request, slug string) bool {
+	start := time.Now()
 	userID := middleware.GetUserID(r)
+	debug := strings.HasPrefix(r.URL.Path, "/api/spaces/") && strings.Contains(r.URL.Path, "/pages/")
+	if debug {
+		log.Printf("[page-debug] checkSpaceAccess start slug=%s userID=%d path=%s", slug, userID, r.URL.Path)
+		log.Printf("[page-debug] checkSpaceAccess before-GetBySlug slug=%s userID=%d elapsed=%s", slug, userID, time.Since(start))
+	}
 
 	space, err := h.spaceService.GetBySlug(slug)
 	if err != nil {
+		if debug {
+			log.Printf("[page-debug] checkSpaceAccess GetBySlug-error slug=%s userID=%d err=%v elapsed=%s", slug, userID, err, time.Since(start))
+		}
 		http.Error(w, "Space not found", http.StatusNotFound)
 		return false
 	}
+	if debug {
+		log.Printf("[page-debug] checkSpaceAccess after-GetBySlug slug=%s spaceID=%d userID=%d elapsed=%s", slug, space.ID, userID, time.Since(start))
+		log.Printf("[page-debug] checkSpaceAccess before-IsSpaceMember slug=%s spaceID=%d userID=%d elapsed=%s", slug, space.ID, userID, time.Since(start))
+	}
 
 	if !h.spaceService.IsSpaceMember(space.ID, userID) {
+		if debug {
+			log.Printf("[page-debug] checkSpaceAccess IsSpaceMember-denied slug=%s spaceID=%d userID=%d elapsed=%s", slug, space.ID, userID, time.Since(start))
+		}
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return false
+	}
+	if debug {
+		log.Printf("[page-debug] checkSpaceAccess ok slug=%s spaceID=%d userID=%d elapsed=%s", slug, space.ID, userID, time.Since(start))
 	}
 
 	return true
@@ -65,20 +86,30 @@ func (h *PageHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PageHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	slug := chi.URLParam(r, "slug")
+	pageID := chi.URLParam(r, "id")
+	log.Printf("[page-debug] handler.GetByID start slug=%s pageID=%s remote=%s", slug, pageID, r.RemoteAddr)
 	if !h.checkSpaceAccess(w, r, slug) {
+		log.Printf("[page-debug] handler.GetByID access-denied-or-space-missing slug=%s pageID=%s elapsed=%s", slug, pageID, time.Since(start))
 		return
 	}
-	pageID := chi.URLParam(r, "id")
+	log.Printf("[page-debug] handler.GetByID access-ok slug=%s pageID=%s elapsed=%s", slug, pageID, time.Since(start))
 
 	page, err := h.pageService.GetByID(slug, pageID)
 	if err != nil {
+		log.Printf("[page-debug] handler.GetByID service-error slug=%s pageID=%s err=%v elapsed=%s", slug, pageID, err, time.Since(start))
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	log.Printf("[page-debug] handler.GetByID service-ok slug=%s pageID=%s filePath=%s contentBytes=%d elapsed=%s", slug, pageID, page.FilePath, len(page.Content), time.Since(start))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(page)
+	if err := json.NewEncoder(w).Encode(page); err != nil {
+		log.Printf("[page-debug] handler.GetByID encode-error slug=%s pageID=%s err=%v elapsed=%s", slug, pageID, err, time.Since(start))
+		return
+	}
+	log.Printf("[page-debug] handler.GetByID done slug=%s pageID=%s elapsed=%s", slug, pageID, time.Since(start))
 }
 
 func (h *PageHandler) Create(w http.ResponseWriter, r *http.Request) {

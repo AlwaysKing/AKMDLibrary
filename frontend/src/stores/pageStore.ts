@@ -26,10 +26,19 @@ export const usePageStore = create<PageState>((set, get) => ({
   error: null,
 
   fetchPage: async (spaceSlug, pageId, signal) => {
+    const startedAt = performance.now();
+    console.debug('[page-debug] pageStore.fetchPage start', { spaceSlug, pageId });
     set({ isLoading: true, error: null });
     try {
       const page = await pagesApi.get(spaceSlug, pageId, signal);
       const content = page.content || '';
+      console.debug('[page-debug] pageStore.fetchPage success', {
+        spaceSlug,
+        pageId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        filePath: page.file_path,
+        contentBytes: content.length,
+      });
       set({
         currentPage: page,
         currentContent: content,
@@ -37,7 +46,22 @@ export const usePageStore = create<PageState>((set, get) => ({
       });
     } catch (error: any) {
       // 请求被取消（组件已卸载），静默忽略
-      if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError') return;
+      if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError') {
+        console.debug('[page-debug] pageStore.fetchPage canceled', {
+          spaceSlug,
+          pageId,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+        return;
+      }
+      console.debug('[page-debug] pageStore.fetchPage error', {
+        spaceSlug,
+        pageId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+      });
       set({ error: error.message, isLoading: false });
     }
   },

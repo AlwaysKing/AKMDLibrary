@@ -34,10 +34,23 @@ export default function PageViewPage() {
 
   useEffect(() => {
     if (!spaceSlug || !pageId) return;
+    const startedAt = performance.now();
+    console.debug('[page-debug] PageViewPage.effect start', { spaceSlug, pageId });
     const controller = new AbortController();
     // 延迟到下一个微任务，让导航先生效；如果组件已卸载则不发出请求
     const timer = setTimeout(async () => {
+      console.debug('[page-debug] PageViewPage.effect timer-fired', {
+        spaceSlug,
+        pageId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
       await fetchPage(spaceSlug, pageId, controller.signal);
+      console.debug('[page-debug] PageViewPage.effect fetchPage-returned', {
+        spaceSlug,
+        pageId,
+        aborted: controller.signal.aborted,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
       // fetchRecent 在 fetchPage 完成后调用，确保 TouchAccess 已更新
       useSpaceStore.getState().fetchRecent(spaceSlug);
     }, 0);
@@ -47,7 +60,15 @@ export default function PageViewPage() {
       setCurrentSpace(space);
     }
     usePreferenceStore.getState().setLastViewedPage(spaceSlug, pageId);
-    return () => { clearTimeout(timer); controller.abort(); };
+    return () => {
+      console.debug('[page-debug] PageViewPage.effect cleanup', {
+        spaceSlug,
+        pageId,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [spaceSlug, pageId, fetchPage, setCurrentSpace]);
 
   const titleRef = useRef<HTMLHeadingElement>(null);

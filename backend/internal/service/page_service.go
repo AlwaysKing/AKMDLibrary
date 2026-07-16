@@ -421,30 +421,48 @@ func sortNodesByOrder(nodes []*model.PageNode) {
 }
 
 func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, error) {
-	defer s.lockPage(pageID)()
+	start := time.Now()
+	log.Printf("[page-debug] service.GetByID waiting-page-lock slug=%s pageID=%s", spaceSlug, pageID)
+	unlock := s.lockPage(pageID)
+	defer unlock()
+	log.Printf("[page-debug] service.GetByID page-lock-acquired slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
+
+	log.Printf("[page-debug] service.GetByID before-getRepo slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 	repo, err := s.getRepo(spaceSlug)
 	if err != nil {
+		log.Printf("[page-debug] service.GetByID getRepo-error slug=%s pageID=%s err=%v elapsed=%s", spaceSlug, pageID, err, time.Since(start))
 		return nil, err
 	}
+	log.Printf("[page-debug] service.GetByID after-getRepo slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 
+	log.Printf("[page-debug] service.GetByID before-repo.GetByID slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 	page, err := repo.GetByID(pageID)
 	if err != nil {
+		log.Printf("[page-debug] service.GetByID repo.GetByID-error slug=%s pageID=%s err=%v elapsed=%s", spaceSlug, pageID, err, time.Since(start))
 		return nil, err
 	}
+	log.Printf("[page-debug] service.GetByID after-repo.GetByID slug=%s pageID=%s filePath=%s elapsed=%s", spaceSlug, pageID, page.FilePath, time.Since(start))
 
 	filePath := filepath.Join(s.docsDir, page.FilePath)
+	log.Printf("[page-debug] service.GetByID before-read-file slug=%s pageID=%s file=%s elapsed=%s", spaceSlug, pageID, filePath, time.Since(start))
 	raw, err := diagReadFile("GetByID", filePath)
 	if err != nil {
+		log.Printf("[page-debug] service.GetByID read-file-error slug=%s pageID=%s file=%s err=%v elapsed=%s", spaceSlug, pageID, filePath, err, time.Since(start))
 		return nil, fmt.Errorf("failed to read page content: %w", err)
 	}
+	log.Printf("[page-debug] service.GetByID after-read-file slug=%s pageID=%s bytes=%d elapsed=%s", spaceSlug, pageID, len(raw), time.Since(start))
 
+	log.Printf("[page-debug] service.GetByID before-frontmatter.Parse slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 	fm, body, _ := frontmatter.Parse(raw)
+	log.Printf("[page-debug] service.GetByID after-frontmatter.Parse slug=%s pageID=%s bodyBytes=%d fmID=%s elapsed=%s", spaceSlug, pageID, len(body), fm.ID, time.Since(start))
 
 	// Ensure frontmatter has the page ID (repair if missing)
 	if fm.ID == "" {
 		fm.ID = pageID
 		assembled := frontmatter.Render(fm, body)
+		log.Printf("[page-debug] service.GetByID before-repair-write slug=%s pageID=%s file=%s elapsed=%s", spaceSlug, pageID, filePath, time.Since(start))
 		diagWriteFile("GetByID.repairID", filePath, assembled)
+		log.Printf("[page-debug] service.GetByID after-repair-write slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 	}
 
 	if fm.Icon != "" {
@@ -471,20 +489,30 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
 	page.Content = body
 
 	// Track page access for "recent" feature
-	repo.TouchAccess(pageID)
+	log.Printf("[page-debug] service.GetByID before-TouchAccess slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
+	if err := repo.TouchAccess(pageID); err != nil {
+		log.Printf("[page-debug] service.GetByID TouchAccess-error slug=%s pageID=%s err=%v elapsed=%s", spaceSlug, pageID, err, time.Since(start))
+	} else {
+		log.Printf("[page-debug] service.GetByID after-TouchAccess slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
+	}
 
 	// Maintain subpage blocks: add missing, remove stale
+	log.Printf("[page-debug] service.GetByID before-maintainSubpageBlocks slug=%s pageID=%s filePath=%s contentBytes=%d elapsed=%s", spaceSlug, pageID, page.FilePath, len(page.Content), time.Since(start))
 	maintained := s.maintainSubpageBlocks(page.Content, repo, page.FilePath)
+	log.Printf("[page-debug] service.GetByID after-maintainSubpageBlocks slug=%s pageID=%s changed=%t maintainedBytes=%d elapsed=%s", spaceSlug, pageID, maintained != page.Content, len(maintained), time.Since(start))
 	if maintained != page.Content {
 		assembled := frontmatter.Render(fm, maintained)
+		log.Printf("[page-debug] service.GetByID before-maintain-write slug=%s pageID=%s file=%s elapsed=%s", spaceSlug, pageID, filePath, time.Since(start))
 		diagWriteFile("GetByID.rewriteMaintain", filePath, assembled)
 		page.Content = maintained
+		log.Printf("[page-debug] service.GetByID after-maintain-write slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 	}
 
 	// fileContent blocks hydrate their content client-side via the files
 	// API (see frontend FileContentBlock.tsx + writeSpaceFile). The on-disk
 	// page body only stores the <content file="..." lang="..." /> marker.
 
+	log.Printf("[page-debug] service.GetByID done slug=%s pageID=%s elapsed=%s", spaceSlug, pageID, time.Since(start))
 	return page, nil
 }
 
@@ -1285,15 +1313,15 @@ func (s *PageService) Move(spaceSlug string, pageID string, targetParentID *stri
 		}
 	}
 
-		// Update cache DB: just fix file_path prefixes, no full rebuild needed
-		if !isSameDir {
-			// Update the moved page and all its children's file_path in cache
-			oldRelPrefix := strings.TrimSuffix(page.FilePath, ".md")
-			newRelPrefix := strings.TrimSuffix(newRelPath, ".md")
-			if err := repo.UpdateFilePathPrefix(oldRelPrefix, newRelPrefix); err != nil {
-				return nil, fmt.Errorf("failed to update cache paths: %w", err)
-			}
+	// Update cache DB: just fix file_path prefixes, no full rebuild needed
+	if !isSameDir {
+		// Update the moved page and all its children's file_path in cache
+		oldRelPrefix := strings.TrimSuffix(page.FilePath, ".md")
+		newRelPrefix := strings.TrimSuffix(newRelPath, ".md")
+		if err := repo.UpdateFilePathPrefix(oldRelPrefix, newRelPrefix); err != nil {
+			return nil, fmt.Errorf("failed to update cache paths: %w", err)
 		}
+	}
 
 	// Maintain subpage blocks in parent content
 	if targetParentID != nil {
@@ -1363,7 +1391,6 @@ func (s *PageService) recalculateSortOrder(repo *repository.PageRepository, pare
 
 	repo.UpdateSortOrders(updates)
 }
-
 
 // ListStarred returns all starred pages for a space
 func (s *PageService) ListStarred(spaceSlug string) ([]*model.Page, error) {
@@ -1446,14 +1473,19 @@ func (s *PageService) getDirectChildIDs(repo *repository.PageRepository, filePat
 // and updates database sort_order to match the order of subpage tags in the markdown.
 // Reads both new tag format and legacy comment format; always writes new tag format.
 func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRepository, filePath string) string {
+	start := time.Now()
+	log.Printf("[page-debug] maintainSubpageBlocks start filePath=%s bodyBytes=%d", filePath, len(body))
 	// Use GetSiblings for sorted child IDs (sort_order ASC)
 	pageName := strings.TrimSuffix(filepath.Base(filePath), ".md")
 	parentDir := filepath.Dir(filePath)
 	childDir := filepath.Join(parentDir, pageName)
+	log.Printf("[page-debug] maintainSubpageBlocks before-GetSiblings filePath=%s childDir=%s elapsed=%s", filePath, childDir, time.Since(start))
 	siblings, err := repo.GetSiblings(childDir)
 	if err != nil {
+		log.Printf("[page-debug] maintainSubpageBlocks GetSiblings-error filePath=%s childDir=%s err=%v elapsed=%s", filePath, childDir, err, time.Since(start))
 		return body
 	}
+	log.Printf("[page-debug] maintainSubpageBlocks after-GetSiblings filePath=%s childDir=%s siblingCount=%d elapsed=%s", filePath, childDir, len(siblings), time.Since(start))
 
 	// Build child ID set
 	childIDSet := make(map[string]bool)
@@ -1473,9 +1505,11 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
 			}
 		}
 		if !changed {
+			log.Printf("[page-debug] maintainSubpageBlocks no-children-no-change filePath=%s elapsed=%s", filePath, time.Since(start))
 			return body
 		}
 		result := strings.Join(lines, "\n")
+		log.Printf("[page-debug] maintainSubpageBlocks no-children-changed filePath=%s resultBytes=%d elapsed=%s", filePath, len(result), time.Since(start))
 		return strings.TrimRight(result, "\n")
 	}
 
@@ -1540,18 +1574,24 @@ func (s *PageService) maintainSubpageBlocks(body string, repo *repository.PageRe
 			}
 		}
 		if len(sortUpdates) > 0 {
+			log.Printf("[page-debug] maintainSubpageBlocks before-UpdateSortOrders filePath=%s updateCount=%d elapsed=%s", filePath, len(sortUpdates), time.Since(start))
 			if err := repo.UpdateSortOrders(sortUpdates); err != nil {
 				log.Printf("[maintainSubpageBlocks] failed to update sort_order: %v", err)
+				log.Printf("[page-debug] maintainSubpageBlocks UpdateSortOrders-error filePath=%s err=%v elapsed=%s", filePath, err, time.Since(start))
+			} else {
+				log.Printf("[page-debug] maintainSubpageBlocks after-UpdateSortOrders filePath=%s updateCount=%d elapsed=%s", filePath, len(sortUpdates), time.Since(start))
 			}
 		}
 	}
 
 	// Nothing to change in content
 	if len(missing) == 0 && !changed {
+		log.Printf("[page-debug] maintainSubpageBlocks no-change filePath=%s orderedCount=%d elapsed=%s", filePath, len(orderedIDs), time.Since(start))
 		return body
 	}
 
 	result := strings.Join(cleanedLines, "\n")
+	log.Printf("[page-debug] maintainSubpageBlocks changed filePath=%s missingCount=%d orderedCount=%d resultBytes=%d elapsed=%s", filePath, len(missing), len(orderedIDs), len(result), time.Since(start))
 	return strings.TrimRight(result, "\n")
 }
 
