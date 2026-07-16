@@ -446,8 +446,13 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
-    // Numbered list
-    const numberedListMatch = line.match(/^(\d+)\.\s+(.+)$/);
+    // Numbered list — accepts decimal (1.), lower-alpha (a.), or lower-roman (i.)
+    // markers. List depth is encoded separately by INDENT_MARKER (⇥), so the
+    // marker type here is only used to recognize the line as a numberedListItem;
+    // the actual numbering and depth-driven format are recomputed on render.
+    // Note: lowercase letters and roman numerals overlap (i, v, x, l, c, d, m);
+    // the ambiguity is inherent and accepted (matches Notion's behavior).
+    const numberedListMatch = line.match(/^(\d+|[a-z]+|[ivxlcdm]+)\.\s+(.+)$/i);
     if (numberedListMatch) {
       const text = numberedListMatch[2];
       pushBlock({
@@ -973,9 +978,36 @@ export function blocksToMarkdown(blocks: any[]): string {
 }
 
 /**
- * Serialize a single block to markdown, handling toggle blocks and children recursively.
+ * Whether a block is a list-type item (counts toward nested-list depth cycling).
+ * Used to decide whether recursing into a block's children increments listDepth.
  */
-function serializeBlock(block: any, indentLevel = 0): string {
+function isListTypeBlock(block: any): boolean {
+  return block?.type === 'numberedListItem' || block?.type === 'bulletListItem';
+}
+
+/**
+ * Marker prefix for a numbered list item at the given list depth.
+ * Mirrors formatListMarker in PageEditor.tsx: depth%3 cycles through
+ * decimal / lower-alpha / lower-roman. The number itself is always the first
+ * of its format ("1", "a", "i") because the parser renumbers consecutive
+ * items on load — the marker is for human readability only.
+ */
+function numberedMarkerForDepth(listDepth: number): string {
+  switch (listDepth % 3) {
+    case 1: return 'a';
+    case 2: return 'i';
+    default: return '1';
+  }
+}
+
+/**
+ * Serialize a single block to markdown, handling toggle blocks and children recursively.
+ *
+ * listDepth = number of list-type ancestors of this block. Non-list containers
+ * (toggle, heading, plain paragraph) reset it to 0 so a numbered list nested
+ * inside a toggle starts back at decimal.
+ */
+function serializeBlock(block: any, indentLevel = 0, listDepth = 0): string {
   const withIndent = (markdown: string) => {
     if (!markdown || indentLevel <= 0) return markdown;
     return `${INDENT_MARKER.repeat(indentLevel)} ${markdown}`;
@@ -988,11 +1020,15 @@ function serializeBlock(block: any, indentLevel = 0): string {
 
   const finalizeBlock = (markdown: string) => withBlockAnchor(withIndent(markdown));
 
+  // Children inherit listDepth: increment only when this block is itself a list item.
+  const childListDepth = isListTypeBlock(block) ? listDepth + 1 : 0;
+  const serializeChild = (c: any) => serializeBlock(c, indentLevel + 1, childListDepth);
+
   if (block.type === 'syncedBlockSource') {
     const syncId = block.props?.syncId || '';
     const quoted = parseQuotedProp(block.props?.quoted);
     const childrenMd = block.children?.length
-      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+      ? block.children.map(serializeChild).join('\n')
       : '';
     return finalizeBlock(renderSyncedSourceMarkdown(syncId, quoted, childrenMd));
   }
@@ -1015,7 +1051,8 @@ function serializeBlock(block: any, indentLevel = 0): string {
     const ratios = block.props?.columnRatios || '50,50';
     const childrenMd = columns.map((col: any) => {
       const ratio = col.props?.widthRatio || 50;
-      const colContent = (col.children || []).map((c: any) => serializeBlock(c)).join('\n');
+      // Column children are not list items; reset listDepth to 0 for them.
+      const colContent = (col.children || []).map((c: any) => serializeBlock(c, indentLevel + 1, 0)).join('\n');
       return `<column ratio="${ratio}">\n${colContent}\n</column>`;
     }).join('\n');
     return finalizeBlock(`<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`);
@@ -1026,7 +1063,7 @@ function serializeBlock(block: any, indentLevel = 0): string {
     const level = block.props.level || 1;
     const title = getFormattedText(block.content);
     const childrenMd = block.children?.length
-      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+      ? block.children.map(serializeChild).join('\n')
       : '';
     return finalizeBlock(`<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
   }
@@ -1035,17 +1072,17 @@ function serializeBlock(block: any, indentLevel = 0): string {
   if (block.type === 'toggleListItem') {
     const title = getFormattedText(block.content);
     const childrenMd = block.children?.length
-      ? block.children.map((c: any) => serializeBlock(c)).join('\n')
+      ? block.children.map(serializeChild).join('\n')
       : '';
     return finalizeBlock(`<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
   }
 
   // Regular blocks
-  const line = serializeRegularBlock(block);
+  const line = serializeRegularBlock(block, listDepth);
 
   // If a regular block has children, append them
   if (block.children?.length) {
-    const childrenMd = block.children.map((c: any) => serializeBlock(c, indentLevel + 1)).join('\n');
+    const childrenMd = block.children.map(serializeChild).join('\n');
     return finalizeBlock(line + '\n' + childrenMd);
   }
 
@@ -1055,7 +1092,7 @@ function serializeBlock(block: any, indentLevel = 0): string {
 /**
  * Serialize a regular (non-toggle) block to a single markdown line.
  */
-function serializeRegularBlock(block: any): string {
+function serializeRegularBlock(block: any, listDepth = 0): string {
   const serialized = (() => {
     switch (block.type) {
     case 'heading': {
@@ -1080,7 +1117,11 @@ function serializeRegularBlock(block: any): string {
 
     case 'numberedListItem': {
       const numberText = getFormattedText(block.content);
-      return `1. ${numberText}`;
+      // Depth-driven marker (1./a./i.) for human readability; BlockNote renumbers
+      // consecutive items on load, so the literal value here is just the first
+      // marker of its format. List structure (depth) is encoded by INDENT_MARKER.
+      const marker = numberedMarkerForDepth(listDepth);
+      return `${marker}. ${numberText}`;
     }
 
     case 'checkListItem': {

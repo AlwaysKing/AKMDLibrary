@@ -287,6 +287,22 @@ h4[contenteditable],
   padding-bottom: 1px !important;
 }
 
+/* Notion-style marker cycling for numbered lists.
+   data-marker-text is computed by NumberedListIndexFix (PageEditor.tsx) based on
+   the item's list depth: depth%3 -> decimal / lower-alpha / lower-roman.
+   This overrides BlockNote's default decimal-only `var(--index) "."` rendering. */
+.bn-editor .bn-block-content[data-content-type="numberedListItem"]::before {
+  content: attr(data-marker-text) "." !important;
+  min-width: 28px !important;
+}
+
+/* Notion-style list nesting: align child content with the parent text start.
+   Nested blockOuter keeps BlockNote's 8px left padding, so the group margin
+   must be marker width (24px in the rendered border-box) minus that padding. */
+.bn-editor .bn-block-group .bn-block-group {
+  margin-left: 20px !important;
+}
+
 /* Check list (todo) — Notion: outer padding-top 1px, padding-bottom 1px */
 .bn-editor [data-content-type="checkListItem"] {
   margin: 0 !important;

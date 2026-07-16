@@ -1127,11 +1127,68 @@ const ColumnDropPlugin = Extension.create({
 });
 
 /**
- * Build a DecorationSet that adds data-index to every numberedListItem in the document.
- * Uses the same logic as BlockNote's nr() function:
- * - Walk document top-down, tracking sequential numberedListItem sequences
- * - Reset index to 1 when the previous sibling is not a numberedListItem
- * - Handle both top-level blocks and nested block groups
+ * Convert a 1-based index to lowercase alpha marker (1->a, 26->z, 27->aa).
+ * Matches Notion's behavior for lists deeper than 26 items at a given level.
+ */
+function numberToAlpha(n: number): string {
+  if (n < 1) return String(n);
+  let s = '';
+  let v = n;
+  while (v > 0) {
+    v -= 1;
+    s = String.fromCharCode(97 + (v % 26)) + s;
+    v = Math.floor(v / 26);
+  }
+  return s;
+}
+
+/**
+ * Convert a 1-based index to lowercase Roman numeral (1->i, 4->iv, 3999->mmmcmxcix).
+ * Returns the decimal string fallback for out-of-range values.
+ */
+function numberToRoman(n: number): string {
+  if (n < 1 || n > 3999) return String(n);
+  const table: Array<[string, number]> = [
+    ['m', 1000], ['cm', 900], ['d', 500], ['cd', 400],
+    ['c', 100], ['xc', 90], ['l', 50], ['xl', 40],
+    ['x', 10], ['ix', 9], ['v', 5], ['iv', 4], ['i', 1],
+  ];
+  let s = '';
+  let v = n;
+  for (const [letter, value] of table) {
+    while (v >= value) {
+      s += letter;
+      v -= value;
+    }
+  }
+  return s;
+}
+
+/**
+ * Format a numbered-list marker text by list depth.
+ * Notion cycles: depth 0 -> decimal, depth 1 -> lower-alpha, depth 2 -> lower-roman,
+ * depth 3 -> decimal (cycle repeats every 3 levels).
+ */
+function formatListMarker(index: number, listDepth: number): string {
+  switch (listDepth % 3) {
+    case 1: return numberToAlpha(index);
+    case 2: return numberToRoman(index);
+    default: return index.toString();
+  }
+}
+
+/**
+ * Build a DecorationSet that adds data-index AND data-marker-text to every
+ * numberedListItem in the document.
+ *
+ * data-index: 1-based sequence number within its sibling group (resets when the
+ * previous sibling is not a numberedListItem). Same as BlockNote's nr() logic.
+ *
+ * data-marker-text: the marker string ("1", "a", "iv", ...) computed from the
+ * item's list depth. List depth = number of consecutive list-type ancestors
+ * (numberedListItem OR bulletListItem); non-list containers reset depth to 0.
+ * CSS renders this as the visible marker, overriding BlockNote's default
+ * decimal-only rendering to give Notion-style 1./a./i. cycling.
  */
 function buildNumberedIndexDecorations(doc: any): DecorationSet {
   const decorations: Decoration[] = [];
@@ -1140,7 +1197,47 @@ function buildNumberedIndexDecorations(doc: any): DecorationSet {
   // independent numbering sequences from the parent level.
   const indexByParent = new Map<any, number>();
   const prevWasNumberedByParent = new Map<any, boolean>();
+  // Map each blockContainer node to its list depth (count of list-type ancestors).
+  const listDepthByNode = new Map<any, number>();
 
+  const isListBlockContainer = (blockContainerNode: any) => {
+    const firstChild = blockContainerNode.firstChild;
+    return !!firstChild && (
+      firstChild.type.name === 'numberedListItem' ||
+      firstChild.type.name === 'bulletListItem'
+    );
+  };
+
+  // First pass: compute list depth for every blockContainer via explicit recursion.
+  // BlockNote documents are rooted as doc > blockGroup > blockContainer, so the
+  // walker must descend through blockGroup nodes before computing block depth.
+  const computeBlockDepth = (blockContainerNode: any, depth: number) => {
+    listDepthByNode.set(blockContainerNode, depth);
+    // Only list-type parents propagate depth to their children; other containers
+    // (toggle/heading/paragraph) reset the list-depth counter to 0.
+    const childDepth = isListBlockContainer(blockContainerNode) ? depth + 1 : 0;
+    for (let i = 0; i < blockContainerNode.childCount; i++) {
+      const child = blockContainerNode.child(i);
+      if (child.type.name === 'blockGroup') {
+        computeGroupDepth(child, childDepth);
+      }
+    }
+  };
+
+  const computeGroupDepth = (blockGroupNode: any, depth: number) => {
+    for (let i = 0; i < blockGroupNode.childCount; i++) {
+      const child = blockGroupNode.child(i);
+      if (child.type.name === 'blockContainer') {
+        computeBlockDepth(child, depth);
+      } else if (child.type.name === 'blockGroup') {
+        computeGroupDepth(child, depth);
+      }
+    }
+  };
+
+  computeGroupDepth(doc, 0);
+
+  // Second pass: emit decorations with both data-index and data-marker-text.
   doc.descendants((node: any, pos: number, parent: any) => {
     if (node.type.name !== 'blockContainer') return;
     const firstChild = node.firstChild;
@@ -1163,12 +1260,18 @@ function buildNumberedIndexDecorations(doc: any): DecorationSet {
     indexByParent.set(parent, index);
     prevWasNumberedByParent.set(parent, true);
 
+    const listDepth = listDepthByNode.get(node) ?? 0;
+    const markerText = formatListMarker(index, listDepth);
+
     // Decoration targets the numberedListItem node inside the blockContainer.
     // pos is the start of blockContainer, +1 for its opening.
     const from = pos + 1;
     const to = from + firstChild.nodeSize;
     decorations.push(
-      Decoration.node(from, to, { 'data-index': index.toString() }),
+      Decoration.node(from, to, {
+        'data-index': index.toString(),
+        'data-marker-text': markerText,
+      }),
     );
   });
 
