@@ -24,6 +24,7 @@ import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import { MarkBlockSpec } from './MarkBlock';
 import { FileContentBlockSpec } from './FileContentBlock';
+import { DatabaseBlockSpec } from './DatabaseBlock';
 import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves, isPageChangeSuppressed } from './SyncedBlock';
 import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
 import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
@@ -121,6 +122,7 @@ function createEditorSchema(codeTheme: CodeThemeValue) {
       column_list: ColumnListBlockSpec(),
       column: ColumnBlockSpec(),
       fileContent: FileContentBlockSpec(),
+      database: DatabaseBlockSpec(),
       syncedBlockSource: SyncedBlockSourceSpec(),
       syncedBlockMirror: SyncedBlockMirrorSpec(),
     },
@@ -827,6 +829,27 @@ function getCustomSlashMenuItems(editor: any) {
           props: { path: '', language: 'text' },
           content: [{ type: 'text', text: '', styles: {} }],
         };
+        if (isSlashOnly || isEmpty) {
+          editor.updateBlock(currentBlock, newBlock as any);
+        } else {
+          editor.insertBlocks([newBlock as any], currentBlock, 'after');
+        }
+      },
+    },
+    {
+      title: '数据库',
+      subtext: '嵌入或创建一个数据源视图',
+      key: 'database',
+      aliases: ['database', 'db', 'table', '数据库', '数据表'],
+      group: '高级区块',
+      icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4 }}><rect x="2.5" y="3" width="13" height="12" rx="1.5" /><path d="M2.5 7h13M6.5 3v12M11.5 3v12" /></svg>,
+      onItemClick: () => {
+        const currentBlock = editor.getTextCursorPosition().block;
+        const blockContent = currentBlock.content;
+        const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
+          blockContent[0].type === 'text' && blockContent[0].text === '/';
+        const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
+        const newBlock = { type: 'database', props: { src: '', viewId: '', views: '' } };
         if (isSlashOnly || isEmpty) {
           editor.updateBlock(currentBlock, newBlock as any);
         } else {
@@ -6294,19 +6317,25 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     // Shift+click on a single block uses CAPTURE on the editor container so
     // it runs before BlockNote's mousedown handler (which would focus the
     // editor into edit mode) and before our document-level bubble handlers.
-    container.addEventListener('mousedown', handleShiftClickCapture, true);
-    document.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+	    container.addEventListener('mousedown', handleShiftClickCapture, true);
+	    document.addEventListener('mousedown', handleMouseDown);
+	    document.addEventListener('mousemove', handleMouseMove, true);
+	    document.addEventListener('mouseup', handleMouseUp, true);
+	    document.addEventListener('pointerup', handleMouseUp, true);
+	    window.addEventListener('blur', handleMouseUp);
+	    document.addEventListener('akdb-pointer-up', handleMouseUp);
     document.addEventListener('click', handleClick);
     scrollableArea.addEventListener('scroll', handleScroll);
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
-      container.removeEventListener('mousedown', handleShiftClickCapture, true);
-      document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+	      container.removeEventListener('mousedown', handleShiftClickCapture, true);
+	      document.removeEventListener('mousedown', handleMouseDown);
+	      document.removeEventListener('mousemove', handleMouseMove, true);
+	      document.removeEventListener('mouseup', handleMouseUp, true);
+	      document.removeEventListener('pointerup', handleMouseUp, true);
+	      window.removeEventListener('blur', handleMouseUp);
+	      document.removeEventListener('akdb-pointer-up', handleMouseUp);
       document.removeEventListener('click', handleClick);
       scrollableArea.removeEventListener('scroll', handleScroll);
       stopAutoScroll();

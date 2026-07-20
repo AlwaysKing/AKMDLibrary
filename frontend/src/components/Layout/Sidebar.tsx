@@ -361,6 +361,21 @@ export default function Sidebar({ onToggle }: SidebarProps) {
             </span>
             <span className="text-sm font-medium text-notion-sidebarText">引用文件库</span>
           </button>
+          <button
+            onClick={() => {
+              const databasesPath = `/s/${currentSpace?.slug}/databases`;
+              navigate(location.pathname === databasesPath ? `/s/${currentSpace?.slug}` : databasesPath);
+            }}
+            disabled={!currentSpace}
+            className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed ${location.pathname === `/s/${currentSpace?.slug}/databases` ? 'bg-notion-hover' : ''}`}
+            style={{ paddingLeft: '16px', paddingRight: '8px' }}
+            title="源数据管理"
+          >
+            <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
+              <Database className="w-[18px] h-[18px] text-[#91918e]" strokeWidth={1.7} />
+            </span>
+            <span className="text-sm font-medium text-notion-sidebarText">源数据管理</span>
+          </button>
           {currentSpace?.feature_flags?.git && gitState?.is_repo && (
             <button
               onClick={() => {

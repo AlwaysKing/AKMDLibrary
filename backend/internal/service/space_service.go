@@ -13,10 +13,10 @@ import (
 )
 
 type SpaceService struct {
-	spaceRepo  *repository.SpaceRepository
-	memberRepo *repository.MemberRepository
+	spaceRepo   *repository.SpaceRepository
+	memberRepo  *repository.MemberRepository
 	pageService *PageService
-	docsDir    string
+	docsDir     string
 
 	// gitSync is optional; when set, space create/rename/delete notify the
 	// auto-commit worker.
@@ -42,10 +42,10 @@ func NewSpaceService(
 	docsDir string,
 ) *SpaceService {
 	return &SpaceService{
-		spaceRepo:  spaceRepo,
-		memberRepo: memberRepo,
+		spaceRepo:   spaceRepo,
+		memberRepo:  memberRepo,
 		pageService: pageService,
-		docsDir:    docsDir,
+		docsDir:     docsDir,
 	}
 }
 
@@ -210,6 +210,14 @@ func (s *SpaceService) RemoveMember(spaceID, memberID int) error {
 func (s *SpaceService) IsSpaceMember(spaceID, userID int) bool {
 	member, err := s.memberRepo.GetBySpaceAndUser(spaceID, userID)
 	return err == nil && member != nil
+}
+
+func (s *SpaceService) MemberRole(spaceID, userID int) (string, bool) {
+	member, err := s.memberRepo.GetBySpaceAndUser(spaceID, userID)
+	if err != nil || member == nil {
+		return "", false
+	}
+	return member.Role, true
 }
 
 // SpacePath resolves a space slug to its absolute directory under docsDir.

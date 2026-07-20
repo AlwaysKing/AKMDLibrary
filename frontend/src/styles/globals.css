@@ -144,6 +144,7 @@ h4[contenteditable],
 .bn-editor .bn-block-content[data-content-type="pageReference"],
 .bn-editor .bn-block-content[data-content-type="bookmark"],
 .bn-editor .bn-block-content[data-content-type="subpage"],
+.bn-editor .bn-block-content[data-content-type="database"],
 .bn-editor .bn-block-content[data-content-type="syncedBlockSource"],
 .bn-editor .bn-block-content[data-content-type="syncedBlockMirror"] {
   padding: 0 !important;
@@ -151,6 +152,7 @@ h4[contenteditable],
 .bn-block-content.ProseMirror-selectednode[data-content-type="pageReference"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="bookmark"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="subpage"] > *,
+.bn-block-content.ProseMirror-selectednode[data-content-type="database"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="image"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="video"] > *,
 .bn-block-content.ProseMirror-selectednode[data-content-type="file"] > *,
@@ -161,6 +163,7 @@ h4[contenteditable],
 .ProseMirror-selectednode > .bn-block-content[data-content-type="pageReference"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="bookmark"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="subpage"] > *,
+.ProseMirror-selectednode > .bn-block-content[data-content-type="database"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="image"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="video"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="file"] > *,
@@ -169,6 +172,15 @@ h4[contenteditable],
 .ProseMirror-selectednode > .bn-block-content[data-content-type="syncedBlockSource"] > *,
 .ProseMirror-selectednode > .bn-block-content[data-content-type="syncedBlockMirror"] > * {
   outline: none !important;
+}
+
+.bn-editor .bn-block-outer:has([data-content-type="database"]),
+.bn-editor .bn-block:has(> .bn-block-content[data-content-type="database"]),
+.bn-editor .bn-block-content[data-content-type="database"],
+.bn-editor .bn-block-content[data-content-type="database"] > * {
+  width: 100% !important;
+  max-width: none !important;
+  box-sizing: border-box !important;
 }
 
 /* Subpage blocks in a stack: match Notion's asymmetric padding for first/middle/last */
@@ -773,6 +785,10 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   position: relative !important;
   left: 12px !important;
   top: 11px !important;
+}
+
+.bn-side-menu[data-block-type="database"] {
+  height: 40px !important;
 }
 
 .bn-side-menu[data-block-type="image"] {

@@ -10,6 +10,9 @@ import TrashPage from './pages/TrashPage';
 import WelcomePage from './pages/WelcomePage';
 import GitPage from './pages/GitPage';
 import FilesPage from './pages/FilesPage';
+import DatabasesPage from './pages/DatabasesPage';
+import DatabaseDetailPage from './pages/DatabaseDetailPage';
+import DatabaseRowPage from './pages/DatabaseRowPage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 import { usePreferenceStore } from './stores/preferenceStore';
@@ -127,6 +130,9 @@ function App() {
           <Route path="trash" element={<TrashPage />} />
           <Route path="git" element={<GitPage />} />
           <Route path="files" element={<FilesPage />} />
+          <Route path="databases" element={<DatabasesPage />} />
+          <Route path="databases/:dbId" element={<DatabaseDetailPage />} />
+          <Route path="db/:dbId/row/:rowId" element={<DatabaseRowPage />} />
         </Route>
         <Route
           path="/s/:spaceSlug/p/:pageId"

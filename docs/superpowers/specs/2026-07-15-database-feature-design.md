@@ -22,9 +22,9 @@
 
 V1 包含：
 - 6 种视图：`table` / `board` / `gallery` / `list` / `calendar` / `timeline`
-- 属性类型：`text` / `number` / `select` / `multi_select` / `date` / `checkbox` / `url` / `status` / `relation`
+- 属性类型：`text` / `number` / `select` / `multi_select` / `date` / `checkbox` / `url` / `status` / `formula` / `relation`
 - 系统字段：`created_time` / `last_edited_time` / `last_edited_user` / `linked`（反向关联）
-- 视图级公式（自定义 DSL）
+- schema 级公式字段（自定义 DSL；结果动态计算，不写入 CSV）
 - 两阶段过滤流水线（源过滤 + 显示过滤）
 - 单向存储 + 系统维护反向 `linked` 列的关联机制
 - 两个管理入口（页面内块 + 侧边栏「源数据管理」页）
@@ -37,7 +37,6 @@ V1 不做（明确推迟）：
 - 数据库模板（database template）
 - 跨 space 关联
 - 数据库单独的细粒度权限
-- schema 层公式属性类型（采用视图级公式替代）
 - 公式 DSL 的高级特性（正则、聚合窗口、嵌套自定义函数等）
 
 ---
@@ -218,6 +217,22 @@ CSV 存储：字符串
 - `status` 是 `select` 的特化，额外有 `groups`（用于看板视图默认分组）
 - CSV 存储同 select：option id
 
+#### formula
+```json
+{
+  "type": "formula",
+  "readonly": false,
+  "auto": false,
+  "config": {
+    "formula": "prop(\"price\") * prop(\"count\")"
+  }
+}
+```
+- `formula` 是数据源 schema 的一等字段，统一在数据源定义里创建、改名、编辑表达式
+- 公式结果在展示层读取行数据后动态计算，**不写入 `data.csv`**
+- `data.csv` 表头不包含 formula 列 id，避免外部编辑者误以为需要维护公式结果
+- 视图层只通过 `property="<formula_col_id>"` 控制公式字段是否显示、显示顺序和列宽
+
 #### relation
 ```json
 {
@@ -309,6 +324,7 @@ CSV 存储：JSON 字符串
     },
     { "id": "col-price", "name": "单价", "type": "number", "config": { "precision": 2 } },
     { "id": "col-count", "name": "册数", "type": "number", "config": { "precision": 0 } },
+    { "id": "col-total", "name": "总价", "type": "formula", "config": { "formula": "prop(\"col-price\") * prop(\"col-count\")" } },
     { "id": "col-created", "name": "创建时间", "type": "created_time", "readonly": true, "auto": true },
     { "id": "col-updated", "name": "修改时间", "type": "last_edited_time", "readonly": true, "auto": true },
     { "id": "col-updater", "name": "修改人", "type": "last_edited_user", "readonly": true, "auto": true }
@@ -384,6 +400,8 @@ uuid,col-title,col-status,col-tags,col-author,col-price,col-count,col-created,co
 "book-uuid-2","人月神话","s3","[\"t1\",\"t2\"]","person-uuid-2","45.00","2","2026-06-01T10:00:00Z","2026-07-12T14:20:00Z","bob","[]"
 ```
 
+注意：`col-total` 是 formula 字段，只存在于 `config.json`，不出现在 `data.csv` 表头中。
+
 ### 3.5 CSV 读写注意事项
 
 - 读：用 Go 标准库 `encoding/csv`；前端如需直接解析也用 papaparse 等成熟库
@@ -433,9 +451,9 @@ export const DatabaseBlockSpec = createReactBlockSpec(
     </source-filter>
 
     <column>
-      <rule property="<col_id>" as="书名" width="200" hidden="false"/>
-      <rule property="<col_id>" as="状态"/>
-      <rule formula="prop(\"price\") * prop(\"count\")" as="总价"/>
+      <rule property="<col_id>" width="200" hidden="false" align="left"/>
+      <rule property="<col_id>"/>
+      <rule property="<formula_col_id>"/>
     </column>
 
     <display-filter op="and">
@@ -473,9 +491,9 @@ export const DatabaseBlockSpec = createReactBlockSpec(
 | `<source-filter>` | / | `op`（默认 `and`） | 顶层 group，子节点为 `<rule>` 或 `<group>` |
 | `<display-filter>` | / | `op`（默认 `and`） | 同上，作用于显示列 |
 | `<group>` | `op` | / | 子 group；V1 只允许一层，子节点只能是 `<rule>` |
-| `<rule>`（filter 内） | `op`, `value` | `property`（source-filter 用）/ `column`（display-filter 用） | 二选一：`property=` 引用 schema 列 id；`column=` 引用 column 的 `as` 名 |
+| `<rule>`（filter 内） | `op`, `value` | `property`（source-filter 用）/ `column`（display-filter 用） | 二选一：`property=` 引用 schema 列 id；`column=` 引用显示列的 property id |
 | `<column>` | / | / | 视图列定义容器 |
-| `<rule>`（column 内） | / | `property`（绑定 schema 列）/ `formula`（公式）/ `as`（显示名，缺省时：`property=` 用 schema 列 name；`formula=` 必填否则报错）/ `width`（像素，默认 150）/ `hidden`（默认 false） | 视图里的一列 |
+| `<rule>`（column 内） | / | `property`（绑定 schema 列）/ `width`（像素，默认 150）/ `hidden`（默认 false） | 视图里的一列；列名始终来自 schema 字段名，公式也通过 `property=` 引用 schema 中的 formula 字段 |
 | `<sort>` | / | / | 排序容器 |
 | `<rule>`（sort 内） | `dir` | `property` / `column` | 排序键，`dir` ∈ `asc`/`desc` |
 | `<limit>` | 文本内容（数字） | / | 分页大小，0 表示不分页 |
@@ -519,10 +537,10 @@ LLM/外部编辑可能写出格式不完美的 HTML。规则：
 2. [源数据过滤] source-filter（只能用 property= 引用 schema 列）
 3. [列计算]
    - 对每个 column 规则：
-     - property= → 直接取 schema 列的值
-     - formula= → 用公式 DSL 求值（可访问所有 schema 列）
+     - property= 普通持久字段 → 直接取 schema 列的值
+     - property= formula 字段 → 读取 schema 中 `config.formula`，用公式 DSL 求值（可访问所有 schema 列）
    - 得到"显示行"，每行带 {row_uuid, schema_props, display_cols}
-4. [显示数据过滤] display-filter（只能用 column= 引用显示列 as 名）
+4. [显示数据过滤] display-filter（只能用 column= 引用显示列的 property id）
 5. [排序] sort（property= 或 column= 都行）
 6. [limit] 分页
 7. 渲染对应视图类型
@@ -570,7 +588,7 @@ LLM/外部编辑可能写出格式不完美的 HTML。规则：
 
 ## 7. 公式 DSL
 
-公式出现在 `<column><rule formula="..." as="..."/></column>` 和 `<display-filter>` 中（display-filter 用 column= 引用公式列即可，无需在 filter rule 里写 formula）。
+公式定义出现在数据源 `config.json` 的 formula 字段中，例如 `{ "type": "formula", "config": { "formula": "..." } }`。视图层不保存公式表达式，只用 `<rule property="...">` 决定该公式字段是否显示。
 
 ### 7.1 语法
 
@@ -639,7 +657,7 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 
 ### 7.6 公式求值时机
 
-- 任何列计算（步骤 3）时按需求值
+- 任何列计算（步骤 3）时，遇到 schema 中的 formula 字段按需求值
 - 不缓存（数据规模小，YAGNI）
 - 公式语法错误：该列显示 `#ERROR`，日志告警，不影响其他列
 
@@ -754,6 +772,63 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 - 拖拽条目边缘调整起止日期
 - 拖拽条目整体移动
 - 顶部切换时间尺度（日/周/月）
+
+### 9.7 Database UI 统一菜单规范
+
+数据库相关的浮层、菜单、下拉选择器必须使用同一套 Notion-like 菜单规格，不能在单个组件里随意重新定义字号、行高、圆角、图标颜色或 hover 背景。适用范围包括但不限于：
+
+- 列头菜单
+- "添加列"菜单
+- "更改类型"二级菜单
+- 单选 / 多选 / 状态 dropdown
+- 视图设置菜单
+- 列显示 / 隐藏菜单
+- 图标选择器的按钮、搜索框、随机按钮和图标网格
+
+统一视觉基准：
+
+| 项 | 规范 |
+| --- | --- |
+| 主文字色 | `#37352f` |
+| 次级文字色 | `#787774` |
+| 主图标色 | 与主文字同色，接近 Notion `c-icoPri` |
+| 次级图标色 | `#8f8e8a` / `#9b9a97`，只用于辅助图标、说明、禁用态 |
+| 菜单背景 | `#fff` |
+| 输入框背景 | `#faf9f8` |
+| hover / active 背景 | `#f3f2f0` 或同级 Notion hover 色，不允许每个菜单单独发明 |
+| 菜单边框 | `rgba(55,53,47,.12)` |
+| 分割线 | `rgba(55,53,47,.10)` |
+| 菜单圆角 | 8px |
+| 控件圆角 | 6px |
+| 菜单项圆角 | 5px |
+| 菜单外边距 / 内边距基准 | 4px |
+| 输入 / 图标按钮高度 | 28px |
+| 普通菜单项高度 | 30px |
+| 菜单文字 | 14px / 400，`line-height: 1.2` |
+| 默认类型图标尺寸 | 18px，居中，`fill: currentColor` |
+
+实现约束：
+
+- `frontend/src/components/Editor/database/database.css` 应维护一组 database 菜单级 CSS 变量，例如 `--akdb-menu-text`、`--akdb-menu-icon`、`--akdb-menu-hover-bg`、`--akdb-menu-item-height`。新增 database 菜单必须优先复用这些变量。
+- 列宽、隐藏、只读、对齐等视图显示属性属于 `<view><column><rule ... /></column></view>` 中的 view column rule，例如 `align="left|center|right"`，不写入数据源 `config.json` 的 column schema。不同 view 可以对同一个数据源列使用不同显示属性。
+- 不要在 JSX inline style 或单个 class 中临时写一套新的菜单尺寸、字号、粗细、圆角、图标颜色。
+- 新菜单如果视觉上需要差异，必须先判断它是否仍属于 database menu/popup 范畴；属于则扩展统一 token，而不是局部硬编码。
+- 添加列菜单、列头菜单、更改类型二级菜单必须保持一致的字号、行高、hover、图标颜色和图标尺寸。添加列菜单可以因双列布局保持 360px 宽，但内部 item 规格必须和其他菜单一致。
+- 类型默认图标以 Notion property type DOM 为准：`description`、`hashtag`、`arrow-circle-down`、`list/checkmark-list`、`burst`、`calendar`、`checkmark-square`、`link`、`formula`、`arrow-northeast` 等。项目内没有 `/icons/*.svg` 静态资源时，应映射到本地 `columnIcons.ts` 中同源或近似的 SVG path，而不是退回文字占位。
+- 图标 picker 里用户可选的图标列表仍使用 Notion 风格 SVG 图标库；列默认图标和用户自定义列图标都应通过统一的 `ColumnIconGlyph` 渲染。
+- 图标 picker 的"最近"区域必须展示最近使用的多个图标，最多两行，按最近选择顺序排列，不能只显示单个上一个图标。
+- 单选 / 多选 / 状态的 option 编辑菜单必须使用紧凑横向布局：第一行是 `[图标按钮] [名称输入框]`，图标按钮点击后复用 database 的 Notion SVG 图标选择器，并把选中的 icon 写入当前 option 配置；文档内选项编辑菜单和源数据页选项配置菜单必须使用同一套图标 picker 内容、最近记录、随机、移除和 `ColumnIconGlyph` 渲染逻辑，不能维护两份互不一致的图标列表；后续行使用 `标签: 控件组` 形式。`样式: 无 / 圆角 / 胶囊` 和 `颜色: 色块 / 背景 / 边框` 必须共享同一组固定紧凑三列网格，列宽、gap、按钮高度一致，不能用 `1fr` 等分把选项拉开；列宽必须预留 option icon 出现后的 tag 宽度，不能只按纯文字宽度压缩。`样式` 的未选中项只显示普通文本，不用灰色背景表达选中；只有当前选中的 `圆角` / `胶囊` 才展示叠加当前颜色与颜色模式的真实 option tag 预览，`无` 被选中时仍显示收紧的普通文本。普通文本与 tag 预览使用一致的 13px / 400 / 20px 文字规格，按钮宽高稳定，切换时不得改变布局或产生闪烁；预览 tag 内部不得使用 ellipsis 缩略。三列按钮的 hover 背景必须画在内容层，宽度接近文本或 tag 本身，不得铺满整个网格列。`颜色` 行第一列只显示一个当前颜色的小方形色块按钮，点击后展开额外颜色菜单；颜色菜单必须高于表格编辑焦点层，且父级不能用 overflow 裁切它。`背景 / 边框` 的未选中项也只显示普通文本，选中项按当前样式与当前颜色展示真实 tag 预览。当样式为 `无` 时，颜色选择和颜色模式控件必须禁用，且不能展开颜色菜单。`option_shape` 属于列 schema 的 `config`，用于控制该列所有 option 的展示形态；单个 option 的 `icon` / `color` / `color_mode` 属于 option 配置本身。视图级的列对齐、宽度、隐藏、只读等仍只写入 view column rule。
+- `status` 不是普通单选的纯平铺版本：它的 schema config 必须包含 `groups`，每个 group 通过 `option_ids` 维护组内状态顺序。状态单元格 dropdown 顶部显示当前状态和搜索输入，下面按 group 分段展示状态项，分段之间使用 Notion-like 分割线，底部提供"编辑属性"入口。状态 dropdown 不显示普通单选的"创建选项"行、选项拖拽 handle 或单个 option 的 `...` 修改入口；新增、排序、删除状态应在属性配置入口中维护，并同步更新 `groups.option_ids`。
+- 只读 / 启用类状态不要靠给菜单项永久加背景表达。如果是动作项，应直接改变文案，例如"只读"切换为"取消只读"。
+- Database 内所有确认、警告、删除、覆盖等阻断式交互必须使用应用内自定义 dialog / popover，不允许使用浏览器或系统原生 `alert` / `confirm` / `prompt`。这类原生弹窗会破坏 Notion-like 视觉体系，也无法复用主题、尺寸、文案和可访问性规范。
+
+交互约束：
+
+- 二级菜单使用 hover / focus 展开，方向应跟随主菜单右侧，不使用点击后原地展开。
+- 二级菜单的宽度、行高、字号、图标规格与主菜单一致。
+- 浮层使用 portal 挂到 `document.body`，避免被表格 overflow 裁切。
+- hover、focus、active 不得导致布局尺寸变化；图标、文字、按钮都需要稳定尺寸。
+- 数字列单元格编辑遵循 Notion-like 草稿模型：输入阶段允许任意文本，不使用浏览器原生 `type="number"` 限制用户输入；回车或失焦确认时再删除非数字字符、归一正负号和小数点，并按列配置的正负约束、最小/最大值和精度写回。
 
 ---
 
@@ -1231,7 +1306,7 @@ interface ViewComponentProps {
 | 反向关联（linked） | 系统自动维护的列，存在目标数据库 |
 | 源过滤（source-filter） | 对 CSV 原始属性过滤 |
 | 显示过滤（display-filter） | 对计算后的显示列过滤 |
-| 公式（formula） | 视图级的列计算表达式 |
+| 公式（formula） | 数据源 schema 中的派生字段；表达式保存在 `config.json`，结果动态计算且不写入 CSV |
 
 ---
 
@@ -1272,11 +1347,11 @@ title: 我的书单
 <database src="550e8400-e29b-41d4-a716-446655440000" view="v-default">
   <view id="v-default" type="table" name="全部">
     <column>
-      <rule property="col-title" as="书名" width="240"/>
-      <rule property="col-status" as="状态" width="100"/>
-      <rule property="col-tags" as="标签"/>
-      <rule property="col-author" as="作者"/>
-      <rule formula="prop(\"col-price\") * prop(\"col-count\")" as="总价"/>
+      <rule property="col-title" width="240"/>
+      <rule property="col-status" width="100"/>
+      <rule property="col-tags"/>
+      <rule property="col-author"/>
+      <rule property="col-total"/>
     </column>
     <sort>
       <rule property="col-created" dir="desc"/>
@@ -1287,8 +1362,8 @@ title: 我的书单
   <view id="v-board" type="board" name="按状态">
     <group-by property="col-status"/>
     <column>
-      <rule property="col-title" as="书名"/>
-      <rule property="col-tags" as="标签"/>
+      <rule property="col-title"/>
+      <rule property="col-tags"/>
     </column>
   </view>
 
@@ -1296,8 +1371,8 @@ title: 我的书单
     <cover property="col-cover"/>
     <card-size>medium</card-size>
     <column>
-      <rule property="col-title" as="书名"/>
-      <rule property="col-status" as="状态"/>
+      <rule property="col-title"/>
+      <rule property="col-status"/>
     </column>
   </view>
 </database>

@@ -368,6 +368,27 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    const databaseOpen = trimmed.match(/^<database(?:\s+([^>]*))?>$/);
+    if (databaseOpen) {
+      const attrs = parseTagAttributes(databaseOpen[1] || '');
+      const innerLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== '</database>') {
+        innerLines.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++;
+      pushBlock({
+        type: 'database',
+        props: {
+          src: attrs.src || '',
+          viewId: attrs.view || '',
+          views: innerLines.join('\n').trim(),
+        },
+      });
+      continue;
+    }
+
     // Code block
     if (trimmed.startsWith('```')) {
       const rawLang = trimmed.slice(3).trim();
@@ -1146,6 +1167,13 @@ function serializeRegularBlock(block: any, listDepth = 0): string {
       const language = block.props?.language || 'text';
       if (!path) return '';
       return `<content file="${escapeHtmlAttribute(path)}" lang="${escapeHtmlAttribute(language)}" />`;
+    }
+
+    case 'database': {
+      const src = block.props?.src || '';
+      const viewId = block.props?.viewId || '';
+      const views = block.props?.views || '';
+      return `<database src="${escapeHtmlAttribute(src)}" view="${escapeHtmlAttribute(viewId)}">\n${views}\n</database>`;
     }
 
     case 'quote': {

@@ -44,7 +44,7 @@ func (s *Scanner) ScanSpaces() ([]*model.Space, error) {
 
 	var spaces []*model.Space
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" || entry.Name() == "_files" || entry.Name() == "_database" {
 			continue
 		}
 		if !isDirOrSymlinkToDir(s.docsDir, entry.Name()) {
@@ -89,7 +89,7 @@ func (s *Scanner) resolveSpaceDir(spaceSlug string) (string, string) {
 		return "", ""
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" || entry.Name() == "_files" || entry.Name() == "_database" {
 			continue
 		}
 		if !isDirOrSymlinkToDir(s.docsDir, entry.Name()) {
@@ -112,7 +112,7 @@ func (s *Scanner) scanDirectory(dirPath string, pathPrefix string) ([]*model.Pag
 	// Build a set of directory names for quick lookup
 	dirSet := make(map[string]bool)
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" || entry.Name() == "_files" || entry.Name() == "_database" {
 			continue
 		}
 		if isDirOrSymlinkToDir(dirPath, entry.Name()) {
@@ -123,7 +123,7 @@ func (s *Scanner) scanDirectory(dirPath string, pathPrefix string) ([]*model.Pag
 	nodes := make([]*model.PageNode, 0)
 
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "_assets" || entry.Name() == "_files" || entry.Name() == "_database" {
 			continue
 		}
 

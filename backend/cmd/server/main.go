@@ -97,6 +97,8 @@ func main() {
 	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, pageService, authService, docsDir)
 	bookmarkService := service.NewBookmarkService(bookmarkRepo)
 	searchService := service.NewSearchService(docsDir)
+	databaseService := service.NewDatabaseService(docsDir)
+	databaseService.SetGitSyncWorker(gitSyncWorker)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -123,6 +125,7 @@ func main() {
 	searchHandler := handler.NewSearchHandler(searchService, spaceService)
 	filesHandler := handler.NewFilesHandler(docsDir, spaceService)
 	syncedBlockHandler := handler.NewSyncedBlockHandler(pageService, spaceService)
+	databaseHandler := handler.NewDatabaseHandler(databaseService, spaceService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
@@ -136,7 +139,7 @@ func main() {
 	r.Use(middleware.ErrorLogging)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
@@ -231,6 +234,24 @@ func main() {
 		r.Post("/api/spaces/{slug}/files/upload", filesHandler.Upload)
 		r.Put("/api/spaces/{slug}/files/rename", filesHandler.Rename)
 		r.Delete("/api/spaces/{slug}/files", filesHandler.Delete)
+
+		// Databases (per-space file-backed data sources under <space>/_database/)
+		r.Get("/api/spaces/{slug}/databases", databaseHandler.List)
+		r.Post("/api/spaces/{slug}/databases", databaseHandler.Create)
+		r.Get("/api/spaces/{slug}/databases/{dbId}", databaseHandler.Get)
+		r.Patch("/api/spaces/{slug}/databases/{dbId}", databaseHandler.Update)
+		r.Delete("/api/spaces/{slug}/databases/{dbId}", databaseHandler.Delete)
+		r.Post("/api/spaces/{slug}/databases/{dbId}/columns", databaseHandler.AddColumn)
+		r.Patch("/api/spaces/{slug}/databases/{dbId}/columns/{colId}", databaseHandler.UpdateColumn)
+		r.Delete("/api/spaces/{slug}/databases/{dbId}/columns/{colId}", databaseHandler.DeleteColumn)
+		r.Post("/api/spaces/{slug}/databases/{dbId}/columns/reorder", databaseHandler.ReorderColumns)
+		r.Get("/api/spaces/{slug}/databases/{dbId}/rows", databaseHandler.ListRows)
+		r.Post("/api/spaces/{slug}/databases/{dbId}/rows", databaseHandler.CreateRow)
+		r.Get("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.GetRow)
+		r.Patch("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.UpdateRow)
+		r.Delete("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.DeleteRow)
+		r.Get("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}/page", databaseHandler.GetRowPage)
+		r.Put("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}/page", databaseHandler.PutRowPage)
 
 		// Bookmark
 		r.Get("/api/bookmark/meta", bookmarkHandler.GetMeta)

@@ -640,7 +640,13 @@ func (s *PageService) Update(spaceSlug string, pageID string, req *model.UpdateP
 }
 
 func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.UpdatePageMetaRequest) (*model.Page, error) {
-	defer s.lockPage(pageID)()
+	unlock := s.lockPage(pageID)
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
 	s.markGitDirty(spaceSlug)
 	repo, err := s.getRepo(spaceSlug)
 	if err != nil {
@@ -743,6 +749,8 @@ func (s *PageService) UpdateMeta(spaceSlug string, pageID string, req *model.Upd
 	}
 
 	// Re-read the page to pick up frontmatter-only fields (icon_large, etc.)
+	unlock()
+	locked = false
 	return s.GetByID(spaceSlug, pageID)
 }
 
