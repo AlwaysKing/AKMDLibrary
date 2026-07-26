@@ -780,6 +780,7 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 - 列头菜单
 - "添加列"菜单
 - "更改类型"二级菜单
+- "编辑属性"二级菜单
 - 单选 / 多选 / 状态 dropdown
 - 视图设置菜单
 - 列显示 / 隐藏菜单
@@ -813,7 +814,7 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 - 列宽、隐藏、只读、对齐等视图显示属性属于 `<view><column><rule ... /></column></view>` 中的 view column rule，例如 `align="left|center|right"`，不写入数据源 `config.json` 的 column schema。不同 view 可以对同一个数据源列使用不同显示属性。
 - 不要在 JSX inline style 或单个 class 中临时写一套新的菜单尺寸、字号、粗细、圆角、图标颜色。
 - 新菜单如果视觉上需要差异，必须先判断它是否仍属于 database menu/popup 范畴；属于则扩展统一 token，而不是局部硬编码。
-- 添加列菜单、列头菜单、更改类型二级菜单必须保持一致的字号、行高、hover、图标颜色和图标尺寸。添加列菜单可以因双列布局保持 360px 宽，但内部 item 规格必须和其他菜单一致。
+- 添加列菜单、列头菜单、更改类型二级菜单、编辑属性二级菜单必须保持一致的字号、行高、hover、图标颜色和图标尺寸。对齐方式属于编辑属性二级菜单的一部分，不要单独放回主列菜单。添加列菜单可以因双列布局保持 360px 宽，但内部 item 规格必须和其他菜单一致。
 - 类型默认图标以 Notion property type DOM 为准：`description`、`hashtag`、`arrow-circle-down`、`list/checkmark-list`、`burst`、`calendar`、`checkmark-square`、`link`、`formula`、`arrow-northeast` 等。项目内没有 `/icons/*.svg` 静态资源时，应映射到本地 `columnIcons.ts` 中同源或近似的 SVG path，而不是退回文字占位。
 - 图标 picker 里用户可选的图标列表仍使用 Notion 风格 SVG 图标库；列默认图标和用户自定义列图标都应通过统一的 `ColumnIconGlyph` 渲染。
 - 图标 picker 的"最近"区域必须展示最近使用的多个图标，最多两行，按最近选择顺序排列，不能只显示单个上一个图标。

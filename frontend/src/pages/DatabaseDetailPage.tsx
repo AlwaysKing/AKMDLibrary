@@ -394,7 +394,7 @@ function defaultConfig(type: DraftColumnType) {
   if (type === 'select' || type === 'multi_select') return { options: [] };
   if (type === 'status') return { groups: [], options: [] };
   if (type === 'number') return { sign_mode: 'both', precision: -1, unit: '', min: '', max: '' };
-  if (type === 'date') return { include_time: false };
+  if (type === 'date') return { date_format: 'chinese', time_format: 'none', timezone: 'GMT+8', date_content: 'date', include_time: false, hour12: false };
   if (type === 'formula') return { formula: '""' };
   if (type === 'relation') return { target_db_id: '', target_db_name: '', multi: true };
   return {};
@@ -933,7 +933,7 @@ function OptionsEditor({ config, setConfig, defaultShape = 'pill' }: { config: R
   const addOption = () => {
     setConfig({
       ...config,
-      options: [...options, { id: crypto.randomUUID(), value: '新选项', color: 'gray', icon: 'none', shape: defaultShape, color_mode: 'background' }],
+      options: [...options, { id: crypto.randomUUID(), value: '新选项', color: 'gray', icon: 'none', shape: 'plain', color_mode: 'background' }],
     });
   };
   return (

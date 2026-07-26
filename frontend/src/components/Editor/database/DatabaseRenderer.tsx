@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TdHTMLAttributes } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TdHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   AlignCenter,
@@ -7,6 +7,8 @@ import {
   ArrowUpDown,
   CalendarDays,
   Check,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Columns3,
   GripVertical,
@@ -51,7 +53,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   const [loading, setLoading] = useState(true);
   const [addColumnOpen, setAddColumnOpen] = useState(false);
   const [columnMenuIndex, setColumnMenuIndex] = useState<number | null>(null);
-  const [columnMenuTypeOpen, setColumnMenuTypeOpen] = useState(false);
+  const [columnMenuSubmenu, setColumnMenuSubmenu] = useState<'type' | 'property' | null>(null);
   const [pendingDeleteColumn, setPendingDeleteColumn] = useState<DatabaseColumn | null>(null);
   const [deletingColumn, setDeletingColumn] = useState(false);
   const [columnDragState, setColumnDragState] = useState<{
@@ -79,7 +81,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   const showColumnControls = !readonly && columnControls;
   const showFillColumn = !readonly;
   useDropdownOutsideClose(addColumnOpen, addColumnButtonRef, () => setAddColumnOpen(false), '.akdb-add-column-menu');
-  useDropdownOutsideClose(columnMenuIndex !== null, columnMenuAnchorRef, () => closeColumnMenu(), '.akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu');
+  useDropdownOutsideClose(columnMenuIndex !== null, columnMenuAnchorRef, () => closeColumnMenu(), '.akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-status-group-edit-menu');
 
   const refresh = async () => {
     setLoading(true);
@@ -191,7 +193,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
     if (readonly || col.readonly || (col.type !== 'select' && col.type !== 'status')) return;
     const options = Array.isArray(col.config?.options) ? col.config.options : [];
     const nextOptions = options.filter((option: any) => option.id !== optionID);
-    const nextConfig = { ...(col.config || {}), options: nextOptions };
+    const nextConfig = {
+      ...(col.config || {}),
+      options: nextOptions,
+      groups: Array.isArray(col.config?.groups)
+        ? col.config.groups.map((group: any) => ({ ...group, option_ids: (group.option_ids || []).filter((id: string) => id !== optionID) }))
+        : col.config?.groups,
+    };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
     const affectedRows = rows.filter((row) => row.values?.[col.id] === optionID);
     await Promise.all(affectedRows.map((row) => databasesApi.updateRow(spaceSlug, dbId, row.uuid, { [col.id]: '' })));
@@ -209,9 +217,16 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
     setSchema(nextSchema);
   };
 
+  const updateColumnConfig = async (col: DatabaseColumn, patch: Record<string, any>) => {
+    if (readonly || col.readonly) return;
+    const nextConfig = { ...(col.config || {}), ...patch };
+    const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
+    setSchema(nextSchema);
+  };
+
   const closeColumnMenu = () => {
     setColumnMenuIndex(null);
-    setColumnMenuTypeOpen(false);
+    setColumnMenuSubmenu(null);
     columnMenuAnchorRef.current = null;
   };
 
@@ -219,7 +234,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
     if (readonly) return;
     columnMenuAnchorRef.current = anchor;
     setColumnMenuIndex(index);
-    setColumnMenuTypeOpen(false);
+    setColumnMenuSubmenu(null);
   };
 
   const handleColumnHeaderClick = (index: number, event: ReactMouseEvent<HTMLTableCellElement>) => {
@@ -247,7 +262,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   const createSourceColumn = async (name: string, type: DatabaseColumnType, config?: Record<string, any>) => {
     if (!schema || readonly) return;
     const title = name.trim() || defaultColumnName(type);
-    const nextConfig = type === 'date' ? { include_time: false, hour12: false, ...(config || {}) } : config;
+    const nextConfig = type === 'date' ? { date_format: 'chinese', time_format: 'none', timezone: 'GMT+8', date_content: 'date', include_time: false, hour12: false, ...(config || {}) } : config;
     const nextSchema = await databasesApi.addColumn(spaceSlug, dbId, { name: title, type, config: nextConfig });
     setSchema(nextSchema);
     const created = [...nextSchema.columns].reverse().find((column) => column.name === title && column.type === type) || nextSchema.columns[nextSchema.columns.length - 1];
@@ -555,7 +570,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
                 <th
                   key={c.id}
                   data-column-index={index}
-                  className={[columnDragState?.sourceIndex === index ? 'is-dragging' : '', columnAlignClass(c.rule)].filter(Boolean).join(' ') || undefined}
+                  className={columnDragState?.sourceIndex === index ? 'is-dragging' : undefined}
                   style={{ transform: columnDragTransform(index), transition: columnDragState?.sourceIndex === index ? 'none' : undefined }}
                   onPointerDown={showColumnControls ? (event) => beginColumnDrag(index, event) : undefined}
                   onClick={showColumnControls ? (event) => handleColumnHeaderClick(index, event) : undefined}
@@ -628,6 +643,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
                     onUpdateOption={(optionID, patch) => c.column ? updateColumnOption(c.column, optionID, patch) : Promise.resolve()}
                     onDeleteOption={(optionID) => c.column ? deleteColumnOption(c.column, optionID) : Promise.resolve()}
                     onUpdateOptionConfig={(patch) => c.column ? updateColumnOptionConfig(c.column, patch) : Promise.resolve()}
+                    onUpdateColumnConfig={(patch) => c.column ? updateColumnConfig(c.column, patch) : Promise.resolve()}
                     onEditProperty={(anchor) => openColumnMenu(index, anchor)}
                     cellProps={{
                       className: columnDragState?.sourceIndex === index ? 'is-dragging' : undefined,
@@ -655,13 +671,33 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
           <ColumnHeaderMenu
             column={columnMenuColumn}
             index={columnMenuIndex!}
-            typeOpen={columnMenuTypeOpen}
+            typeOpen={columnMenuSubmenu === 'type'}
+            propertyOpen={columnMenuSubmenu === 'property'}
+            align={columnMenuColumn.rule.align}
             style={columnMenuRect}
-            onOpenType={() => setColumnMenuTypeOpen(true)}
-            onCloseType={() => setColumnMenuTypeOpen(false)}
+            onOpenType={() => setColumnMenuSubmenu('type')}
+            onCloseType={() => setColumnMenuSubmenu((current) => current === 'type' ? null : current)}
+            onOpenProperty={() => setColumnMenuSubmenu('property')}
+            onCloseProperty={() => setColumnMenuSubmenu((current) => current === 'property' ? null : current)}
             onChangeType={(type) => changeColumnType(columnMenuIndex!, type)}
             onChangeIcon={(icon) => changeColumnIcon(columnMenuIndex!, icon)}
             onChangeName={(name) => changeColumnName(columnMenuIndex!, name)}
+            onCreateOption={(label) => {
+              if (!columnMenuColumn.column) return Promise.resolve(null);
+              return createColumnOption(columnMenuColumn.column, label);
+            }}
+            onUpdateOption={(optionID, patch) => {
+              if (columnMenuColumn.column) void updateColumnOption(columnMenuColumn.column, optionID, patch);
+            }}
+            onReorderOption={(sourceID, targetID) => {
+              if (columnMenuColumn.column) void reorderColumnOption(columnMenuColumn.column, sourceID, targetID);
+            }}
+            onDeleteOption={(optionID) => {
+              if (columnMenuColumn.column) void deleteColumnOption(columnMenuColumn.column, optionID);
+            }}
+            onUpdateConfig={(patch) => {
+              if (columnMenuColumn.column) void updateColumnConfig(columnMenuColumn.column, patch);
+            }}
             onFilter={() => closeColumnMenu()}
             onSort={() => closeColumnMenu()}
             onToggleReadonly={() => updateViewColumn(columnMenuIndex!, { readonly: !columnMenuColumn.rule.readonly })}
@@ -1009,32 +1045,50 @@ type RenderedColumn = {
 function ColumnHeaderMenu({
   column,
   typeOpen,
+  propertyOpen,
   style,
   onOpenType,
   onCloseType,
+  onOpenProperty,
+  onCloseProperty,
   onChangeType,
   onChangeIcon,
   onChangeName,
+  onCreateOption,
+  onUpdateOption,
+  onReorderOption,
+  onDeleteOption,
+  align,
+  onUpdateConfig,
+  onChangeAlign,
   onFilter,
   onSort,
   onToggleReadonly,
-  onChangeAlign,
   onHide,
   onDelete,
 }: {
   column: RenderedColumn;
   index: number;
   typeOpen: boolean;
+  propertyOpen: boolean;
   style: CSSProperties;
   onOpenType: () => void;
   onCloseType: () => void;
+  onOpenProperty: () => void;
+  onCloseProperty: () => void;
   onChangeType: (type: DatabaseColumnType) => void;
   onChangeIcon: (icon: string) => void;
   onChangeName: (name: string) => void;
+  onCreateOption: (label: string) => Promise<any | null>;
+  onUpdateOption: (optionID: string, patch: Record<string, any>) => void;
+  onReorderOption: (sourceID: string, targetID: string) => void;
+  onDeleteOption: (optionID: string) => void;
+  align: ViewColumnRule['align'];
+  onUpdateConfig: (patch: Record<string, any>) => void;
+  onChangeAlign: (align: ViewColumnRule['align']) => void;
   onFilter: () => void;
   onSort: () => void;
   onToggleReadonly: () => void;
-  onChangeAlign: (align: ViewColumnRule['align']) => void;
   onHide: () => void;
   onDelete: () => void;
 }) {
@@ -1042,8 +1096,10 @@ function ColumnHeaderMenu({
   const [iconOpen, setIconOpen] = useState(false);
   const iconButtonRef = useRef<HTMLButtonElement | null>(null);
   const typeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const propertyButtonRef = useRef<HTMLButtonElement | null>(null);
   const iconPickerRect = useDropdownPosition(iconOpen, iconButtonRef, 408);
   const typeMenuRect = useSubmenuPosition(typeOpen, typeButtonRef, 220, 340);
+  const propertyMenuRect = useSubmenuPosition(propertyOpen, propertyButtonRef, column.column?.type === 'number' ? 300 : 260, column.column?.type === 'number' ? 360 : 340);
   useDropdownOutsideClose(iconOpen, iconButtonRef, () => setIconOpen(false), '.akdb-column-icon-popover');
   useEffect(() => setName(column.name), [column.id, column.name]);
   const typeDisabled = !column.column || !!column.column.readonly;
@@ -1120,7 +1176,6 @@ function ColumnHeaderMenu({
             aria-label="更改列类型"
             style={typeMenuRect}
             onMouseEnter={onOpenType}
-            onMouseLeave={onCloseType}
             onPointerDown={(event) => event.stopPropagation()}
           >
             <div className="akdb-column-type-list">
@@ -1146,42 +1201,54 @@ function ColumnHeaderMenu({
           </div>
           , document.body,
         )}
-        <button type="button" className="akdb-column-menu-item" onMouseEnter={onCloseType} onFocus={onCloseType} onClick={onFilter}>
+        <button
+          ref={propertyButtonRef}
+          type="button"
+          className={`akdb-column-menu-item ${propertyOpen ? 'is-active' : ''}`}
+          disabled={typeDisabled}
+          onMouseEnter={onOpenProperty}
+          onFocus={onOpenProperty}
+          aria-haspopup="menu"
+          aria-expanded={propertyOpen}
+        >
+          <SlidersHorizontal size={16} />
+          <span>编辑属性</span>
+          <ChevronRight size={14} />
+        </button>
+        {propertyOpen && propertyMenuRect && column.column && createPortal(
+          <ColumnPropertySubmenu
+            column={column.column}
+            align={column.rule.align}
+            style={propertyMenuRect}
+            onMouseEnter={onOpenProperty}
+            onChangeAlign={onChangeAlign}
+            onCreateOption={onCreateOption}
+            onUpdateOption={onUpdateOption}
+            onReorderOption={onReorderOption}
+            onDeleteOption={onDeleteOption}
+            onUpdateConfig={onUpdateConfig}
+          />,
+          document.body,
+        )}
+        <button type="button" className="akdb-column-menu-item" onMouseEnter={() => { onCloseType(); onCloseProperty(); }} onFocus={() => { onCloseType(); onCloseProperty(); }} onClick={onFilter}>
           <Filter size={16} />
           <span>筛选</span>
         </button>
-        <button type="button" className="akdb-column-menu-item" onMouseEnter={onCloseType} onFocus={onCloseType} onClick={onSort}>
+        <button type="button" className="akdb-column-menu-item" onMouseEnter={() => { onCloseType(); onCloseProperty(); }} onFocus={() => { onCloseType(); onCloseProperty(); }} onClick={onSort}>
           <ArrowUpDown size={16} />
           <span>排序</span>
         </button>
-        <button type="button" className="akdb-column-menu-item" onMouseEnter={onCloseType} onFocus={onCloseType} onClick={onToggleReadonly}>
+        <button type="button" className="akdb-column-menu-item" onMouseEnter={() => { onCloseType(); onCloseProperty(); }} onFocus={() => { onCloseType(); onCloseProperty(); }} onClick={onToggleReadonly}>
           <Lock size={16} />
           <span>{column.rule.readonly ? '取消只读' : '只读'}</span>
         </button>
-        <div className="akdb-column-menu-align" onMouseEnter={onCloseType} onFocus={onCloseType}>
-          <button type="button" className={`akdb-column-menu-item ${column.rule.align === 'left' || !column.rule.align ? 'is-active' : ''}`} onClick={() => onChangeAlign('left')}>
-            <AlignLeft size={16} />
-            <span>左对齐</span>
-            {(column.rule.align === 'left' || !column.rule.align) && <Check size={16} />}
-          </button>
-          <button type="button" className={`akdb-column-menu-item ${column.rule.align === 'center' ? 'is-active' : ''}`} onClick={() => onChangeAlign('center')}>
-            <AlignCenter size={16} />
-            <span>居中</span>
-            {column.rule.align === 'center' && <Check size={16} />}
-          </button>
-          <button type="button" className={`akdb-column-menu-item ${column.rule.align === 'right' ? 'is-active' : ''}`} onClick={() => onChangeAlign('right')}>
-            <AlignRight size={16} />
-            <span>右对齐</span>
-            {column.rule.align === 'right' && <Check size={16} />}
-          </button>
-        </div>
-        <button type="button" className="akdb-column-menu-item" onMouseEnter={onCloseType} onFocus={onCloseType} onClick={onHide}>
+        <button type="button" className="akdb-column-menu-item" onMouseEnter={() => { onCloseType(); onCloseProperty(); }} onFocus={() => { onCloseType(); onCloseProperty(); }} onClick={onHide}>
           <EyeOff size={16} />
           <span>隐藏</span>
         </button>
       </div>
       <div className="akdb-column-menu-section">
-        <button type="button" className="akdb-column-menu-item is-danger" onMouseEnter={onCloseType} onFocus={onCloseType} onClick={onDelete}>
+        <button type="button" className="akdb-column-menu-item is-danger" onMouseEnter={() => { onCloseType(); onCloseProperty(); }} onFocus={() => { onCloseType(); onCloseProperty(); }} onClick={onDelete}>
           <Trash2 size={16} />
           <span>删除</span>
         </button>
@@ -1190,11 +1257,1334 @@ function ColumnHeaderMenu({
   );
 }
 
-function EditableCell({ value, column, align, readonly, onChange, onCreateOption, onReorderOption, onUpdateOption, onDeleteOption, onUpdateOptionConfig, onEditProperty, cellProps }: { value: string; column?: DatabaseColumn; align?: ViewColumnRule['align']; readonly?: boolean; onChange: (value: string) => void; onCreateOption?: (label: string) => Promise<any | null>; onReorderOption?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateOptionConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: (anchor: HTMLElement) => void; cellProps?: TdHTMLAttributes<HTMLTableCellElement> }) {
+function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOption, onUpdateOption, onReorderOption, onDeleteOption, onUpdateConfig, onChangeAlign }: { column: DatabaseColumn; align: ViewColumnRule['align']; style: CSSProperties; onMouseEnter: () => void; onCreateOption: (label: string) => Promise<any | null>; onUpdateOption: (optionID: string, patch: Record<string, any>) => void; onReorderOption: (sourceID: string, targetID: string) => void; onDeleteOption: (optionID: string) => void; onUpdateConfig: (patch: Record<string, any>) => void; onChangeAlign: (align: ViewColumnRule['align']) => void }) {
+  const config = column.config || {};
+  const options = Array.isArray(config.options) ? config.options : [];
+  const textMaxLength = Math.max(0, Number(config.max_length) || 0);
+  const textMaxLengthEnabled = textMaxLength > 0;
+  const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
+  const [editingStatusGroupID, setEditingStatusGroupID] = useState<string | null>(null);
+  const [textMaxLengthDraft, setTextMaxLengthDraft] = useState(textMaxLengthEnabled ? String(textMaxLength) : '');
+  const [propertyFlyout, setPropertyFlyout] = useState<'textDisplay' | 'align' | 'numberFormat' | 'numberColor' | 'precision' | 'dateDisplayFormat' | 'timeDisplayFormat' | 'timezone' | null>(null);
+  const [optionDragState, setOptionDragState] = useState<{
+    sourceID: string;
+    targetID: string;
+    sourceGroupID?: string;
+    targetGroupID?: string;
+    sourceIndex: number;
+    targetIndex: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    initialTop: number;
+    currentTop: number;
+    rowHeight: number;
+    step: number;
+    centers: number[];
+  } | null>(null);
+  const [statusGroupDragState, setStatusGroupDragState] = useState<{
+    sourceID: string;
+    targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    initialTop: number;
+    currentTop: number;
+    rowHeight: number;
+    step: number;
+    centers: number[];
+  } | null>(null);
+  const textDisplayButtonRef = useRef<HTMLButtonElement | null>(null);
+  const alignButtonRef = useRef<HTMLButtonElement | null>(null);
+  const numberFormatButtonRef = useRef<HTMLButtonElement | null>(null);
+  const numberColorButtonRef = useRef<HTMLButtonElement | null>(null);
+  const precisionButtonRef = useRef<HTMLButtonElement | null>(null);
+  const dateContentButtonRef = useRef<HTMLButtonElement | null>(null);
+  const dateFormatButtonRef = useRef<HTMLButtonElement | null>(null);
+  const timezoneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const optionEditAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const optionAddButtonRef = useRef<HTMLButtonElement | null>(null);
+  const statusGroupEditAnchorRef = useRef<HTMLElement | null>(null);
+  const optionListRef = useRef<HTMLDivElement | null>(null);
+  const optionDragStateRef = useRef<typeof optionDragState>(null);
+  const statusGroupDragStateRef = useRef<typeof statusGroupDragState>(null);
+  const suppressOptionClickRef = useRef(false);
+  const suppressStatusGroupClickRef = useRef(false);
+  const textDisplayOpen = propertyFlyout === 'textDisplay';
+  const alignOpen = propertyFlyout === 'align';
+  const numberFormatOpen = propertyFlyout === 'numberFormat';
+  const numberColorOpen = propertyFlyout === 'numberColor';
+  const precisionOpen = propertyFlyout === 'precision';
+  const dateContentOpen = propertyFlyout === 'dateDisplayFormat';
+  const dateFormatOpen = propertyFlyout === 'timeDisplayFormat';
+  const timezoneOpen = propertyFlyout === 'timezone';
+  const textDisplayRect = useSubmenuPosition(textDisplayOpen, textDisplayButtonRef, 220, 180);
+  const alignRect = useSubmenuPosition(alignOpen, alignButtonRef, 220, 180);
+  const numberFormatRect = useSubmenuPosition(numberFormatOpen, numberFormatButtonRef, 260, 520);
+  const numberColorRect = useSubmenuPosition(numberColorOpen, numberColorButtonRef, 180, 320);
+  const precisionRect = useSubmenuPosition(precisionOpen, precisionButtonRef, 220, 360);
+  const dateContentRect = useSubmenuPosition(dateContentOpen, dateContentButtonRef, 220, 220);
+  const dateFormatRect = useSubmenuPosition(dateFormatOpen, dateFormatButtonRef, 220, 180);
+  const timezoneRect = useSubmenuPosition(timezoneOpen, timezoneButtonRef, 220, 320);
+  const optionEditRect = useSubmenuPosition(!!editingOptionID, optionEditAnchorRef, 252, 430);
+  const statusGroupEditRect = useSubmenuPosition(!!editingStatusGroupID, statusGroupEditAnchorRef, 220, 180);
+  const editingOption = options.find((option: any) => option.id === editingOptionID);
+  const renderCheck = (active: boolean) => active ? <Check size={16} className="akdb-column-type-check" /> : null;
+  const statusGroups = Array.isArray(config.groups) && config.groups.length
+    ? config.groups
+    : [{ id: 'status-all', name: '状态', option_ids: options.map((option: any) => option.id) }];
+  const statusOptionByID = new Map(options.map((option: any) => [option.id, option]));
+  const statusFlatOptionIDs = statusGroups.flatMap((group: any) => group.option_ids || []);
+  const statusVisibleOptionIDs = statusFlatOptionIDs.filter((id: string) => statusOptionByID.has(id));
+  const firstStatusOptionID = statusVisibleOptionIDs[0] || options[0]?.id || '';
+  const defaultStatusOptionID = String(column.default || firstStatusOptionID || '');
+  const editingStatusGroup = statusGroups.find((group: any, index: number) => String(group.id || group.name || `status-group-${index}`) === editingStatusGroupID);
+  useEffect(() => {
+    setTextMaxLengthDraft(textMaxLengthEnabled ? String(textMaxLength) : '');
+  }, [textMaxLength, textMaxLengthEnabled]);
+  const commitTextMaxLength = () => {
+    if (!textMaxLengthEnabled) return;
+    const nextLength = Math.max(1, Number(textMaxLengthDraft) || 1);
+    setTextMaxLengthDraft(String(nextLength));
+    if (nextLength !== textMaxLength) onUpdateConfig({ max_length: nextLength });
+  };
+  const renderAlignControl = () => (
+    <>
+      <button
+        ref={alignButtonRef}
+        type="button"
+        className={`akdb-column-property-nav ${alignOpen ? 'is-active' : ''}`}
+        onMouseEnter={() => {
+          setEditingOptionID(null);
+          setPropertyFlyout('align');
+        }}
+        onFocus={() => {
+          setEditingOptionID(null);
+          setPropertyFlyout('align');
+        }}
+        aria-haspopup="menu"
+        aria-expanded={alignOpen}
+      >
+        <span>对齐方式</span>
+        <span>{alignLabel(align)}</span>
+        <ChevronRight size={15} />
+      </button>
+      {alignOpen && alignRect && createPortal(
+        <AlignSubmenu
+          value={align}
+          style={alignRect}
+          onMouseEnter={() => setPropertyFlyout('align')}
+          onMouseLeave={() => undefined}
+          onChange={onChangeAlign}
+        />,
+        document.body,
+      )}
+    </>
+  );
+  const createPropertyOption = async () => {
+    setPropertyFlyout(null);
+    setEditingStatusGroupID(null);
+    optionEditAnchorRef.current = optionAddButtonRef.current;
+    const option = await onCreateOption('新选项');
+    if (option?.id) setEditingOptionID(option.id);
+  };
+  const createStatusGroup = () => {
+    const existingIDs = new Set(statusGroups.map((group: any, index: number) => String(group.id || group.name || `status-group-${index}`)));
+    let id = 'status-group';
+    let index = statusGroups.length + 1;
+    while (existingIDs.has(id)) {
+      id = `status-group-${index}`;
+      index += 1;
+    }
+    onUpdateConfig({ groups: [...statusGroups, { id, name: '新分组', option_ids: [] }] });
+    setPropertyFlyout(null);
+    setEditingOptionID(null);
+  };
+  const createStatusGroupOption = (groupID: string) => {
+    const groupIndex = statusGroups.findIndex((group: any) => String(group.id || group.name) === groupID);
+    if (groupIndex < 0) return;
+    const id = slugOptionID('新状态') || 'status';
+    const existingIDs = new Set(options.map((option: any) => String(option.id || '')));
+    let nextID = id;
+    let index = 2;
+    while (existingIDs.has(nextID)) {
+      nextID = `${id}-${index}`;
+      index += 1;
+    }
+    const nextOption = { id: nextID, value: '新状态', color: 'gray', icon: 'none', shape: 'pill', color_mode: 'background' };
+    const nextGroups = statusGroups.map((group: any, index: number) => {
+      if (index !== groupIndex) return group;
+      const optionIDs = Array.isArray(group.option_ids) ? group.option_ids : [];
+      return { ...group, option_ids: [...optionIDs, nextID] };
+    });
+    onUpdateConfig({ options: [...options, nextOption], groups: nextGroups });
+    setPropertyFlyout(null);
+    setEditingStatusGroupID(null);
+    setEditingOptionID(nextID);
+  };
+  const updateStatusGroup = (groupID: string, patch: Record<string, any>) => {
+    const nextGroups = statusGroups.map((group: any, index: number) => {
+      const currentID = String(group.id || group.name || `status-group-${index}`);
+      return currentID === groupID ? { ...group, ...patch } : group;
+    });
+    onUpdateConfig({ groups: nextGroups });
+  };
+  const deleteStatusGroup = (groupID: string) => {
+    const deletingGroup = statusGroups.find((group: any, index: number) => String(group.id || group.name || `status-group-${index}`) === groupID);
+    const deletingIDs = new Set(deletingGroup?.option_ids || []);
+    const nextGroups = statusGroups.filter((group: any, index: number) => String(group.id || group.name || `status-group-${index}`) !== groupID);
+    const remainingIDs = new Set(nextGroups.flatMap((group: any) => group.option_ids || []));
+    onUpdateConfig({
+      groups: nextGroups,
+      options: options.filter((option: any) => !deletingIDs.has(option.id) || remainingIDs.has(option.id)),
+    });
+    setEditingStatusGroupID(null);
+  };
+  const reorderStatusGroup = (sourceID: string, targetID: string) => {
+    const sourceIndex = statusGroups.findIndex((group: any, index: number) => String(group.id || group.name || `status-group-${index}`) === sourceID);
+    const targetIndex = statusGroups.findIndex((group: any, index: number) => String(group.id || group.name || `status-group-${index}`) === targetID);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const nextGroups = [...statusGroups];
+    const [moved] = nextGroups.splice(sourceIndex, 1);
+    nextGroups.splice(targetIndex, 0, moved);
+    onUpdateConfig({ groups: nextGroups });
+  };
+  const beginStatusGroupDrag = (groupID: string, event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0 || statusGroups.length < 2) return;
+    const list = optionListRef.current;
+    const row = event.currentTarget.closest('[data-status-group-id]') as HTMLElement | null;
+    if (!list || !row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setEditingOptionID(null);
+    setEditingStatusGroupID(null);
+    setPropertyFlyout(null);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const listRect = list.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-status-group-id]'));
+    const sourceIndex = rows.findIndex((item) => item.dataset.statusGroupId === groupID);
+    if (sourceIndex < 0) return;
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const gap = rowRects.length > 1 ? Math.max(0, rowRects[1].top - rowRects[0].bottom) : 0;
+    const rowTop = rowRect.top - listRect.top;
+    const rowHeight = rowRect.height;
+    const baseState = {
+      sourceID: groupID,
+      targetID: groupID,
+      sourceIndex,
+      targetIndex: sourceIndex,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: Math.max(0, rowRects[0].top - listRect.top),
+      maxTop: Math.max(0, rowRects[rowRects.length - 1].bottom - listRect.top - rowHeight),
+      initialTop: rowTop,
+      currentTop: rowTop,
+      rowHeight,
+      step: rowHeight + gap,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    statusGroupDragStateRef.current = baseState;
+    setStatusGroupDragState(baseState);
+    const updateTarget = (clientY: number) => {
+      setStatusGroupDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.rowHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const targetID = rows[nextTargetIndex]?.dataset.statusGroupId || current.targetID;
+        const next = { ...current, currentTop, targetIndex: nextTargetIndex, targetID };
+        statusGroupDragStateRef.current = next;
+        return next;
+      });
+    };
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      updateTarget(moveEvent.clientY);
+      moveEvent.preventDefault();
+    };
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      const finalState = statusGroupDragStateRef.current;
+      flushSync(() => {
+        statusGroupDragStateRef.current = null;
+        setStatusGroupDragState(null);
+      });
+      suppressStatusGroupClickRef.current = true;
+      window.setTimeout(() => { suppressStatusGroupClickRef.current = false; }, 0);
+      if (finalState && finalState.sourceID !== finalState.targetID) reorderStatusGroup(finalState.sourceID, finalState.targetID);
+      try {
+        event.currentTarget.releasePointerCapture(upEvent.pointerId);
+      } catch {
+        // Pointer capture can already be released if the pointer ends outside the handle.
+      }
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+  };
+  const beginPropertyOptionDrag = (optionID: string, event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0 || options.length < 2) return;
+    const list = optionListRef.current;
+    const row = event.currentTarget.closest('[data-option-id]') as HTMLElement | null;
+    if (!list || !row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setEditingOptionID(null);
+    setPropertyFlyout(null);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const listRect = list.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-option-id]'));
+    const sourceIndex = rows.findIndex((item) => item.dataset.optionId === optionID);
+    if (sourceIndex < 0) return;
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const gap = rowRects.length > 1 ? Math.max(0, rowRects[1].top - rowRects[0].bottom) : 0;
+    const rowTop = rowRect.top - listRect.top;
+    const rowHeight = rowRect.height;
+    const baseState = {
+      sourceID: optionID,
+      targetID: optionID,
+      sourceGroupID: row.dataset.groupId,
+      targetGroupID: row.dataset.groupId,
+      sourceIndex,
+      targetIndex: sourceIndex,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: Math.max(0, rowRects[0].top - listRect.top),
+      maxTop: Math.max(0, rowRects[rowRects.length - 1].bottom - listRect.top - rowHeight),
+      initialTop: rowTop,
+      currentTop: rowTop,
+      rowHeight,
+      step: rowHeight + gap,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    optionDragStateRef.current = baseState;
+    setOptionDragState(baseState);
+    const updateTarget = (clientY: number) => {
+      setOptionDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.rowHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const targetRow = rows[nextTargetIndex];
+        const targetID = targetRow?.dataset.optionId || current.targetID;
+        const targetGroupID = targetRow?.dataset.groupId || current.targetGroupID;
+        const next = { ...current, currentTop, targetIndex: nextTargetIndex, targetID, targetGroupID };
+        optionDragStateRef.current = next;
+        return next;
+      });
+    };
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      updateTarget(moveEvent.clientY);
+      moveEvent.preventDefault();
+    };
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      const finalState = optionDragStateRef.current;
+      flushSync(() => {
+        optionDragStateRef.current = null;
+        setOptionDragState(null);
+      });
+      suppressOptionClickRef.current = true;
+      window.setTimeout(() => { suppressOptionClickRef.current = false; }, 0);
+      if (finalState && finalState.sourceID !== finalState.targetID) {
+        if (column.type === 'status') reorderStatusOption(finalState.sourceID, finalState.targetID, finalState.targetGroupID);
+        else onReorderOption(finalState.sourceID, finalState.targetID);
+      }
+      try {
+        event.currentTarget.releasePointerCapture(upEvent.pointerId);
+      } catch {
+        // Pointer capture can already be released if the pointer ends outside the handle.
+      }
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+  };
+  const reorderStatusOption = (sourceID: string, targetID: string, targetGroupID?: string) => {
+    const nextGroups = statusGroups.map((group: any) => ({ ...group, option_ids: (group.option_ids || []).filter((id: string) => id !== sourceID) }));
+    const groupIndex = nextGroups.findIndex((group: any) => String(group.id || group.name) === String(targetGroupID || ''));
+    if (groupIndex < 0) return;
+    const targetIDs = Array.isArray(nextGroups[groupIndex].option_ids) ? [...nextGroups[groupIndex].option_ids] : [];
+    const targetIndex = targetIDs.indexOf(targetID);
+    targetIDs.splice(targetIndex < 0 ? targetIDs.length : targetIndex, 0, sourceID);
+    nextGroups[groupIndex] = { ...nextGroups[groupIndex], option_ids: targetIDs };
+    onUpdateConfig({ groups: nextGroups });
+  };
+  return (
+    <div
+      className="akdb-column-property-submenu"
+      role="menu"
+      aria-label="编辑属性"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {column.type === 'text' && (
+          <>
+            <button
+              ref={textDisplayButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${textDisplayOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('textDisplay');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('textDisplay');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={textDisplayOpen}
+            >
+              <span>文本显示</span>
+              <span>{config.secret ? '密文' : '明文'}</span>
+              <ChevronRight size={15} />
+            </button>
+            {textDisplayOpen && textDisplayRect && createPortal(
+              <TextDisplaySubmenu
+                secret={!!config.secret}
+                style={textDisplayRect}
+                onMouseEnter={() => setPropertyFlyout('textDisplay')}
+                onMouseLeave={() => undefined}
+                onChange={(secret) => onUpdateConfig({ secret })}
+              />,
+              document.body,
+            )}
+          </>
+        )}
+
+        {column.type === 'number' && (
+          <>
+            <button
+              ref={numberFormatButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${numberFormatOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('numberFormat');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('numberFormat');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={numberFormatOpen}
+            >
+              <span>数字格式</span>
+              <span>{numberFormatLabel(config.format || 'number')}</span>
+              <ChevronRight size={15} />
+            </button>
+            {numberFormatOpen && numberFormatRect && createPortal(
+              <NumberFormatSubmenu
+                value={config.format || 'number'}
+                style={numberFormatRect}
+                onMouseEnter={() => setPropertyFlyout('numberFormat')}
+                onMouseLeave={() => undefined}
+                onChange={(format) => onUpdateConfig({ format })}
+              />,
+              document.body,
+            )}
+            <button
+              ref={precisionButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${precisionOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('precision');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('precision');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={precisionOpen}
+            >
+              <span>小数位数</span>
+              <span>{precisionLabel(config.precision)}</span>
+              <ChevronRight size={15} />
+            </button>
+            {precisionOpen && precisionRect && createPortal(
+              <PrecisionSubmenu
+                value={Number.isInteger(Number(config.precision)) ? Number(config.precision) : -1}
+                style={precisionRect}
+                onMouseEnter={() => setPropertyFlyout('precision')}
+                onMouseLeave={() => undefined}
+                onChange={(precision) => onUpdateConfig({ precision })}
+              />,
+              document.body,
+            )}
+            {renderAlignControl()}
+            <div className="akdb-column-property-divider" />
+            <div className="akdb-column-property-heading">显示为</div>
+            <div className="akdb-number-display-grid" role="group" aria-label="数字显示方式">
+              {[
+                { id: 'number', label: '数字', preview: '42' },
+                { id: 'bar', label: '条形', preview: '' },
+                { id: 'ring', label: '圆圈', preview: '' },
+              ].map((choice) => {
+                const active = (config.display_as || 'number') === choice.id;
+                return (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    className={`akdb-number-display-card ${active ? 'is-active' : ''}`}
+                    aria-pressed={active}
+                    onClick={() => onUpdateConfig({ display_as: choice.id })}
+                  >
+                    {choice.id === 'number' && <span className="akdb-number-display-value">42</span>}
+                    {choice.id === 'bar' && <span className="akdb-number-display-bar" />}
+                    {choice.id === 'ring' && <span className="akdb-number-display-ring" />}
+                    <span>{choice.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {(config.display_as === 'bar' || config.display_as === 'ring') && (
+              <div className="akdb-number-display-settings">
+                <div className="akdb-number-setting-row">
+                  <span>颜色</span>
+                  <button
+                    ref={numberColorButtonRef}
+                    type="button"
+                    className={`akdb-number-color-btn ${numberColorOpen ? 'is-active' : ''}`}
+                    aria-haspopup="menu"
+                    aria-expanded={numberColorOpen}
+                    onClick={() => {
+                      setEditingOptionID(null);
+                      setPropertyFlyout((current) => current === 'numberColor' ? null : 'numberColor');
+                    }}
+                  >
+                    <span
+                      className="akdb-number-color-swatch"
+                      style={{ backgroundColor: (optionColorMap[config.number_color || 'green'] || optionColorMap.green).bg, borderColor: (optionColorMap[config.number_color || 'green'] || optionColorMap.green).border }}
+                    />
+                    <span>{optionColorChoices.find((choice) => choice.id === (config.number_color || 'green'))?.label || '绿色'}</span>
+                    <ChevronDown size={15} />
+                  </button>
+                </div>
+                {numberColorOpen && numberColorRect && createPortal(
+                  <NumberColorSubmenu
+                    value={config.number_color || 'green'}
+                    style={numberColorRect}
+                    onMouseEnter={() => setPropertyFlyout('numberColor')}
+                    onMouseLeave={() => undefined}
+                    onChange={(color) => {
+                      onUpdateConfig({ number_color: color });
+                      setPropertyFlyout(null);
+                    }}
+                  />,
+                  document.body,
+                )}
+                <label className="akdb-number-setting-row">
+                  <span>除以</span>
+                  <input
+                    className="akdb-column-property-number akdb-column-property-length-input"
+                    type="number"
+                    min={1}
+                    value={Number(config.number_divide_by || 100)}
+                    aria-label="除以"
+                    onChange={(event) => onUpdateConfig({ number_divide_by: Math.max(1, Number(event.currentTarget.value) || 1) })}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="akdb-number-setting-row akdb-number-setting-switch"
+                  role="switch"
+                  aria-checked={config.number_show_value !== false}
+                  onClick={() => onUpdateConfig({ number_show_value: config.number_show_value === false })}
+                >
+                  <span>显示为数值</span>
+                  <span className={`akdb-column-property-switch ${config.number_show_value !== false ? 'is-active' : ''}`} aria-hidden="true">
+                    <span />
+                  </span>
+                </button>
+              </div>
+            )}
+            <div className="akdb-number-display-help">更改将应用于显示此属性的所有视图。</div>
+          </>
+        )}
+
+        {column.type === 'date' && (
+          <>
+            <button
+              ref={dateContentButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${dateContentOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setEditingStatusGroupID(null);
+                setPropertyFlyout('dateDisplayFormat');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setEditingStatusGroupID(null);
+                setPropertyFlyout('dateDisplayFormat');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={dateContentOpen}
+            >
+              <span>日期格式</span>
+              <span>{dateDisplayFormatLabel(dateDisplayFormat(config))}</span>
+              <ChevronRight size={15} />
+            </button>
+            {dateContentOpen && dateContentRect && createPortal(
+              <DateDisplayFormatSubmenu
+                value={dateDisplayFormat(config)}
+                style={dateContentRect}
+                onMouseEnter={() => setPropertyFlyout('dateDisplayFormat')}
+                onMouseLeave={() => undefined}
+                onChange={(dateFormat) => onUpdateConfig(dateFormatPatch(config, dateFormat))}
+              />,
+              document.body,
+            )}
+            <button
+              ref={dateFormatButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${dateFormatOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setEditingStatusGroupID(null);
+                setPropertyFlyout('timeDisplayFormat');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setEditingStatusGroupID(null);
+                setPropertyFlyout('timeDisplayFormat');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={dateFormatOpen}
+            >
+              <span>时间格式</span>
+              <span>{timeDisplayFormatLabel(timeDisplayFormat(config))}</span>
+              <ChevronRight size={15} />
+            </button>
+            {dateFormatOpen && dateFormatRect && createPortal(
+              <TimeDisplayFormatSubmenu
+                value={timeDisplayFormat(config)}
+                style={dateFormatRect}
+                onMouseEnter={() => setPropertyFlyout('timeDisplayFormat')}
+                onMouseLeave={() => undefined}
+                onChange={(timeFormat) => onUpdateConfig(timeFormatPatch(config, timeFormat))}
+              />,
+              document.body,
+            )}
+            <button
+              ref={timezoneButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${timezoneOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setEditingStatusGroupID(null);
+                setPropertyFlyout('timezone');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setEditingStatusGroupID(null);
+                setPropertyFlyout('timezone');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={timezoneOpen}
+            >
+              <span>时区</span>
+              <span>{timezoneLabel(config.timezone)}</span>
+              <ChevronRight size={15} />
+            </button>
+            {timezoneOpen && timezoneRect && createPortal(
+              <TimezoneSubmenu
+                value={String(config.timezone || 'GMT+8')}
+                style={timezoneRect}
+                onMouseEnter={() => setPropertyFlyout('timezone')}
+                onMouseLeave={() => undefined}
+                onChange={(timezone) => onUpdateConfig({ timezone })}
+              />,
+              document.body,
+            )}
+            {renderAlignControl()}
+          </>
+        )}
+
+        {(column.type === 'select' || column.type === 'multi_select') && (
+          <>
+            {renderAlignControl()}
+            <div className="akdb-column-property-options-head" onMouseEnter={() => setPropertyFlyout(null)}>
+              <span>选项</span>
+              <button ref={optionAddButtonRef} type="button" aria-label="添加选项" onClick={createPropertyOption}>
+                <Plus size={16} strokeWidth={1.8} />
+              </button>
+            </div>
+            <div ref={optionListRef} className="akdb-column-property-options" onMouseEnter={() => setPropertyFlyout(null)}>
+              {options.map((option: any, index: number) => {
+                const isDragging = optionDragState?.sourceID === option.id;
+                let translateY = 0;
+                if (optionDragState) {
+                  if (isDragging) translateY = optionDragState.currentTop - optionDragState.initialTop;
+                  else if (optionDragState.sourceIndex < optionDragState.targetIndex && index > optionDragState.sourceIndex && index <= optionDragState.targetIndex) translateY = -optionDragState.step;
+                  else if (optionDragState.targetIndex < optionDragState.sourceIndex && index >= optionDragState.targetIndex && index < optionDragState.sourceIndex) translateY = optionDragState.step;
+                }
+                return (
+                  <button
+                    key={option.id}
+                    ref={editingOptionID === option.id ? optionEditAnchorRef : undefined}
+                    data-option-id={option.id}
+                    type="button"
+                    className={`akdb-column-property-option ${editingOptionID === option.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
+                    style={{ transform: translateY ? `translateY(${translateY}px)` : undefined }}
+                    aria-haspopup="dialog"
+                    aria-expanded={editingOptionID === option.id}
+                    onClick={(event) => {
+                      if (suppressOptionClickRef.current) return;
+                      setPropertyFlyout(null);
+                      optionEditAnchorRef.current = event.currentTarget;
+                      setEditingOptionID((current) => current === option.id ? null : option.id);
+                    }}
+                  >
+                    <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
+                    <span className="akdb-column-property-option-tag"><OptionTag option={option} config={config} /></span>
+                    <ChevronRight size={15} />
+                  </button>
+                );
+              })}
+              {!options.length && <div className="akdb-column-property-empty">暂无选项</div>}
+            </div>
+            {editingOption && optionEditRect && createPortal(
+              <OptionEditMenu
+                option={editingOption}
+                config={config}
+                style={optionEditRect}
+                onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
+                onDelete={() => {
+                  onDeleteOption(editingOption.id);
+                  setEditingOptionID(null);
+                }}
+              />,
+              document.body,
+            )}
+          </>
+        )}
+
+        {column.type === 'status' && (
+          <>
+            {renderAlignControl()}
+            <div className="akdb-column-property-divider" />
+            <div ref={optionListRef} className="akdb-status-property-groups" onMouseEnter={() => setPropertyFlyout(null)}>
+              {statusGroups.map((group: any, groupIndex: number) => {
+                const groupID = String(group.id || group.name || `status-group-${groupIndex}`);
+                const groupOptions = (group.option_ids || []).map((id: string) => statusOptionByID.get(id)).filter(Boolean);
+                const isGroupDragging = statusGroupDragState?.sourceID === groupID;
+                let groupTranslateY = 0;
+                if (statusGroupDragState) {
+                  if (isGroupDragging) groupTranslateY = statusGroupDragState.currentTop - statusGroupDragState.initialTop;
+                  else if (statusGroupDragState.sourceIndex < statusGroupDragState.targetIndex && groupIndex > statusGroupDragState.sourceIndex && groupIndex <= statusGroupDragState.targetIndex) groupTranslateY = -statusGroupDragState.step;
+                  else if (statusGroupDragState.targetIndex < statusGroupDragState.sourceIndex && groupIndex >= statusGroupDragState.targetIndex && groupIndex < statusGroupDragState.sourceIndex) groupTranslateY = statusGroupDragState.step;
+                }
+                return (
+                  <div
+                    key={groupID}
+                    data-status-group-id={groupID}
+                    className={`akdb-status-property-group ${isGroupDragging ? 'is-dragging' : ''}`}
+                    style={{ transform: groupTranslateY ? `translateY(${groupTranslateY}px)` : undefined }}
+                  >
+                    <div
+                      ref={editingStatusGroupID === groupID ? statusGroupEditAnchorRef : undefined}
+                      role="button"
+                      tabIndex={0}
+                      className={`akdb-status-property-group-head ${editingStatusGroupID === groupID ? 'is-active' : ''}`}
+                      aria-haspopup="dialog"
+                      aria-expanded={editingStatusGroupID === groupID}
+                      onClick={(event) => {
+                        if (suppressStatusGroupClickRef.current) return;
+                        setPropertyFlyout(null);
+                        setEditingOptionID(null);
+                        statusGroupEditAnchorRef.current = event.currentTarget;
+                        setEditingStatusGroupID((current) => current === groupID ? null : groupID);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        setPropertyFlyout(null);
+                        setEditingOptionID(null);
+                        statusGroupEditAnchorRef.current = event.currentTarget;
+                        setEditingStatusGroupID((current) => current === groupID ? null : groupID);
+                      }}
+                    >
+                      <GripVertical size={16} className="akdb-status-property-group-handle" onPointerDown={(event) => beginStatusGroupDrag(groupID, event)} />
+                      <span>{group.name || '未命名分组'}</span>
+                      <button
+                        type="button"
+                        className="akdb-status-property-group-add"
+                        aria-label="添加状态"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          createStatusGroupOption(groupID);
+                        }}
+                      >
+                        <Plus size={16} strokeWidth={1.8} />
+                      </button>
+                      <ChevronRight size={15} />
+                    </div>
+                    <div className="akdb-status-property-options">
+                      {groupOptions.map((option: any) => {
+                        const index = statusVisibleOptionIDs.indexOf(option.id);
+                        const isDragging = optionDragState?.sourceID === option.id;
+                        let translateY = 0;
+                        if (optionDragState && index >= 0) {
+                          if (isDragging) translateY = optionDragState.currentTop - optionDragState.initialTop;
+                          else if (optionDragState.sourceIndex < optionDragState.targetIndex && index > optionDragState.sourceIndex && index <= optionDragState.targetIndex) translateY = -optionDragState.step;
+                          else if (optionDragState.targetIndex < optionDragState.sourceIndex && index >= optionDragState.targetIndex && index < optionDragState.sourceIndex) translateY = optionDragState.step;
+                        }
+                        const isDefault = option.id === defaultStatusOptionID;
+                        return (
+                          <button
+                            key={option.id}
+                            ref={editingOptionID === option.id ? optionEditAnchorRef : undefined}
+                            data-option-id={option.id}
+                            data-group-id={groupID}
+                            type="button"
+                            className={`akdb-column-property-option akdb-status-property-option ${editingOptionID === option.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
+                            style={{ transform: translateY ? `translateY(${translateY}px)` : undefined }}
+                            aria-haspopup="dialog"
+                            aria-expanded={editingOptionID === option.id}
+                            onClick={(event) => {
+                              if (suppressOptionClickRef.current) return;
+                              setPropertyFlyout(null);
+                              optionEditAnchorRef.current = event.currentTarget;
+                              setEditingOptionID((current) => current === option.id ? null : option.id);
+                            }}
+                          >
+                            <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
+                            <span className="akdb-column-property-option-tag"><StatusPropertyTag option={option} config={config} /></span>
+                            <span className="akdb-status-property-default">{isDefault ? '默认' : ''}</span>
+                            <ChevronRight size={15} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              <button type="button" className="akdb-status-property-add-group" onClick={createStatusGroup}>
+                <Plus size={16} strokeWidth={1.8} />
+                <span>添加分组</span>
+              </button>
+            </div>
+            {editingStatusGroup && statusGroupEditRect && createPortal(
+              <StatusGroupEditMenu
+                group={editingStatusGroup}
+                style={statusGroupEditRect}
+                onRename={(name) => updateStatusGroup(editingStatusGroupID!, { name })}
+                onDelete={() => deleteStatusGroup(editingStatusGroupID!)}
+              />,
+              document.body,
+            )}
+            {editingOption && optionEditRect && createPortal(
+              <OptionEditMenu
+                option={editingOption}
+                config={config}
+                style={optionEditRect}
+                onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
+                onDelete={() => {
+                  onDeleteOption(editingOption.id);
+                  setEditingOptionID(null);
+                }}
+              />,
+              document.body,
+            )}
+          </>
+        )}
+
+        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && renderAlignControl()}
+
+        {column.type === 'text' && (
+          <div className="akdb-column-property-limit">
+            <div className="akdb-column-property-heading">长度限制</div>
+            <button
+              type="button"
+              className="akdb-column-property-switch-row"
+              role="switch"
+              aria-checked={textMaxLengthEnabled}
+              onClick={() => onUpdateConfig({ max_length: textMaxLengthEnabled ? 0 : Math.max(1, Number(textMaxLengthDraft) || 100) })}
+            >
+              <span>启用限制</span>
+              <span className={`akdb-column-property-switch ${textMaxLengthEnabled ? 'is-active' : ''}`} aria-hidden="true">
+                <span />
+              </span>
+            </button>
+            <label className={`akdb-column-property-input-row ${textMaxLengthEnabled ? '' : 'is-disabled'}`}>
+              <span>最大长度</span>
+              <input
+                className="akdb-column-property-number akdb-column-property-length-input"
+                type="number"
+                min={1}
+                disabled={!textMaxLengthEnabled}
+                value={textMaxLengthDraft}
+                placeholder="无限制"
+                aria-label="最大长度"
+                onChange={(event) => setTextMaxLengthDraft(event.currentTarget.value)}
+                onBlur={commitTextMaxLength}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
+                }}
+              />
+            </label>
+          </div>
+        )}
+
+        {column.type === 'formula' && (
+          <div className="akdb-column-property-empty">公式属性请在源数据页编辑。</div>
+        )}
+
+        {column.type === 'relation' && (
+          <div className="akdb-column-property-empty">关联属性请在源数据页编辑。</div>
+        )}
+
+        {(column.type === 'checkbox' || column.type === 'url') && (
+          <div className="akdb-column-property-empty">暂无可编辑属性</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const numberFormatChoices = [
+  { id: 'number', label: '数字' },
+  { id: 'number_with_commas', label: '带分隔符的数字' },
+  { id: 'percent', label: '百分比' },
+  { id: 'usd', label: '美元 (USD)' },
+  { id: 'aud', label: '澳元 (AUD)' },
+  { id: 'cad', label: '加元 (CAD)' },
+  { id: 'sgd', label: '新加坡元 (SGD)' },
+  { id: 'eur', label: '欧元 (EUR)' },
+  { id: 'gbp', label: '英镑 (GBP)' },
+  { id: 'jpy', label: '日元 (JPY)' },
+  { id: 'cny', label: '人民币 (CNY)' },
+  { id: 'hkd', label: '港元 (HKD)' },
+];
+
+function numberFormatLabel(value: string) {
+  return numberFormatChoices.find((choice) => choice.id === value)?.label || '数字';
+}
+
+function precisionLabel(value: unknown) {
+  const precision = Number(value);
+  if (!Number.isInteger(precision) || precision < 0) return '默认';
+  return String(precision);
+}
+
+type DateContentMode = 'date' | 'time' | 'datetime';
+type DateDisplayFormat = 'none' | 'slash' | 'chinese' | 'dash';
+type TimeDisplayFormat = 'none' | 'h12_colon_seconds' | 'h12_dash_seconds' | 'h24_colon_seconds' | 'h24_dash_seconds';
+
+function dateContentMode(config: Record<string, any>): DateContentMode {
+  const hasDate = dateDisplayFormat(config) !== 'none';
+  const hasTime = timeDisplayFormat(config) !== 'none';
+  if (hasDate && hasTime) return 'datetime';
+  if (hasTime) return 'time';
+  if (hasDate) return 'date';
+  if (config.date_content === 'time') return 'time';
+  if (config.date_content === 'datetime') return 'datetime';
+  return config.include_time ? 'datetime' : 'date';
+}
+
+function dateDisplayFormat(config: Record<string, any>): DateDisplayFormat {
+  const value = config.date_format;
+  if (value === 'none' || value === 'slash' || value === 'chinese' || value === 'dash') return value;
+  if (config.date_content === 'time') return 'none';
+  return 'chinese';
+}
+
+function timeDisplayFormat(config: Record<string, any>): TimeDisplayFormat {
+  const value = config.time_format;
+  if (value === 'none' || value === 'h12_colon_seconds' || value === 'h12_dash_seconds' || value === 'h24_colon_seconds' || value === 'h24_dash_seconds') return value;
+  if (config.date_content === 'time' || config.date_content === 'datetime' || config.include_time) {
+    return config.hour12 ? 'h12_colon_seconds' : 'h24_colon_seconds';
+  }
+  return 'none';
+}
+
+function dateDisplayFormatLabel(value: DateDisplayFormat) {
+  if (value === 'none') return '无';
+  if (value === 'slash') return '年/月/日';
+  if (value === 'dash') return '年-月-日';
+  return '年月日';
+}
+
+function timeDisplayFormatLabel(value: TimeDisplayFormat) {
+  if (value === 'none') return '无';
+  if (value === 'h12_colon_seconds') return '上午 12:00:00';
+  if (value === 'h12_dash_seconds') return '上午 12-00-00';
+  if (value === 'h24_dash_seconds') return '24-00-00';
+  return '24:00:00';
+}
+
+function timezoneLabel(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : 'GMT+8';
+}
+
+function dateFormatPatch(config: Record<string, any>, dateFormat: DateDisplayFormat) {
+  const nextTimeFormat = timeDisplayFormat(config);
+  return {
+    date_format: dateFormat,
+    date_content: dateContentModeFromFormats(dateFormat, nextTimeFormat),
+    include_time: nextTimeFormat !== 'none',
+  };
+}
+
+function timeFormatPatch(config: Record<string, any>, timeFormat: TimeDisplayFormat) {
+  const nextDateFormat = dateDisplayFormat(config);
+  return {
+    time_format: timeFormat,
+    hour12: timeFormat.startsWith('h12'),
+    include_time: timeFormat !== 'none',
+    date_content: dateContentModeFromFormats(nextDateFormat, timeFormat),
+  };
+}
+
+function dateContentModeFromFormats(dateFormat: DateDisplayFormat, timeFormat: TimeDisplayFormat): DateContentMode {
+  if (dateFormat !== 'none' && timeFormat !== 'none') return 'datetime';
+  if (timeFormat !== 'none') return 'time';
+  return 'date';
+}
+
+function alignLabel(value: ViewColumnRule['align']) {
+  if (value === 'center') return '中';
+  if (value === 'right') return '右';
+  return '左';
+}
+
+function TextDisplaySubmenu({ secret, style, onMouseEnter, onMouseLeave, onChange }: { secret: boolean; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (secret: boolean) => void }) {
+  const choices = [
+    { id: 'plain', label: '明文', secret: false },
+    { id: 'secret', label: '密文', secret: true },
+  ];
+  return (
+    <div
+      className="akdb-column-number-submenu"
+      role="menu"
+      aria-label="文本显示方式"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((choice) => {
+          const active = secret === choice.secret;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-column-property-choice-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.secret)}
+            >
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AlignSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { value: ViewColumnRule['align']; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (align: ViewColumnRule['align']) => void }) {
+  const choices = [
+    { id: 'left', label: '左', icon: <AlignLeft size={15} /> },
+    { id: 'center', label: '中', icon: <AlignCenter size={15} /> },
+    { id: 'right', label: '右', icon: <AlignRight size={15} /> },
+  ] as const;
+  return (
+    <div
+      className="akdb-column-number-submenu"
+      role="menu"
+      aria-label="对齐方式"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((choice) => {
+          const active = choice.id === 'left' ? value === 'left' || !value : value === choice.id;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-column-property-choice-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              <span>{choice.icon}</span>
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DateDisplayFormatSubmenu({ value, style, className, onMouseEnter, onMouseLeave, onChange }: { value: DateDisplayFormat; style: CSSProperties; className?: string; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (dateFormat: DateDisplayFormat) => void }) {
+  const choices: Array<{ id: DateDisplayFormat; label: string }> = [
+    { id: 'none', label: '无' },
+    { id: 'slash', label: '年/月/日' },
+    { id: 'chinese', label: '年月日' },
+    { id: 'dash', label: '年-月-日' },
+  ];
+  return (
+    <div
+      className={`akdb-column-number-submenu ${className || ''}`}
+      role="menu"
+      aria-label="日期格式"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((choice) => {
+          const active = value === choice.id;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-column-property-choice-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TimeDisplayFormatSubmenu({ value, style, className, onMouseEnter, onMouseLeave, onChange }: { value: TimeDisplayFormat; style: CSSProperties; className?: string; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (timeFormat: TimeDisplayFormat) => void }) {
+  const choices: Array<{ id: TimeDisplayFormat; label: string }> = [
+    { id: 'none', label: '无' },
+    { id: 'h12_colon_seconds', label: '上午 12:00:00' },
+    { id: 'h12_dash_seconds', label: '上午 12-00-00' },
+    { id: 'h24_colon_seconds', label: '24:00:00' },
+    { id: 'h24_dash_seconds', label: '24-00-00' },
+  ];
+  return (
+    <div
+      className={`akdb-column-number-submenu ${className || ''}`}
+      role="menu"
+      aria-label="时间格式"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((choice) => {
+          const active = value === choice.id;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-column-property-choice-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TimezoneSubmenu({ value, style, className, onMouseEnter, onMouseLeave, onChange }: { value: string; style: CSSProperties; className?: string; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (timezone: string) => void }) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const choices = [
+    'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+    'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12', 'GMT+13', 'GMT+14',
+  ];
+  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const list = listRef.current;
+    if (list) list.scrollTop += event.deltaY;
+  };
+  return (
+    <div
+      className={`akdb-column-number-submenu ${className || ''}`}
+      role="menu"
+      aria-label="时区"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onWheel={handleWheel}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div ref={listRef} className="akdb-timezone-list" onWheel={handleWheel}>
+        {choices.map((choice) => {
+          const active = value === choice;
+          return (
+            <button
+              key={choice}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-timezone-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice)}
+            >
+              <span>{choice}</span>
+              {active && <Check size={16} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function NumberFormatSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { value: string; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (format: string) => void }) {
+  const [query, setQuery] = useState('');
+  const normalized = query.trim().toLowerCase();
+  const options = normalized
+    ? numberFormatChoices.filter((choice) => choice.label.toLowerCase().includes(normalized) || choice.id.includes(normalized))
+    : numberFormatChoices;
+  return (
+    <div
+      className="akdb-column-number-submenu is-format"
+      role="menu"
+      aria-label="数字格式"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-number-format-search">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          placeholder="筛选格式..."
+          aria-label="筛选格式"
+          autoFocus
+        />
+      </div>
+      <div className="akdb-column-property-list">
+        {options.map((choice) => {
+          const active = (value || 'number') === choice.id;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-number-format-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function NumberColorSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { value: string; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (color: string) => void }) {
+  return (
+    <div
+      className="akdb-column-number-submenu"
+      role="menu"
+      aria-label="数字显示颜色"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {optionColorChoices.map((choice) => {
+          const active = (value || 'green') === choice.id;
+          const color = optionColorMap[choice.id] || optionColorMap.gray;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-number-format-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              <span className="akdb-number-color-swatch" style={{ backgroundColor: color.bg, borderColor: color.border }} />
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PrecisionSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { value: number; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (precision: number) => void }) {
+  const choices = [-1, 0, 1, 2, 3, 4, 5];
+  return (
+    <div
+      className="akdb-column-number-submenu"
+      role="menu"
+      aria-label="小数位数"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((precision) => {
+          const active = value === precision;
+          return (
+            <button
+              key={precision}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-number-format-item ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(precision)}
+            >
+              <span>{precisionLabel(precision)}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EditableCell({ value, column, align, readonly, onChange, onCreateOption, onReorderOption, onUpdateOption, onDeleteOption, onUpdateOptionConfig, onUpdateColumnConfig, onEditProperty, cellProps }: { value: string; column?: DatabaseColumn; align?: ViewColumnRule['align']; readonly?: boolean; onChange: (value: string) => void; onCreateOption?: (label: string) => Promise<any | null>; onReorderOption?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateOptionConfig?: (patch: Record<string, any>) => Promise<void>; onUpdateColumnConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: (anchor: HTMLElement) => void; cellProps?: TdHTMLAttributes<HTMLTableCellElement> }) {
   const [local, setLocal] = useState(value);
+  const [editing, setEditing] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [focusRect, setFocusRect] = useState<CSSProperties | null>(null);
   const cellRef = useRef<HTMLTableCellElement | null>(null);
+  const dateButtonRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const datePickerRect = useDropdownPosition(datePickerOpen, dateButtonRef, 280, 'below', -8);
   useEffect(() => setLocal(value), [value]);
+  useEffect(() => {
+    if (editing && column?.type === 'number') inputRef.current?.focus();
+  }, [editing, column?.type]);
+  useDropdownOutsideClose(datePickerOpen, dateButtonRef, () => { setDatePickerOpen(false); setFocusRect(null); }, '.akdb-date-picker, .akdb-column-number-submenu');
   const updateFocusRect = () => {
     const rect = cellRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -1284,33 +2674,62 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
     );
   }
   if (column.type === 'date') {
-    const includeTime = !!column.config?.include_time;
+    const display = formatDateValue(local, column);
     return (
-      <td {...tdProps('akdb-editable-cell')} ref={cellRef}>
-        <input
-          value={dateInputValue(local, column)}
-          type={includeTime ? 'datetime-local' : 'date'}
-          onFocus={updateFocusRect}
-          onBlur={() => setFocusRect(null)}
-          onChange={(e) => {
-            const next = timestampFromDateInput(e.currentTarget.value, includeTime);
-            setLocal(next);
-            onChange(next);
+      <td {...tdProps('akdb-editable-cell akdb-date-cell')} ref={cellRef}>
+        <button
+          ref={dateButtonRef}
+          type="button"
+          className={`akdb-date-cell-btn ${datePickerOpen ? 'is-active' : ''}`}
+          onClick={() => {
+            updateFocusRect();
+            setDatePickerOpen((next) => !next);
           }}
-        />
+          aria-haspopup="dialog"
+          aria-expanded={datePickerOpen}
+        >
+          {display || <span className="akdb-date-cell-empty" />}
+        </button>
         {focusOverlay}
+        {datePickerOpen && datePickerRect && createPortal(
+          <DateTimePicker
+            value={local}
+            column={column}
+            style={datePickerRect}
+            onChange={(next) => {
+              setLocal(next);
+              onChange(next);
+            }}
+            onUpdateConfig={(patch) => void onUpdateColumnConfig?.(patch)}
+            onClose={() => {
+              setDatePickerOpen(false);
+              setFocusRect(null);
+            }}
+          />,
+          document.body,
+        )}
       </td>
     );
   }
   const maxLength = column.type === 'text' && Number(column.config?.max_length) > 0 ? Number(column.config?.max_length) : undefined;
   const inputType = column.type === 'text' && column.config?.secret ? 'password' : 'text';
   const numberInputProps = column.type === 'number' ? getNumberInputProps(column) : {};
+  const inputValue = column.type === 'number' && !editing ? formatNumberValue(local, column) : local;
+  if (column.type === 'number' && !editing && (column.config?.display_as === 'bar' || column.config?.display_as === 'ring')) {
+    return (
+      <td {...tdProps('akdb-number-visual-cell')} ref={cellRef}>
+        <button type="button" className="akdb-number-visual-btn" onClick={() => setEditing(true)}>
+          <NumberVisualValue value={local} column={column} />
+        </button>
+      </td>
+    );
+  }
   const commitValue = () => {
     const next = column.type === 'number' ? normalizeNumberValue(local, column) : local;
     if (next !== local) setLocal(next);
     if (next !== value) onChange(next);
   };
-  return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input value={local} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={updateFocusRect} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); }} />{focusOverlay}</td>;
+  return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input ref={inputRef} value={inputValue} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={() => { setEditing(true); updateFocusRect(); }} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setEditing(false); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); }} />{focusOverlay}</td>;
 }
 
 function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onUpdateConfig, onEditProperty }: { value: string; options: any[]; config: Record<string, any>; isStatus?: boolean; anchorRef?: RefObject<HTMLElement>; onChange: (value: string) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: () => void }) {
@@ -1543,7 +2962,7 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
             >
               <Plus size={18} />
               <span>创建</span>
-              <OptionTag option={{ value: query.trim(), color: nextOptionColor(options) }} config={config} />
+              <OptionTag option={{ value: query.trim(), color: 'gray' }} config={config} />
             </button>
           )}
           {isStatus && (
@@ -1566,7 +2985,6 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
               config={config}
               style={editMenuRect}
               onUpdate={(patch) => onUpdateOption?.(editingOption.id, patch)}
-              onUpdateConfig={onUpdateConfig}
               onDelete={async () => {
                 await onDeleteOption?.(editingOption.id);
                 setEditingOptionID(null);
@@ -1818,7 +3236,7 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
             >
               <Plus size={18} />
               <span>创建</span>
-              <OptionTag option={{ value: query.trim(), color: nextOptionColor(options) }} config={config} />
+              <OptionTag option={{ value: query.trim(), color: 'gray' }} config={config} />
             </button>
           )}
           {editingOption && editMenuRect && createPortal(
@@ -1827,7 +3245,6 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
               config={config}
               style={editMenuRect}
               onUpdate={(patch) => onUpdateOption?.(editingOption.id, patch)}
-              onUpdateConfig={onUpdateConfig}
               onDelete={async () => {
                 await onDeleteOption?.(editingOption.id);
                 setEditingOptionID(null);
@@ -1842,7 +3259,7 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
   );
 }
 
-function OptionEditMenu({ option, config, style, onUpdate, onUpdateConfig, onDelete }: { option: any; config: Record<string, any>; style: CSSProperties; onUpdate?: (patch: Record<string, any>) => void | Promise<void>; onUpdateConfig?: (patch: Record<string, any>) => void | Promise<void>; onDelete?: () => void | Promise<void> }) {
+function OptionEditMenu({ option, config, style, onUpdate, onDelete }: { option: any; config: Record<string, any>; style: CSSProperties; onUpdate?: (patch: Record<string, any>) => void | Promise<void>; onDelete?: () => void | Promise<void> }) {
   const [name, setName] = useState(String(option.value || option.id || ''));
   const [colorOpen, setColorOpen] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
@@ -1852,14 +3269,11 @@ function OptionEditMenu({ option, config, style, onUpdate, onUpdateConfig, onDel
   useEffect(() => setColorOpen(false), [option.id]);
   useEffect(() => setIconOpen(false), [option.id]);
   useDropdownOutsideClose(iconOpen, iconButtonRef, () => setIconOpen(false), '.akdb-column-icon-popover');
-  const currentShape = config.option_shape || 'pill';
+  const currentShape = option.shape || config.option_shape || 'pill';
   const currentColor = option.color || 'gray';
   const currentColorMode = option.color_mode || config.color_mode || 'background';
   const currentColorTokens = optionColorMap[currentColor] || optionColorMap.gray;
-  const colorDisabled = currentShape === 'plain';
-  useEffect(() => {
-    if (colorDisabled) setColorOpen(false);
-  }, [colorDisabled]);
+  const colorModeDisabled = currentShape === 'plain';
   const commitName = () => {
     const next = name.trim();
     if (next && next !== option.value) void onUpdate?.({ value: next });
@@ -1913,7 +3327,7 @@ function OptionEditMenu({ option, config, style, onUpdate, onUpdateConfig, onDel
           {optionShapeChoices.map((choice) => {
             const active = currentShape === choice.id;
             return (
-              <button key={choice.id} type="button" className={`akdb-option-preview-btn ${active ? 'is-active' : ''}`} onClick={() => void onUpdateConfig?.({ option_shape: choice.id })}>
+              <button key={choice.id} type="button" className={`akdb-option-preview-btn ${active ? 'is-active' : ''}`} onClick={() => void onUpdate?.({ shape: choice.id })}>
                 {active && choice.id !== 'plain' ? (
                   <OptionTag option={{ ...option, value: choice.label, color: currentColor, color_mode: currentColorMode }} config={{ ...config, option_shape: choice.id }} />
                 ) : (
@@ -1934,15 +3348,12 @@ function OptionEditMenu({ option, config, style, onUpdate, onUpdateConfig, onDel
               className="akdb-option-color-picker"
               aria-haspopup="listbox"
               aria-expanded={colorOpen}
-              disabled={colorDisabled}
-              onClick={() => {
-                if (!colorDisabled) setColorOpen((next) => !next);
-              }}
+              onClick={() => setColorOpen((next) => !next)}
             >
               <span className="akdb-option-color-square" aria-hidden="true" style={{ '--akdb-option-dot-bg': currentColorTokens.bg, '--akdb-option-dot-fg': currentColorTokens.fg, '--akdb-option-dot-border': currentColorTokens.border } as CSSProperties} />
             </button>
           </div>
-          {colorOpen && !colorDisabled && (
+          {colorOpen && (
             <div className="akdb-option-color-palette" role="listbox" aria-label="选项颜色">
               {optionColorChoices.map((choice) => {
                 const active = currentColor === choice.id;
@@ -1972,7 +3383,7 @@ function OptionEditMenu({ option, config, style, onUpdate, onUpdateConfig, onDel
               key={choice.id}
               type="button"
               className={`akdb-option-preview-btn ${currentColorMode === choice.id ? 'is-active' : ''}`}
-              disabled={colorDisabled}
+              disabled={colorModeDisabled}
               onClick={() => void onUpdate?.({ color_mode: choice.id })}
             >
               {currentColorMode === choice.id && currentShape !== 'plain' ? (
@@ -1994,7 +3405,219 @@ function OptionEditMenu({ option, config, style, onUpdate, onUpdateConfig, onDel
   );
 }
 
-function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below') {
+function DateTimePicker({ value, column, style, onChange, onUpdateConfig, onClose }: { value: string; column: DatabaseColumn; style: CSSProperties; onChange: (value: string) => void; onUpdateConfig?: (patch: Record<string, any>) => void; onClose: () => void }) {
+  const config = column.config || {};
+  const mode = dateContentMode(config);
+  const currentDateFormat = dateDisplayFormat(config);
+  const currentTimeFormat = timeDisplayFormat(config);
+  const [settingsFlyout, setSettingsFlyout] = useState<'dateFormat' | 'timeFormat' | 'timezone' | null>(null);
+  const dateFormatButtonRef = useRef<HTMLButtonElement | null>(null);
+  const timeFormatButtonRef = useRef<HTMLButtonElement | null>(null);
+  const timezoneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const dateFormatOpen = settingsFlyout === 'dateFormat';
+  const timeFormatOpen = settingsFlyout === 'timeFormat';
+  const timezoneOpen = settingsFlyout === 'timezone';
+  const dateFormatRect = useSubmenuPosition(dateFormatOpen, dateFormatButtonRef, 220, 180);
+  const timeFormatRect = useSubmenuPosition(timeFormatOpen, timeFormatButtonRef, 240, 220);
+  const timezoneRect = useSubmenuPosition(timezoneOpen, timezoneButtonRef, 220, 360);
+  const dateFormatMenuRect = dateFormatRect ? datePickerSubmenuRect(style, dateFormatRect, 220) : null;
+  const timeFormatMenuRect = timeFormatRect ? datePickerSubmenuRect(style, timeFormatRect, 240) : null;
+  const timezoneMenuRect = timezoneRect ? datePickerSubmenuRect(style, timezoneRect, 220, 360) : null;
+  const parsed = parseDateValue(value);
+  const baseDate = parsed || new Date();
+  const [viewMonth, setViewMonth] = useState(() => new Date(baseDate.getFullYear(), baseDate.getMonth(), 1));
+  const [dateDraft, setDateDraft] = useState(() => formatDateInputDate(baseDate));
+  const [timeDraft, setTimeDraft] = useState(() => formatDateInputTime(baseDate));
+  useEffect(() => {
+    const nextDate = parseDateValue(value) || new Date();
+    setDateDraft(formatDateInputDate(nextDate));
+    setTimeDraft(formatDateInputTime(nextDate));
+    setViewMonth(new Date(nextDate.getFullYear(), nextDate.getMonth(), 1));
+  }, [value]);
+
+  const commit = (nextDateDraft = dateDraft, nextTimeDraft = timeDraft, nextMode = mode) => {
+    const next = timestampFromDateTimeParts(nextDateDraft, nextTimeDraft, nextMode);
+    onChange(next);
+  };
+  const changeDate = (nextDate: string) => {
+    setDateDraft(nextDate);
+    if (normalizeDateDraft(nextDate)) commit(nextDate, timeDraft, mode);
+  };
+  const changeTime = (nextTime: string) => {
+    setTimeDraft(nextTime);
+    if (normalizeTimeDraft(nextTime)) commit(dateDraft, nextTime, mode);
+  };
+  const updateDateFormat = (nextDateFormat: DateDisplayFormat) => {
+    onUpdateConfig?.(dateFormatPatch(config, nextDateFormat));
+    commit(dateDraft, timeDraft, dateContentModeFromFormats(nextDateFormat, currentTimeFormat));
+  };
+  const updateTimeFormat = (nextTimeFormat: TimeDisplayFormat) => {
+    onUpdateConfig?.(timeFormatPatch(config, nextTimeFormat));
+    commit(dateDraft, timeDraft, dateContentModeFromFormats(currentDateFormat, nextTimeFormat));
+  };
+  const days = calendarDaysForMonth(viewMonth);
+  const today = new Date();
+  const selected = parseDateValue(timestampFromDateTimeParts(dateDraft, timeDraft, mode));
+  const showDate = currentDateFormat !== 'none';
+  const showTime = currentTimeFormat !== 'none';
+
+  return (
+    <div className="akdb-date-picker" role="dialog" aria-label="日期时间" style={style} onPointerDown={(event) => event.stopPropagation()}>
+      <div className={`akdb-date-picker-inputs ${showDate && showTime ? '' : 'is-single'}`}>
+        {showDate && (
+          <input
+            className="akdb-date-picker-input"
+            value={dateDraft}
+            aria-label="日期"
+            onChange={(event) => changeDate(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') onClose();
+            }}
+          />
+        )}
+        {showTime && (
+          <input
+            className="akdb-date-picker-input"
+            value={timeDraft}
+            aria-label="时间"
+            onChange={(event) => changeTime(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') onClose();
+            }}
+          />
+        )}
+      </div>
+      {showDate && (
+        <div className="akdb-date-calendar">
+          <div className="akdb-date-calendar-head">
+            <strong>{viewMonth.getFullYear()}年{viewMonth.getMonth() + 1}月</strong>
+            <button type="button" onClick={() => {
+              const now = new Date();
+              setViewMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+              changeDate(formatDateInputDate(now));
+            }}>现在</button>
+            <button type="button" aria-label="上个月" onClick={() => setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}><ChevronLeft size={18} /></button>
+            <button type="button" aria-label="下个月" onClick={() => setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}><ChevronRight size={18} /></button>
+          </div>
+          <div className="akdb-date-calendar-grid is-weekdays">
+            {['一', '二', '三', '四', '五', '六', '日'].map((day) => <span key={day}>{day}</span>)}
+          </div>
+          <div className="akdb-date-calendar-grid">
+            {days.map((day) => {
+              const active = selected ? isSameDate(day.date, selected) : false;
+              const currentMonth = day.date.getMonth() === viewMonth.getMonth();
+              return (
+                <button
+                  key={day.key}
+                  type="button"
+                  className={[!currentMonth ? 'is-muted' : '', active ? 'is-active' : '', isSameDate(day.date, today) ? 'is-today' : ''].filter(Boolean).join(' ')}
+                  onClick={() => changeDate(formatDateInputDate(day.date))}
+                >
+                  {day.date.getDate()}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="akdb-date-picker-settings">
+        <button
+          ref={dateFormatButtonRef}
+          type="button"
+          className={`akdb-date-setting-row ${dateFormatOpen ? 'is-active' : ''}`}
+          onClick={() => setSettingsFlyout('dateFormat')}
+          aria-haspopup="menu"
+          aria-expanded={dateFormatOpen}
+        >
+          <span>日期格式</span>
+          <span>{dateDisplayFormatLabel(currentDateFormat)}</span>
+          <ChevronRight size={15} />
+        </button>
+        {dateFormatOpen && dateFormatMenuRect && createPortal(
+          <DateDisplayFormatSubmenu
+            value={currentDateFormat}
+            style={dateFormatMenuRect}
+            onMouseEnter={() => setSettingsFlyout('dateFormat')}
+            onMouseLeave={() => undefined}
+            className="akdb-date-picker-submenu akdb-timezone-submenu"
+            onChange={(dateFormat) => {
+              updateDateFormat(dateFormat);
+              setSettingsFlyout(null);
+            }}
+          />,
+          document.body,
+        )}
+        <button
+          ref={timeFormatButtonRef}
+          type="button"
+          className={`akdb-date-setting-row ${timeFormatOpen ? 'is-active' : ''}`}
+          onClick={() => setSettingsFlyout('timeFormat')}
+          aria-haspopup="menu"
+          aria-expanded={timeFormatOpen}
+        >
+          <span>时间格式</span>
+          <span>{timeDisplayFormatLabel(currentTimeFormat)}</span>
+          <ChevronRight size={15} />
+        </button>
+        {timeFormatOpen && timeFormatMenuRect && createPortal(
+          <TimeDisplayFormatSubmenu
+            value={currentTimeFormat}
+            style={timeFormatMenuRect}
+            onMouseEnter={() => setSettingsFlyout('timeFormat')}
+            onMouseLeave={() => undefined}
+            className="akdb-date-picker-submenu"
+            onChange={(timeFormat) => {
+              updateTimeFormat(timeFormat);
+              setSettingsFlyout(null);
+            }}
+          />,
+          document.body,
+        )}
+        <button
+          ref={timezoneButtonRef}
+          type="button"
+          className={`akdb-date-setting-row ${timezoneOpen ? 'is-active' : ''}`}
+          onClick={() => setSettingsFlyout('timezone')}
+          aria-haspopup="menu"
+          aria-expanded={timezoneOpen}
+        >
+          <span>时区</span>
+          <span>{timezoneLabel(config.timezone)}</span>
+          <ChevronRight size={15} />
+        </button>
+        {timezoneOpen && timezoneMenuRect && createPortal(
+          <TimezoneSubmenu
+            value={String(config.timezone || 'GMT+8')}
+            style={timezoneMenuRect}
+            onMouseEnter={() => setSettingsFlyout('timezone')}
+            onMouseLeave={() => undefined}
+            className="akdb-date-picker-submenu"
+            onChange={(timezone) => {
+              onUpdateConfig?.({ timezone });
+              setSettingsFlyout(null);
+            }}
+          />,
+          document.body,
+        )}
+      </div>
+      <button type="button" className="akdb-date-clear" onClick={() => { onChange(''); onClose(); }}>清除</button>
+    </div>
+  );
+}
+
+function datePickerSubmenuRect(pickerStyle: CSSProperties, submenuStyle: CSSProperties, width: number, maxHeight?: number): CSSProperties {
+  const pickerLeft = Number(pickerStyle.left) || 0;
+  const pickerWidth = Number(pickerStyle.width || pickerStyle.minWidth) || 280;
+  const viewportPadding = 8;
+  const gap = 6;
+  const rightLeft = pickerLeft + pickerWidth + gap;
+  const left = rightLeft + width + viewportPadding <= window.innerWidth
+    ? rightLeft
+    : Math.max(viewportPadding, pickerLeft - width - gap);
+  return { ...submenuStyle, left, width, ...(maxHeight ? { maxHeight } : {}) };
+}
+
+function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0) {
   const [rect, setRect] = useState<CSSProperties | null>(null);
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) {
@@ -2007,7 +3630,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       const viewportPadding = 8;
       const dropdownWidth = Math.max(minWidth, buttonRect.width);
       const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding);
-      const left = Math.min(Math.max(buttonRect.left, viewportPadding), maxLeft);
+      const left = Math.min(Math.max(buttonRect.left + offsetLeft, viewportPadding), maxLeft);
       setRect({
         position: 'fixed',
         left,
@@ -2022,7 +3645,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, buttonRef, minWidth, placement]);
+  }, [open, buttonRef, minWidth, placement, offsetLeft]);
   return rect;
 }
 
@@ -2095,7 +3718,10 @@ function getGroupedOptions(options: any[], config: Record<string, any>): Array<{
 function formatValue(value: string, column?: DatabaseColumn) {
   if (!column) return value;
   if (column.type === 'text' && column.config?.secret && value) return '••••••';
-  if (column.type === 'number') return formatNumberValue(value, column);
+  if (column.type === 'number') {
+    if (column.config?.display_as === 'bar' || column.config?.display_as === 'ring') return <NumberVisualValue value={value} column={column} />;
+    return formatNumberValue(value, column);
+  }
   if (column.type === 'date' || column.type === 'created_time' || column.type === 'last_edited_time') return formatDateValue(value, column);
   if (column.type === 'select' || column.type === 'status') {
     const option = (column.config?.options || []).find((o: any) => o.id === value);
@@ -2121,6 +3747,44 @@ function displayText(value: unknown, column?: DatabaseColumn) {
   return raw;
 }
 
+function NumberVisualValue({ value, column }: { value: string; column: DatabaseColumn }) {
+  const normalized = normalizeNumberValue(value, column);
+  if (normalized === '') return null;
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) return <span>{value}</span>;
+  const divideBy = Math.max(1, Number(column.config?.number_divide_by) || 100);
+  const ratio = Math.max(0, Math.min(1, number / divideBy));
+  const color = numberVisualColorMap[column.config?.number_color || 'green'] || numberVisualColorMap.green;
+  const showValue = column.config?.number_show_value !== false;
+  const text = formatNumberValue(value, column);
+  if (column.config?.display_as === 'ring') {
+    const circumference = 56.55;
+    return (
+      <span className="akdb-number-visual is-ring">
+        {showValue && <span className="akdb-number-visual-text">{text}</span>}
+        <svg className="akdb-number-ring" viewBox="0 0 24 24" aria-hidden="true">
+          <circle className="akdb-number-ring-track" cx="12" cy="12" r="9" />
+          <circle
+            className="akdb-number-ring-fill"
+            cx="12"
+            cy="12"
+            r="9"
+            style={{ stroke: color, strokeDasharray: `${Math.max(.01, ratio * circumference)} ${circumference}` }}
+          />
+        </svg>
+      </span>
+    );
+  }
+  return (
+    <span className="akdb-number-visual is-bar">
+      {showValue && <span className="akdb-number-visual-text">{text}</span>}
+      <span className="akdb-number-bar-track">
+        <span className="akdb-number-bar-fill" style={{ width: `${ratio * 100}%`, backgroundColor: color }} />
+      </span>
+    </span>
+  );
+}
+
 function parseDateValue(value: string) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -2140,41 +3804,101 @@ function parseDateValue(value: string) {
 function formatDateValue(value: string, column?: DatabaseColumn) {
   const date = parseDateValue(value);
   if (!date) return value || '';
-  const includeTime = !!column?.config?.include_time || column?.type === 'created_time' || column?.type === 'last_edited_time';
-  const includeSeconds = !!column?.config?.include_seconds;
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    ...(includeTime ? {
-      hour: '2-digit',
-      minute: '2-digit',
-      ...(includeSeconds ? { second: '2-digit' as const } : {}),
-      hour12: !!column?.config?.hour12,
-    } : {}),
-  }).format(date);
+  const systemDate = column?.type === 'created_time' || column?.type === 'last_edited_time';
+  const config = column?.config || {};
+  const dateFormat = systemDate ? 'chinese' : dateDisplayFormat(config);
+  const timeFormat = systemDate ? 'h24_colon_seconds' : timeDisplayFormat(config);
+  const parts = [
+    formatDatePart(date, dateFormat),
+    formatTimePart(date, timeFormat),
+  ].filter(Boolean);
+  return parts.join(' ');
 }
 
-function dateInputValue(value: string, column: DatabaseColumn) {
-  const date = parseDateValue(value);
-  if (!date) return '';
-  const year = date.getFullYear();
+function formatDatePart(date: Date, format: DateDisplayFormat) {
+  if (format === 'none') return '';
+  const year = String(date.getFullYear());
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  if (!column.config?.include_time) return `${year}-${month}-${day}`;
-  const hour = String(date.getHours()).padStart(2, '0');
-  const minute = String(date.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hour}:${minute}`;
+  if (format === 'slash') return `${year}/${month}/${day}`;
+  if (format === 'dash') return `${year}-${month}-${day}`;
+  return `${year}年${Number(month)}月${Number(day)}日`;
 }
 
-function timestampFromDateInput(value: string, includeTime: boolean) {
+function formatTimePart(date: Date, format: TimeDisplayFormat) {
+  if (format === 'none') return '';
+  const dash = format.endsWith('dash_seconds');
+  const separator = dash ? '-' : ':';
+  if (format.startsWith('h12')) {
+    const hour = date.getHours();
+    const prefix = hour >= 12 ? '下午' : '上午';
+    const displayHour = hour % 12 || 12;
+    return `${prefix} ${String(displayHour).padStart(2, '0')}${separator}${String(date.getMinutes()).padStart(2, '0')}${separator}${String(date.getSeconds()).padStart(2, '0')}`;
+  }
+  return `${String(date.getHours()).padStart(2, '0')}${separator}${String(date.getMinutes()).padStart(2, '0')}${separator}${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
+function timestampFromDateInput(value: string, mode: DateContentMode) {
   if (!value) return '';
-  const date = includeTime ? new Date(value) : (() => {
+  const date = mode === 'time' ? (() => {
+    const [hour, minute] = value.split(':').map(Number);
+    return new Date(1970, 0, 1, hour || 0, minute || 0);
+  })() : mode === 'datetime' ? new Date(value) : (() => {
     const [year, month, day] = value.split('-').map(Number);
     return new Date(year, month - 1, day);
   })();
   const seconds = Math.floor(date.getTime() / 1000);
   return Number.isFinite(seconds) ? String(seconds) : '';
+}
+
+function timestampFromDateTimeParts(dateValue: string, timeValue: string, mode: DateContentMode) {
+  if (mode === 'time') return timestampFromDateInput(timeValue || '00:00', 'time');
+  const date = /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(dateValue.trim()) ? normalizeDateDraft(dateValue) : dateValue;
+  if (!date) return '';
+  if (mode === 'date') return timestampFromDateInput(date, 'date');
+  return timestampFromDateInput(`${date}T${normalizeTimeDraft(timeValue) || '00:00'}`, 'datetime');
+}
+
+function normalizeDateDraft(value: string) {
+  const match = value.trim().match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (!match) return '';
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function normalizeTimeDraft(value: string) {
+  const match = value.trim().match(/^(\d{1,2}):(\d{1,2})/);
+  if (!match) return '';
+  const hour = Math.max(0, Math.min(23, Number(match[1]) || 0));
+  const minute = Math.max(0, Math.min(59, Number(match[2]) || 0));
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function formatDateInputDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}/${month}/${day}`;
+}
+
+function formatDateInputTime(date: Date) {
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${hour}:${minute}`;
+}
+
+function calendarDaysForMonth(monthDate: Date) {
+  const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const startOffset = (first.getDay() + 6) % 7;
+  const start = new Date(first.getFullYear(), first.getMonth(), 1 - startOffset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);
+    return { key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`, date };
+  });
+}
+
+function isSameDate(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 function dateGroupKey(value: string) {
@@ -2255,9 +3979,56 @@ function formatNumberValue(value: string, column: DatabaseColumn) {
   const normalized = normalizeNumberValue(value, column);
   if (normalized === '') return value;
   const precision = Number(column.config?.precision);
+  const format = typeof column.config?.format === 'string' ? column.config.format : 'number';
   const unit = typeof column.config?.unit === 'string' ? column.config.unit.trim() : '';
-  const text = Number.isInteger(precision) && precision >= 0 ? Number(normalized).toFixed(precision) : normalized;
+  const number = Number(normalized);
+  const text = formatNumberByFormat(number, normalized, format, precision);
   return unit ? `${text} ${unit}` : text;
+}
+
+const numberCurrencyCodes: Record<string, string> = {
+  usd: 'USD',
+  aud: 'AUD',
+  cad: 'CAD',
+  sgd: 'SGD',
+  eur: 'EUR',
+  gbp: 'GBP',
+  jpy: 'JPY',
+  cny: 'CNY',
+  hkd: 'HKD',
+};
+
+const numberVisualColorMap: Record<string, string> = {
+  gray: '#9b9a97',
+  brown: '#9f6b53',
+  orange: '#d9730d',
+  yellow: '#dfab01',
+  green: '#529e72',
+  blue: '#2383e2',
+  purple: '#9b51e0',
+  pink: '#e255a1',
+  red: '#e03e3e',
+};
+
+function formatNumberByFormat(number: number, raw: string, format: string, precision: number) {
+  const hasPrecision = Number.isInteger(precision) && precision >= 0;
+  if (!Number.isFinite(number)) return raw;
+  if (format === 'percent') {
+    return `${hasPrecision ? number.toFixed(precision) : raw}%`;
+  }
+  const currency = numberCurrencyCodes[format];
+  if (currency) {
+    return formatNumberWithIntl(number, { style: 'currency', currency, currencyDisplay: 'narrowSymbol' }, hasPrecision ? precision : undefined);
+  }
+  if (format === 'number_with_commas') {
+    return formatNumberWithIntl(number, { style: 'decimal', useGrouping: true }, hasPrecision ? precision : undefined);
+  }
+  return hasPrecision ? number.toFixed(precision) : raw;
+}
+
+function formatNumberWithIntl(number: number, options: Intl.NumberFormatOptions, precision?: number) {
+  const nextOptions = precision == null ? options : { ...options, minimumFractionDigits: precision, maximumFractionDigits: precision };
+  return new Intl.NumberFormat(undefined, nextOptions).format(number);
 }
 
 function toFiniteNumber(value: unknown) {
@@ -2464,7 +4235,7 @@ function defaultColumnName(type: DatabaseColumnType) {
 
 function defaultSourceColumnConfig(type: DatabaseColumnType) {
   if (type === 'formula') return { formula: '""' };
-  if (type === 'date') return { include_time: false, hour12: false };
+  if (type === 'date') return { date_format: 'chinese', time_format: 'none', timezone: 'GMT+8', date_content: 'date', include_time: false, hour12: false };
   return undefined;
 }
 
@@ -2480,7 +4251,6 @@ const optionColorMap: Record<string, { bg: string; fg: string; border: string }>
   orange: { bg: '#ffeedd', fg: '#a84f00', border: '#efc59e' },
 };
 
-const optionColorOrder = ['gray', 'blue', 'green', 'yellow', 'red', 'purple', 'pink', 'orange'];
 const optionColorChoices = [
   { id: 'gray', label: '灰色' },
   { id: 'brown', label: '棕色' },
@@ -2514,7 +4284,10 @@ function createOptionConfig(value: string, options: any[]) {
   return {
     id,
     value,
-    color: nextOptionColor(options),
+    color: 'gray',
+    icon: 'none',
+    shape: 'plain',
+    color_mode: 'background',
   };
 }
 
@@ -2525,10 +4298,6 @@ function slugOptionID(value: string) {
   let hash = 0;
   for (const char of normalized) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return hash ? `option-${hash.toString(36)}` : '';
-}
-
-function nextOptionColor(options: any[]) {
-  return optionColorOrder[options.length % optionColorOrder.length];
 }
 
 function OptionTag({ option, config, removable, onRemove }: { option: any; config: Record<string, any>; removable?: boolean; onRemove?: () => void }) {
@@ -2564,6 +4333,56 @@ function OptionTag({ option, config, removable, onRemove }: { option: any; confi
           </svg>
         </button>
       )}
+    </span>
+  );
+}
+
+function StatusGroupEditMenu({ group, style, onRename, onDelete }: { group: any; style: CSSProperties; onRename: (name: string) => void; onDelete: () => void }) {
+  const [name, setName] = useState(String(group.name || '未命名分组'));
+  useEffect(() => setName(String(group.name || '未命名分组')), [group.id, group.name]);
+  const commitName = () => {
+    const next = name.trim();
+    if (next && next !== group.name) onRename(next);
+    if (!next) setName(String(group.name || '未命名分组'));
+  };
+  return (
+    <div className="akdb-status-group-edit-menu" role="dialog" aria-label="编辑状态分组" style={style} onPointerDown={(event) => event.stopPropagation()}>
+      <div className="akdb-status-group-name">
+        <input
+          value={name}
+          aria-label="状态分组名称"
+          onChange={(event) => setName(event.currentTarget.value)}
+          onBlur={commitName}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
+            if (event.key === 'Escape') setName(String(group.name || '未命名分组'));
+          }}
+          autoFocus
+        />
+      </div>
+      <button type="button" className="akdb-status-group-delete" onClick={onDelete}>
+        <Trash2 size={17} />
+        <span>删除</span>
+      </button>
+    </div>
+  );
+}
+
+function StatusPropertyTag({ option, config }: { option: any; config: Record<string, any> }) {
+  const color = optionColorMap[option.color || 'gray'] || optionColorMap.gray;
+  const shape = option.shape || config.option_shape || 'pill';
+  const plain = shape === 'plain';
+  return (
+    <span
+      className={`akdb-status-property-tag ${plain ? 'is-plain' : ''}`}
+      style={{
+        color: color.fg,
+        backgroundColor: plain ? 'transparent' : color.bg,
+        borderRadius: shape === 'pill' ? 999 : 4,
+      }}
+    >
+      <span className="akdb-status-property-dot" style={{ backgroundColor: color.fg }} />
+      <span>{option.value || option.id}</span>
     </span>
   );
 }
