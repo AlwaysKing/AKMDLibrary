@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ChangeEvent } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { BlockNoteViewRaw, useCreateBlockNote, ComponentsContext, SuggestionMenuController, FormattingToolbar, FormattingToolbarController, BasicTextStyleButton, ColorStyleButton, CreateLinkButton, BlockTypeSelect, FilePanelController, useBlockNoteEditor, useEditorState, useComponentsContext } from '@blocknote/react';
 import { CellSelection, TableMap, addColumnBefore, addColumnAfter, deleteColumn, addRowBefore, addRowAfter, deleteRow, toggleHeader } from 'prosemirror-tables';
 import { Fragment as PMFragment } from 'prosemirror-model';
@@ -2492,6 +2493,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     open: false,
     mode: 'find',
   });
+  const [pageContextMenu, setPageContextMenu] = useState<{ top: number; left: number } | null>(null);
+  const pageContextMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Global keyboard shortcuts: Ctrl/Cmd+F opens find, Ctrl/Cmd+H opens replace,
   // Escape closes the find/replace panel if it is open.
@@ -7152,6 +7155,70 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     editor.focus();
   }, [editor, readOnly, isInputBlock]);
 
+  const closePageContextMenu = useCallback(() => {
+    setPageContextMenu(null);
+  }, []);
+
+  const runPageContextCommand = useCallback(async (command: 'cut' | 'copy' | 'paste') => {
+    closePageContextMenu();
+    editor.focus();
+    if (command === 'paste') {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) document.execCommand('insertText', false, text);
+      } catch {
+        document.execCommand('paste');
+      }
+      return;
+    }
+    document.execCommand(command);
+  }, [closePageContextMenu, editor]);
+
+  useEffect(() => {
+    if (readOnly) return;
+    const container = editorRef.current;
+    if (!container) return;
+    const scrollArea = container.closest('.overflow-y-auto') as HTMLElement | null;
+    if (!scrollArea) return;
+
+    const handleContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.akdb-block-shell')) return;
+      if (target.closest('.tcm-menu, .drag-handle-menu, .drag-handle-submenu, .bn-file-picker-menu')) return;
+      if (target.closest('[data-content-type="table"], [data-floating-ui-focusable], button, input, textarea, select, [role="dialog"]')) return;
+      if (!scrollArea.contains(target)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      const menuWidth = 180;
+      const menuHeight = 120;
+      const left = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
+      const top = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
+      setPageContextMenu({ top, left });
+    };
+
+    scrollArea.addEventListener('contextmenu', handleContextMenu);
+    return () => scrollArea.removeEventListener('contextmenu', handleContextMenu);
+  }, [readOnly]);
+
+  useEffect(() => {
+    if (!pageContextMenu) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      if (pageContextMenuRef.current?.contains(event.target as Node)) return;
+      closePageContextMenu();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closePageContextMenu();
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closePageContextMenu, pageContextMenu]);
+
   // Listen for clicks on the scroll container's empty space below editor
   useEffect(() => {
     if (readOnly) return;
@@ -7501,6 +7568,29 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           initialMode={findReplace.mode}
           onClose={() => setFindReplace((s) => ({ ...s, open: false }))}
         />
+      )}
+      {pageContextMenu && createPortal(
+        <div
+          ref={pageContextMenuRef}
+          className="bn-page-context-menu"
+          style={{ top: pageContextMenu.top, left: pageContextMenu.left }}
+          role="menu"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <button type="button" role="menuitem" onClick={() => void runPageContextCommand('cut')}>
+            <span>剪切</span>
+            <kbd>⌘X</kbd>
+          </button>
+          <button type="button" role="menuitem" onClick={() => void runPageContextCommand('copy')}>
+            <span>拷贝</span>
+            <kbd>⌘C</kbd>
+          </button>
+          <button type="button" role="menuitem" onClick={() => void runPageContextCommand('paste')}>
+            <span>粘贴</span>
+            <kbd>⌘V</kbd>
+          </button>
+        </div>,
+        document.body,
       )}
       {/* Clickable area below editor — click to append new paragraph */}
       {!readOnly && (

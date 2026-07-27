@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TdHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TdHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   AlignCenter,
@@ -26,11 +26,14 @@ import {
   Trash2,
   Workflow,
   EyeOff,
+  FileText,
+  Copy,
 } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseColumnType, type DatabaseDetail, type DatabaseRow, type DatabaseSummary } from '../../../api/databases';
 import { evalFormula } from '../../../formula/evaluator';
 import { defaultView, type DatabaseViewConfig, type ViewColumnRule } from './viewConfig';
 import { notionColumnIconOptions, type ColumnIconOption } from './columnIcons';
+import { showToast } from '../../Toast';
 import './database.css';
 
 interface Props {
@@ -56,6 +59,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   const [columnMenuSubmenu, setColumnMenuSubmenu] = useState<'type' | 'property' | null>(null);
   const [pendingDeleteColumn, setPendingDeleteColumn] = useState<DatabaseColumn | null>(null);
   const [deletingColumn, setDeletingColumn] = useState(false);
+  const [rowContextMenu, setRowContextMenu] = useState<{ row: DatabaseRow; top: number; left: number } | null>(null);
+  const rowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const [columnDragState, setColumnDragState] = useState<{
     sourceIndex: number;
     targetIndex: number;
@@ -146,10 +151,61 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createRequest]);
 
+  useEffect(() => {
+    if (!rowContextMenu) return;
+    const handleMouseDown = (event: globalThis.MouseEvent) => {
+      if (rowContextMenuRef.current?.contains(event.target as Node)) return;
+      closeRowContextMenu();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeRowContextMenu();
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [rowContextMenu]);
+
   const updateCell = async (rowId: string, col: DatabaseColumn | undefined, value: string) => {
     if (readonly || !col || col.readonly || col.type === 'formula') return;
     await databasesApi.updateRow(spaceSlug, dbId, rowId, { [col.id]: value });
     setRows((prev) => prev.map((r) => r.uuid === rowId ? { ...r, values: { ...r.values, [col.id]: value } } : r));
+  };
+
+  const closeRowContextMenu = () => setRowContextMenu(null);
+
+  const openRowContextMenu = (row: DatabaseRow, event: ReactMouseEvent<HTMLElement>) => {
+    if (readonly) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeColumnMenu();
+    setRowContextMenu({
+      row,
+      left: Math.max(8, Math.min(event.clientX, window.innerWidth - 320)),
+      top: Math.max(8, Math.min(event.clientY, window.innerHeight - 360)),
+    });
+  };
+
+  const copyRowLink = async (row: DatabaseRow) => {
+    await navigator.clipboard.writeText(`${window.location.origin}/s/${spaceSlug}/db/${dbId}/row/${row.uuid}`);
+    showToast('链接已复制');
+    closeRowContextMenu();
+  };
+
+  const duplicateRow = async (row: DatabaseRow) => {
+    if (readonly) return;
+    await databasesApi.createRow(spaceSlug, dbId, { ...row.values });
+    await refresh();
+    closeRowContextMenu();
+  };
+
+  const deleteRowById = async (rowId: string) => {
+    if (readonly) return;
+    await databasesApi.deleteRow(spaceSlug, dbId, rowId);
+    setRows((prev) => prev.filter((row) => row.uuid !== rowId));
+    closeRowContextMenu();
   };
 
   const createColumnOption = async (col: DatabaseColumn, label: string) => {
@@ -436,6 +492,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
     if (readonly || !columnControls) return;
     event.preventDefault();
     event.stopPropagation();
+    suppressNextHeaderClickRef.current = true;
     const startX = event.clientX;
     const startWidth = columnWidth(column, index);
     resizeColumnRef.current = { id: column.id, startX, startWidth };
@@ -460,6 +517,9 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
       });
       document.removeEventListener('pointermove', handleMove);
       document.removeEventListener('pointerup', handleUp);
+      window.setTimeout(() => {
+        suppressNextHeaderClickRef.current = false;
+      }, 0);
     };
     document.addEventListener('pointermove', handleMove);
     document.addEventListener('pointerup', handleUp, { once: true });
@@ -580,7 +640,18 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
                     <span className="akdb-col-type"><ColumnIconGlyph icon={columnIconID(c.column)} /></span>
                     <span>{c.name}</span>
                   </span>
-                  {showColumnControls && <span className="akdb-col-resizer" role="separator" aria-orientation="vertical" onPointerDown={(event) => resizeColumn(event, c, index)} />}
+                  {showColumnControls && (
+                    <span
+                      className="akdb-col-resizer"
+                      role="separator"
+                      aria-orientation="vertical"
+                      onPointerDown={(event) => resizeColumn(event, c, index)}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                    />
+                  )}
                 </th>
               ))}
               {showColumnControls && (
@@ -629,7 +700,11 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
             style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
           >
             {visibleColumns.length > 0 && displayRows.map(({ row, display }) => (
-              <tr key={row.uuid}>
+              <tr
+                key={row.uuid}
+                className={rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : undefined}
+                onContextMenu={(event) => openRowContextMenu(row, event)}
+              >
                 {visibleColumns.map((c, index) => (
                   <EditableCell
                     key={c.id}
@@ -707,6 +782,21 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
               closeColumnMenu();
             }}
             onDelete={() => requestDeleteSourceColumn(columnMenuIndex!)}
+          />,
+          document.body,
+        )}
+        {rowContextMenu && createPortal(
+          <DatabaseRowContextMenu
+            ref={rowContextMenuRef}
+            row={rowContextMenu.row}
+            style={{ top: rowContextMenu.top, left: rowContextMenu.left }}
+            onOpen={() => {
+              onOpenRow?.(rowContextMenu.row.uuid);
+              closeRowContextMenu();
+            }}
+            onCopyLink={() => void copyRowLink(rowContextMenu.row)}
+            onDuplicate={() => void duplicateRow(rowContextMenu.row)}
+            onDelete={() => void deleteRowById(rowContextMenu.row.uuid)}
           />,
           document.body,
         )}
@@ -905,6 +995,47 @@ function displayValueForColumn(column: DatabaseColumn | undefined, row: Database
 function Frame({ title, icon, children, onAdd, readonly }: any) {
   return <div className="akdb-frame"><div className="akdb-toolbar"><div>{icon}<span>{title}</span></div>{!readonly && <button onClick={onAdd}><Plus size={14} /> 新增</button>}</div>{children}</div>;
 }
+
+const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
+  row: DatabaseRow;
+  style: CSSProperties;
+  onOpen: () => void;
+  onCopyLink: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}>(({ row, style, onOpen, onCopyLink, onDuplicate, onDelete }, ref) => {
+  return (
+    <div
+      ref={ref}
+      className="akdb-row-context-menu"
+      role="dialog"
+      aria-label={`行菜单 ${row.uuid}`}
+      style={style}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <input placeholder="搜索操作..." aria-label="搜索操作" />
+      <div className="akdb-row-context-section">
+        <div className="akdb-row-context-heading">页面</div>
+        <button type="button" className="akdb-row-context-item" onClick={onOpen}>
+          <FileText size={16} />
+          <span>打开页面</span>
+        </button>
+        <button type="button" className="akdb-row-context-item" onClick={onCopyLink}>
+          <Copy size={16} />
+          <span>拷贝链接</span>
+        </button>
+        <button type="button" className="akdb-row-context-item" onClick={onDuplicate}>
+          <Copy size={16} />
+          <span>创建副本</span>
+        </button>
+        <button type="button" className="akdb-row-context-item" onClick={onDelete}>
+          <Trash2 size={16} />
+          <span>移到垃圾箱</span>
+        </button>
+      </div>
+    </div>
+  );
+});
 
 function AddColumnMenu({
   spaceSlug,
@@ -1257,6 +1388,19 @@ function ColumnHeaderMenu({
   );
 }
 
+type CheckboxDisplayStyle = 'checkbox' | 'radio' | 'switch';
+
+function normalizeCheckboxDisplayStyle(value: unknown): CheckboxDisplayStyle {
+  return value === 'radio' || value === 'switch' ? value : 'checkbox';
+}
+
+function checkboxDisplayStyleLabel(value: unknown) {
+  const style = normalizeCheckboxDisplayStyle(value);
+  if (style === 'radio') return '圆点';
+  if (style === 'switch') return '开关';
+  return '复选框';
+}
+
 function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOption, onUpdateOption, onReorderOption, onDeleteOption, onUpdateConfig, onChangeAlign }: { column: DatabaseColumn; align: ViewColumnRule['align']; style: CSSProperties; onMouseEnter: () => void; onCreateOption: (label: string) => Promise<any | null>; onUpdateOption: (optionID: string, patch: Record<string, any>) => void; onReorderOption: (sourceID: string, targetID: string) => void; onDeleteOption: (optionID: string) => void; onUpdateConfig: (patch: Record<string, any>) => void; onChangeAlign: (align: ViewColumnRule['align']) => void }) {
   const config = column.config || {};
   const options = Array.isArray(config.options) ? config.options : [];
@@ -1265,7 +1409,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
   const [editingStatusGroupID, setEditingStatusGroupID] = useState<string | null>(null);
   const [textMaxLengthDraft, setTextMaxLengthDraft] = useState(textMaxLengthEnabled ? String(textMaxLength) : '');
-  const [propertyFlyout, setPropertyFlyout] = useState<'textDisplay' | 'align' | 'numberFormat' | 'numberColor' | 'precision' | 'dateDisplayFormat' | 'timeDisplayFormat' | 'timezone' | null>(null);
+  const [propertyFlyout, setPropertyFlyout] = useState<'textDisplay' | 'align' | 'checkboxStyle' | 'numberFormat' | 'numberColor' | 'precision' | 'dateDisplayFormat' | 'timeDisplayFormat' | 'timezone' | null>(null);
   const [optionDragState, setOptionDragState] = useState<{
     sourceID: string;
     targetID: string;
@@ -1298,6 +1442,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   } | null>(null);
   const textDisplayButtonRef = useRef<HTMLButtonElement | null>(null);
   const alignButtonRef = useRef<HTMLButtonElement | null>(null);
+  const checkboxStyleButtonRef = useRef<HTMLButtonElement | null>(null);
   const numberFormatButtonRef = useRef<HTMLButtonElement | null>(null);
   const numberColorButtonRef = useRef<HTMLButtonElement | null>(null);
   const precisionButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1314,6 +1459,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const suppressStatusGroupClickRef = useRef(false);
   const textDisplayOpen = propertyFlyout === 'textDisplay';
   const alignOpen = propertyFlyout === 'align';
+  const checkboxStyleOpen = propertyFlyout === 'checkboxStyle';
   const numberFormatOpen = propertyFlyout === 'numberFormat';
   const numberColorOpen = propertyFlyout === 'numberColor';
   const precisionOpen = propertyFlyout === 'precision';
@@ -1322,6 +1468,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const timezoneOpen = propertyFlyout === 'timezone';
   const textDisplayRect = useSubmenuPosition(textDisplayOpen, textDisplayButtonRef, 220, 180);
   const alignRect = useSubmenuPosition(alignOpen, alignButtonRef, 220, 180);
+  const checkboxStyleRect = useSubmenuPosition(checkboxStyleOpen, checkboxStyleButtonRef, 220, 180);
   const numberFormatRect = useSubmenuPosition(numberFormatOpen, numberFormatButtonRef, 260, 520);
   const numberColorRect = useSubmenuPosition(numberColorOpen, numberColorButtonRef, 180, 320);
   const precisionRect = useSubmenuPosition(precisionOpen, precisionButtonRef, 220, 360);
@@ -1378,6 +1525,39 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
           onMouseEnter={() => setPropertyFlyout('align')}
           onMouseLeave={() => undefined}
           onChange={onChangeAlign}
+        />,
+        document.body,
+      )}
+    </>
+  );
+  const renderCheckboxStyleControl = () => (
+    <>
+      <button
+        ref={checkboxStyleButtonRef}
+        type="button"
+        className={`akdb-column-property-nav ${checkboxStyleOpen ? 'is-active' : ''}`}
+        onMouseEnter={() => {
+          setEditingOptionID(null);
+          setPropertyFlyout('checkboxStyle');
+        }}
+        onFocus={() => {
+          setEditingOptionID(null);
+          setPropertyFlyout('checkboxStyle');
+        }}
+        aria-haspopup="menu"
+        aria-expanded={checkboxStyleOpen}
+      >
+        <span>切换样式</span>
+        <span>{checkboxDisplayStyleLabel(config.checkbox_style)}</span>
+        <ChevronRight size={15} />
+      </button>
+      {checkboxStyleOpen && checkboxStyleRect && createPortal(
+        <CheckboxStyleSubmenu
+          value={normalizeCheckboxDisplayStyle(config.checkbox_style)}
+          style={checkboxStyleRect}
+          onMouseEnter={() => setPropertyFlyout('checkboxStyle')}
+          onMouseLeave={() => undefined}
+          onChange={(nextStyle) => onUpdateConfig({ checkbox_style: nextStyle })}
         />,
         document.body,
       )}
@@ -1910,10 +2090,12 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
         {(column.type === 'select' || column.type === 'multi_select') && (
           <>
             {renderAlignControl()}
-            <div className="akdb-column-property-options-head" onMouseEnter={() => setPropertyFlyout(null)}>
+            <div className="akdb-column-property-options-head akdb-menu-caption" onMouseEnter={() => setPropertyFlyout(null)}>
               <span>选项</span>
               <button ref={optionAddButtonRef} type="button" aria-label="添加选项" onClick={createPropertyOption}>
-                <Plus size={16} strokeWidth={1.8} />
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-column-property-options-plus">
+                  <path d="M10 3.59a.66.66 0 0 1 .66.66v5.09h5.09a.66.66 0 0 1 0 1.32h-5.09v5.09a.66.66 0 0 1-1.32 0v-5.09H4.25a.66.66 0 0 1 0-1.32h5.09V4.25a.66.66 0 0 1 .66-.66" />
+                </svg>
               </button>
             </div>
             <div ref={optionListRef} className="akdb-column-property-options" onMouseEnter={() => setPropertyFlyout(null)}>
@@ -1992,7 +2174,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
                       ref={editingStatusGroupID === groupID ? statusGroupEditAnchorRef : undefined}
                       role="button"
                       tabIndex={0}
-                      className={`akdb-status-property-group-head ${editingStatusGroupID === groupID ? 'is-active' : ''}`}
+                      className={`akdb-status-property-group-head akdb-menu-caption ${editingStatusGroupID === groupID ? 'is-active' : ''}`}
                       aria-haspopup="dialog"
                       aria-expanded={editingStatusGroupID === groupID}
                       onClick={(event) => {
@@ -2096,7 +2278,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
           </>
         )}
 
-        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && renderAlignControl()}
+        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && column.type !== 'checkbox' && renderAlignControl()}
 
         {column.type === 'text' && (
           <div className="akdb-column-property-limit">
@@ -2141,9 +2323,13 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
           <div className="akdb-column-property-empty">关联属性请在源数据页编辑。</div>
         )}
 
-        {(column.type === 'checkbox' || column.type === 'url') && (
-          <div className="akdb-column-property-empty">暂无可编辑属性</div>
+        {column.type === 'checkbox' && (
+          <>
+            {renderCheckboxStyleControl()}
+            {renderAlignControl()}
+          </>
         )}
+
       </div>
     </div>
   );
@@ -2279,7 +2465,7 @@ function TextDisplaySubmenu({ secret, style, onMouseEnter, onMouseLeave, onChang
               type="button"
               role="menuitemradio"
               aria-checked={active}
-              className={`akdb-column-type-item akdb-column-property-choice-item ${active ? 'is-active' : ''}`}
+              className={`akdb-column-type-item akdb-column-property-choice-item has-leading-visual ${active ? 'is-active' : ''}`}
               onClick={() => onChange(choice.secret)}
             >
               <span>{choice.label}</span>
@@ -2317,7 +2503,7 @@ function AlignSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { 
               type="button"
               role="menuitemradio"
               aria-checked={active}
-              className={`akdb-column-type-item akdb-column-property-choice-item ${active ? 'is-active' : ''}`}
+              className={`akdb-column-type-item akdb-column-property-choice-item has-leading-visual ${active ? 'is-active' : ''}`}
               onClick={() => onChange(choice.id)}
             >
               <span>{choice.icon}</span>
@@ -2328,6 +2514,69 @@ function AlignSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { 
         })}
       </div>
     </div>
+  );
+}
+
+function CheckboxStyleSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { value: CheckboxDisplayStyle; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (style: CheckboxDisplayStyle) => void }) {
+  const choices: Array<{ id: CheckboxDisplayStyle; label: string }> = [
+    { id: 'checkbox', label: 'Checkbox' },
+    { id: 'radio', label: '圆点' },
+    { id: 'switch', label: 'Switch' },
+  ];
+  return (
+    <div
+      className="akdb-column-number-submenu"
+      role="menu"
+      aria-label="复选框样式"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((choice) => {
+          const active = value === choice.id;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-column-property-choice-item has-leading-visual is-checkbox-style ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              <span className="akdb-checkbox-style-preview">
+                <CheckboxDisplay checked styleType={choice.id} />
+              </span>
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CheckboxDisplay({ checked, styleType }: { checked: boolean; styleType: CheckboxDisplayStyle }) {
+  if (styleType === 'switch') {
+    return (
+      <span className={`akdb-checkbox-display akdb-checkbox-display-switch ${checked ? 'is-checked' : ''}`}>
+        <span />
+      </span>
+    );
+  }
+  if (styleType === 'radio') {
+    return (
+      <span className={`akdb-checkbox-display akdb-checkbox-display-radio ${checked ? 'is-checked' : ''}`}>
+        <span />
+      </span>
+    );
+  }
+  return (
+    <span className={`akdb-checkbox-display akdb-checkbox-display-box ${checked ? 'is-checked' : ''}`}>
+      {checked && <Check size={13} strokeWidth={2.4} />}
+    </span>
   );
 }
 
@@ -2582,7 +2831,7 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
   const datePickerRect = useDropdownPosition(datePickerOpen, dateButtonRef, 280, 'below', -8);
   useEffect(() => setLocal(value), [value]);
   useEffect(() => {
-    if (editing && column?.type === 'number') inputRef.current?.focus();
+    if (editing && (column?.type === 'number' || column?.type === 'url')) inputRef.current?.focus();
   }, [editing, column?.type]);
   useDropdownOutsideClose(datePickerOpen, dateButtonRef, () => { setDatePickerOpen(false); setFocusRect(null); }, '.akdb-date-picker, .akdb-column-number-submenu');
   const updateFocusRect = () => {
@@ -2617,9 +2866,32 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
     ...cellProps,
     className: [cellProps?.className, className, columnAlignClass({ align })].filter(Boolean).join(' ') || undefined,
   });
-  const focusOverlay = focusRect ? createPortal(<div className="akdb-cell-focus-overlay" style={focusRect} />, document.body) : null;
-  if (!column || readonly || column.readonly) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}</td>;
-  if (column.type === 'checkbox') return <td {...tdProps('akdb-checkbox-cell')}><input type="checkbox" checked={local === 'true'} onChange={(e) => { const v = String(e.target.checked); setLocal(v); onChange(v); }} /></td>;
+  const focusOverlay = focusRect && column?.type !== 'date' ? createPortal(<div className="akdb-cell-focus-overlay" style={focusRect} />, document.body) : null;
+  if (!column) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}</td>;
+  if (column.type === 'checkbox') {
+    const disabled = readonly || column.readonly;
+    const checked = local === 'true';
+    const styleType = normalizeCheckboxDisplayStyle(column.config?.checkbox_style);
+    return (
+      <td {...tdProps('akdb-checkbox-cell')}>
+        <button
+          type="button"
+          className={`akdb-checkbox-toggle is-${styleType}`}
+          aria-pressed={checked}
+          disabled={disabled}
+          onClick={() => {
+            if (disabled) return;
+            const next = String(!checked);
+            setLocal(next);
+            onChange(next);
+          }}
+        >
+          <CheckboxDisplay checked={checked} styleType={styleType} />
+        </button>
+      </td>
+    );
+  }
+  if (readonly || column.readonly) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}</td>;
   if (column.type === 'select' || column.type === 'status') {
     const options = (column.config?.options || []) as Array<{ id: string; value: string }>;
     return (
@@ -2724,6 +2996,39 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
       </td>
     );
   }
+  const normalizedUrl = column.type === 'url' ? normalizeDatabaseUrl(local) : '';
+  if (column.type === 'url' && normalizedUrl && !editing) {
+    return (
+      <td
+        {...tdProps('akdb-editable-cell akdb-url-cell')}
+        ref={cellRef}
+        onClick={() => {
+          setEditing(true);
+          requestAnimationFrame(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select();
+          });
+        }}
+      >
+        <button
+          type="button"
+          className="akdb-url-link"
+          title={normalizedUrl}
+          onClick={(event) => {
+            event.stopPropagation();
+            window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+          }}
+        >
+          {local}
+        </button>
+      </td>
+    );
+  }
   const commitValue = () => {
     const next = column.type === 'number' ? normalizeNumberValue(local, column) : local;
     if (next !== local) setLocal(next);
@@ -2757,7 +3062,7 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
   const dragStateRef = useRef<typeof dragState>(null);
   const suppressOptionClickRef = useRef(false);
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
-  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay');
+  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, !isStatus);
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
   useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu');
   useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-column-icon-popover');
@@ -2895,12 +3200,12 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
               }}
             />
           </div>
-          {!isStatus && <div className="akdb-option-menu-title">选择或创建一个选项</div>}
+          {!isStatus && <div className="akdb-option-menu-title akdb-menu-caption">选择或创建一个选项</div>}
           <div ref={listRef} className="akdb-option-list" role="listbox">
             {!flatOptions.length && <div className="akdb-option-menu-empty">没有匹配的选项</div>}
             {groupedOptions.map((group) => (
               <div key={group.key} className="akdb-option-menu-section">
-                {group.label && <div className="akdb-option-menu-group">{group.label}</div>}
+                {group.label && <div className="akdb-option-menu-group akdb-menu-caption">{group.label}</div>}
                 {group.options.map((option) => {
                   const active = option.id === value;
                   const index = flatOptions.findIndex((item) => item.id === option.id);
@@ -3172,11 +3477,11 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
               }}
             />
           </div>
-          <div className="akdb-option-menu-title">选择或创建多个选项</div>
+          <div className="akdb-option-menu-title akdb-menu-caption">选择或创建多个选项</div>
           <div ref={listRef} className="akdb-option-list" role="listbox" aria-multiselectable="true">
             {groupedOptions.map((group) => (
               <div key={group.key} className="akdb-option-menu-section">
-                {group.label && <div className="akdb-option-menu-group">{group.label}</div>}
+                {group.label && <div className="akdb-option-menu-group akdb-menu-caption">{group.label}</div>}
                 {group.options.map((option) => {
                   const active = selectedIDs.has(option.id);
                   const index = flatOptions.findIndex((item) => item.id === option.id);
@@ -3617,7 +3922,7 @@ function datePickerSubmenuRect(pickerStyle: CSSProperties, submenuStyle: CSSProp
   return { ...submenuStyle, left, width, ...(maxHeight ? { maxHeight } : {}) };
 }
 
-function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0) {
+function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0, matchAnchorWidth = true) {
   const [rect, setRect] = useState<CSSProperties | null>(null);
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) {
@@ -3628,7 +3933,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       const buttonRect = buttonRef.current?.getBoundingClientRect();
       if (!buttonRect) return;
       const viewportPadding = 8;
-      const dropdownWidth = Math.max(minWidth, buttonRect.width);
+      const dropdownWidth = matchAnchorWidth ? Math.max(minWidth, buttonRect.width) : minWidth;
       const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding);
       const left = Math.min(Math.max(buttonRect.left + offsetLeft, viewportPadding), maxLeft);
       setRect({
@@ -3645,7 +3950,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, buttonRef, minWidth, placement, offsetLeft]);
+  }, [open, buttonRef, minWidth, placement, offsetLeft, matchAnchorWidth]);
   return rect;
 }
 
@@ -3745,6 +4050,20 @@ function displayText(value: unknown, column?: DatabaseColumn) {
   if (column?.type === 'date' || column?.type === 'created_time' || column?.type === 'last_edited_time') return formatDateValue(raw, column);
   if (column?.type === 'number') return formatNumberValue(raw, column);
   return raw;
+}
+
+function normalizeDatabaseUrl(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw || /\s/.test(raw)) return '';
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    if (!url.hostname || !url.hostname.includes('.')) return '';
+    return url.toString();
+  } catch {
+    return '';
+  }
 }
 
 function NumberVisualValue({ value, column }: { value: string; column: DatabaseColumn }) {
