@@ -159,9 +159,18 @@
 .akdb-table tbody tr.is-context-selected td,
 .akdb-table tbody tr.is-row-selected td { background: rgba(35,131,226,.12); }
 .akdb-table tbody tr.is-row-drop-target td { box-shadow: inset 0 2px 0 rgba(35,131,226,.78); }
+.akdb-table td { position: relative; }
+.akdb-table td.is-akdb-cell-selected { background: rgba(35,131,226,.08); }
+.akdb-table td.is-akdb-cell-fill-selected { background: rgba(35,131,226,.12); }
+.akdb-table td.is-akdb-cell-editing { background: #fff; }
+.akdb-table td.is-akdb-cell-active { z-index: 4; }
+.akdb-table td.is-akdb-cell-active::after { content: ""; position: absolute; inset: -1px; z-index: 3; border: 2px solid var(--c-bluTexAccPri, #2383e2); border-radius: 2px; pointer-events: none; }
+.akdb-cell-fill-handle { position: absolute; right: -5px; bottom: -5px; z-index: 5; width: 9px; height: 9px; box-sizing: border-box; border: 1px solid #fff; border-radius: 999px; background: var(--c-bluTexAccPri, #2383e2); cursor: ns-resize; touch-action: none; }
+.akdb-table td.is-akdb-cell-active .akdb-cell-fill-handle { display: block; }
 .akdb-table td.akdb-editable-cell { position: relative; }
 .akdb-table td.akdb-editable-cell:focus-within { z-index: 119; }
 .akdb-table td.akdb-editable-cell input { position: relative; z-index: 1; }
+.akdb-table td.akdb-editable-cell.is-akdb-cell-editing input { background: #fff; }
 .akdb-cell-focus-overlay { z-index: 118; border: 1px solid rgba(55,53,47,.12); border-radius: 6px; background: #fff; box-shadow: 0 8px 22px rgba(15,23,42,.14), 0 1px 4px rgba(15,23,42,.08); pointer-events: none; }
 .akdb-date-cell { overflow: visible; }
 .akdb-date-cell-btn { position: relative; z-index: 1; display: flex; align-items: center; width: 100%; min-height: 28px; border: 0; background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0; font: inherit; text-align: inherit; }
@@ -190,11 +199,12 @@
 .akdb-date-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; height: 28px; border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font: inherit; font-size: 13px; font-weight: 400; line-height: 1.2; }
 .akdb-date-setting-row:hover, .akdb-date-setting-row.is-active { background: var(--akdb-menu-hover-bg); }
 .akdb-date-setting-row > span:nth-child(2) { color: var(--akdb-menu-text-secondary); }
-.akdb-row-context-menu { position: fixed; z-index: 122; width: 220px; max-width: min(220px, calc(100vw - 16px)); border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: var(--akdb-menu-padding); color: var(--akdb-menu-text); }
+.akdb-row-context-menu { position: fixed; z-index: 122; width: 220px; max-width: min(220px, calc(100vw - 16px)); border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: var(--akdb-menu-padding); color: #37352f; }
 .akdb-row-context-section { display: grid; gap: 0; padding: 0; }
-.akdb-row-context-item { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: var(--akdb-menu-font-size); font-weight: 400; line-height: 1.2; }
+.akdb-row-context-item { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: inherit; cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: 14px; font-weight: 400; line-height: 1.5; }
 .akdb-row-context-item:hover { background: var(--akdb-menu-hover-bg); }
-.akdb-row-context-item svg { flex: 0 0 var(--akdb-menu-icon-size); width: var(--akdb-menu-icon-size); height: var(--akdb-menu-icon-size); color: var(--akdb-menu-icon); }
+.akdb-row-context-item span { font-weight: 400; }
+.akdb-row-context-item svg { flex: 0 0 16px; width: 16px; height: 16px; color: var(--akdb-menu-icon-secondary); stroke-width: 2; }
 .akdb-date-setting-row > svg { color: var(--akdb-menu-icon-secondary); }
 .akdb-date-setting-row:disabled { cursor: default; color: var(--akdb-menu-text); }
 .akdb-date-setting-row:disabled:hover { background: transparent; }
@@ -280,7 +290,7 @@
 .akdb-column-menu-name svg { flex: 0 0 auto; color: #9b9a97; }
 .akdb-column-icon-text { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; max-width: 22px; overflow: hidden; color: currentColor; font-size: 12px; font-weight: 500; letter-spacing: 0; line-height: 1; white-space: nowrap; }
 .akdb-column-icon-svg { display: block; width: 18px; height: 18px; flex: 0 0 auto; fill: currentColor; }
-.akdb-column-icon-popover { z-index: 110; width: 408px; max-width: calc(100vw - 24px); max-height: min(356px, 70vh); overflow: hidden; border: 1px solid #e9e9e7; border-radius: 10px; background: #fff; box-shadow: 0 10px 15px -3px rgba(0,0,0,.10), 0 4px 6px -4px rgba(0,0,0,.10); color: #37352f; font: inherit; }
+.akdb-column-icon-popover { z-index: 133; width: 408px; max-width: calc(100vw - 24px); max-height: min(356px, 70vh); overflow: hidden; border: 1px solid #e9e9e7; border-radius: 10px; background: #fff; box-shadow: 0 10px 15px -3px rgba(0,0,0,.10), 0 4px 6px -4px rgba(0,0,0,.10); color: #37352f; font: inherit; }
 .akdb-column-icon-tabs { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 0; border-bottom: 1px solid #e9e9e7; }
 .akdb-column-icon-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: #787774; cursor: pointer; padding: 8px 12px; margin-bottom: -1px; font: inherit; font-size: 12px; font-weight: 500; line-height: 16px; letter-spacing: 0; transition: color 150ms ease, border-color 150ms ease; }
 .akdb-column-icon-tabs button.is-active { color: #37352f; border-bottom-color: #37352f; }
@@ -553,7 +563,8 @@
 .akdb-option-select-empty { display: block; width: 1px; height: 22px; }
 .akdb-table td.akdb-align-center .akdb-option-select-btn { justify-content: center; }
 .akdb-table td.akdb-align-right .akdb-option-select-btn { justify-content: flex-end; }
-.akdb-option-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 40; width: 300px; min-width: 300px; max-width: 300px; max-height: 70vh; overflow: auto; border: 1px solid rgba(55,53,47,.12); border-radius: 6px; background: #fff; box-shadow: 0 8px 24px rgba(15,23,42,.14); padding: 0; }
+.akdb-cell-popup-mask { position: fixed; inset: 0; z-index: 129; background: transparent; cursor: default; }
+.akdb-option-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 130; width: 300px; min-width: 300px; max-width: 300px; max-height: 70vh; overflow: auto; border: 1px solid rgba(55,53,47,.12); border-radius: 6px; background: #fff; box-shadow: 0 8px 24px rgba(15,23,42,.14); padding: 0; }
 .akdb-option-select-menu { display: flex; flex-direction: column; overflow: visible; padding-bottom: 8px; }
 .akdb-option-combobox { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; height: 38px; box-sizing: border-box; margin: 0; border-radius: 6px; background: #faf9f8; cursor: text; overflow: hidden; padding: 4px 12px; font-size: 14px; line-height: 20px; }
 .akdb-option-combobox .akdb-option-tag { flex: 0 1 auto; min-height: 22px; height: 22px; overflow: hidden; }
@@ -591,7 +602,7 @@
 .akdb-option-edit-property { display: flex; align-items: center; gap: 10px; width: calc(100% - 16px); min-height: 38px; margin: 0 8px; border: 0; border-top: 1px solid rgba(55,53,47,.10); border-radius: 0; background: transparent; color: #37352f; cursor: pointer; padding: 7px 8px 0; text-align: left; font-family: inherit; font-size: 14px; font-weight: 400; line-height: 1.2; }
 .akdb-option-edit-property:hover { color: #37352f; }
 .akdb-option-edit-property > svg { flex: 0 0 18px; color: #37352f; }
-.akdb-option-edit-menu { position: fixed; z-index: 119; box-sizing: border-box; width: 252px; max-width: calc(100vw - 16px); max-height: min(430px, calc(100vh - 16px)); overflow: visible; border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: 8px; color: var(--akdb-menu-text); font-size: var(--akdb-menu-font-size); }
+.akdb-option-edit-menu { position: fixed; z-index: 132; box-sizing: border-box; width: 252px; max-width: calc(100vw - 16px); max-height: min(430px, calc(100vh - 16px)); overflow: visible; border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: 8px; color: var(--akdb-menu-text); font-size: var(--akdb-menu-font-size); }
 .akdb-option-edit-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .akdb-option-edit-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; border: 1px solid var(--akdb-menu-border); border-radius: 6px; background: transparent; color: var(--akdb-menu-icon); cursor: pointer; padding: 0; }
 .akdb-option-edit-icon:hover { background: var(--akdb-menu-hover-bg); }

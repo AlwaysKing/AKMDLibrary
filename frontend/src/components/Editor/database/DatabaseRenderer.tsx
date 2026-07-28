@@ -52,6 +52,9 @@ interface Props {
   onSelectionChange?: (count: number) => void;
 }
 
+type CellCoord = { rowIndex: number; colIndex: number };
+type CellRange = { anchor: CellCoord; focus: CellCoord };
+
 export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange }: Props) {
   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
   const [rows, setRows] = useState<DatabaseRow[]>([]);
@@ -65,6 +68,10 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const rowContextMenuRef = useRef<HTMLDivElement | null>(null);
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const [selectedRowIDs, setSelectedRowIDs] = useState<Set<string>>(() => new Set());
+  const [activeCell, setActiveCell] = useState<CellCoord | null>(null);
+  const [editingCell, setEditingCell] = useState<CellCoord | null>(null);
+  const [cellRange, setCellRange] = useState<CellRange | null>(null);
+  const [fillRange, setFillRange] = useState<CellRange | null>(null);
   const [hoveredRowID, setHoveredRowID] = useState<string | null>(null);
   const [rowDragState, setRowDragState] = useState<{ sourceRowID: string; targetRowID: string; sourceIndex: number; targetIndex: number; placement: 'before' | 'after' } | null>(null);
   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
@@ -86,6 +93,10 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const [columnWidthDrafts, setColumnWidthDrafts] = useState<Record<string, number>>({});
   const columnDragStateRef = useRef<typeof columnDragState>(null);
   const rowDragStateRef = useRef<typeof rowDragState>(null);
+  const cellSelectionDragRef = useRef<{ anchor: CellCoord; dragged: boolean } | null>(null);
+  const fillDragRef = useRef<{ source: CellCoord; target: CellCoord } | null>(null);
+  const recentlyClosedEditingCellRef = useRef<CellCoord | null>(null);
+  const suppressNextCellClickRef = useRef<(() => void) | null>(null);
   const resizeColumnRef = useRef<{ id: string; startX: number; startWidth: number } | null>(null);
   const addColumnButtonRef = useRef<HTMLButtonElement | null>(null);
   const columnMenuAnchorRef = useRef<HTMLElement | null>(null);
@@ -97,6 +108,9 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const showFillColumn = !readonly;
   useDropdownOutsideClose(addColumnOpen, addColumnButtonRef, () => setAddColumnOpen(false), '.akdb-add-column-menu');
   useDropdownOutsideClose(columnMenuIndex !== null, columnMenuAnchorRef, () => closeColumnMenu(), '.akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-status-group-edit-menu');
+  useEffect(() => () => {
+    suppressNextCellClickRef.current?.();
+  }, []);
 
   const refresh = async () => {
     setLoading(true);
@@ -162,6 +176,64 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   useEffect(() => {
     if (readonly) setSelectedRowIDs(new Set());
   }, [readonly]);
+
+  useEffect(() => {
+    const handleMouseDown = (event: globalThis.MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!activeCell && !cellRange) return;
+      if (target?.closest('.akdb-table-wrap, .akdb-row-context-menu, .akdb-column-menu, .akdb-option-menu, .akdb-date-picker')) return;
+      setActiveCell(null);
+      setEditingCell(null);
+      setCellRange(null);
+      setFillRange(null);
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [activeCell, cellRange]);
+
+  useEffect(() => {
+    if (!activeCell && !cellRange) return;
+    const isEditingTarget = (target: EventTarget | null) => (target as HTMLElement | null)?.closest('input, textarea, [contenteditable="true"]');
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditingTarget(event.target)) return;
+      if (event.key === 'Escape') {
+        setActiveCell(null);
+        setEditingCell(null);
+        setCellRange(null);
+        setFillRange(null);
+        return;
+      }
+      if (event.key !== 'Backspace' && event.key !== 'Delete') return;
+      const range = cellRange || (activeCell ? { anchor: activeCell, focus: activeCell } : null);
+      if (!range || readonly) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void clearCellRange(range);
+    };
+    const handleCopy = (event: ClipboardEvent) => {
+      if (isEditingTarget(event.target)) return;
+      const range = cellRange || (activeCell ? { anchor: activeCell, focus: activeCell } : null);
+      if (!range) return;
+      event.preventDefault();
+      event.clipboardData?.setData('text/plain', serializeCellRange(range));
+    };
+    const handlePaste = (event: ClipboardEvent) => {
+      if (isEditingTarget(event.target)) return;
+      const range = cellRange || (activeCell ? { anchor: activeCell, focus: activeCell } : null);
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!range || !text || readonly) return;
+      event.preventDefault();
+      void pasteCellText(range.anchor, text);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('copy', handleCopy);
+    document.addEventListener('paste', handlePaste);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('copy', handleCopy);
+      document.removeEventListener('paste', handlePaste);
+    };
+  }, [activeCell, cellRange, readonly, displayRows, visibleColumns]);
 
   useEffect(() => {
     if (!selectedRowIDs.size) return;
@@ -308,6 +380,252 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     if (readonly || !col || col.readonly || col.type === 'formula') return;
     await databasesApi.updateRow(spaceSlug, dbId, rowId, { [col.id]: value });
     setRows((prev) => prev.map((r) => r.uuid === rowId ? { ...r, values: { ...r.values, [col.id]: value } } : r));
+  };
+
+  const editableColumnAt = (colIndex: number) => {
+    const column = visibleColumns[colIndex]?.column;
+    if (!column || readonly || column.readonly || column.type === 'formula') return null;
+    return column;
+  };
+
+  const cellRangeBounds = (range: CellRange) => ({
+    rowStart: Math.min(range.anchor.rowIndex, range.focus.rowIndex),
+    rowEnd: Math.max(range.anchor.rowIndex, range.focus.rowIndex),
+    colStart: Math.min(range.anchor.colIndex, range.focus.colIndex),
+    colEnd: Math.max(range.anchor.colIndex, range.focus.colIndex),
+  });
+
+  const cellInRange = (coord: CellCoord, range: CellRange | null) => {
+    if (!range) return false;
+    const bounds = cellRangeBounds(range);
+    return coord.rowIndex >= bounds.rowStart && coord.rowIndex <= bounds.rowEnd && coord.colIndex >= bounds.colStart && coord.colIndex <= bounds.colEnd;
+  };
+
+  const sameCell = (a: CellCoord | null, b: CellCoord) => !!a && a.rowIndex === b.rowIndex && a.colIndex === b.colIndex;
+
+  const displayedCellValue = (rowIndex: number, colIndex: number) => {
+    const row = displayRows[rowIndex];
+    const column = visibleColumns[colIndex];
+    if (!row || !column) return '';
+    return String(row.display[column.id] ?? '');
+  };
+
+  const rawCellValue = (rowIndex: number, colIndex: number) => {
+    const row = displayRows[rowIndex]?.row;
+    const column = visibleColumns[colIndex]?.column;
+    if (!row || !column) return '';
+    return String(row.values?.[column.id] ?? '');
+  };
+
+  const serializeCellRange = (range: CellRange) => {
+    const bounds = cellRangeBounds(range);
+    const lines: string[] = [];
+    for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex++) {
+      const cells: string[] = [];
+      for (let colIndex = bounds.colStart; colIndex <= bounds.colEnd; colIndex++) {
+        cells.push(displayedCellValue(rowIndex, colIndex));
+      }
+      lines.push(cells.join('\t'));
+    }
+    return lines.join('\n');
+  };
+
+  const updateCells = async (patches: Array<{ rowID: string; column: DatabaseColumn; value: string }>) => {
+    if (readonly || patches.length === 0) return;
+    const rowPatches = new Map<string, Record<string, string>>();
+    for (const patch of patches) {
+      if (patch.column.readonly || patch.column.type === 'formula') continue;
+      rowPatches.set(patch.rowID, { ...(rowPatches.get(patch.rowID) || {}), [patch.column.id]: patch.value });
+    }
+    if (!rowPatches.size) return;
+    await Promise.all(Array.from(rowPatches.entries()).map(([rowID, values]) => databasesApi.updateRow(spaceSlug, dbId, rowID, values)));
+    setRows((prev) => prev.map((row) => rowPatches.has(row.uuid) ? { ...row, values: { ...row.values, ...rowPatches.get(row.uuid)! } } : row));
+  };
+
+  const clearCellRange = async (range: CellRange) => {
+    const bounds = cellRangeBounds(range);
+    const patches: Array<{ rowID: string; column: DatabaseColumn; value: string }> = [];
+    for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex++) {
+      const row = displayRows[rowIndex]?.row;
+      if (!row) continue;
+      for (let colIndex = bounds.colStart; colIndex <= bounds.colEnd; colIndex++) {
+        const column = editableColumnAt(colIndex);
+        if (column) patches.push({ rowID: row.uuid, column, value: '' });
+      }
+    }
+    await updateCells(patches);
+  };
+
+  const pasteCellText = async (origin: CellCoord, text: string) => {
+    const rowsText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    if (rowsText[rowsText.length - 1] === '') rowsText.pop();
+    const matrix = rowsText.map((line) => line.split('\t'));
+    const patches: Array<{ rowID: string; column: DatabaseColumn; value: string }> = [];
+    matrix.forEach((line, rowOffset) => {
+      const row = displayRows[origin.rowIndex + rowOffset]?.row;
+      if (!row) return;
+      line.forEach((value, colOffset) => {
+        const column = editableColumnAt(origin.colIndex + colOffset);
+        if (column) patches.push({ rowID: row.uuid, column, value });
+      });
+    });
+    await updateCells(patches);
+    if (matrix.length && matrix[0]?.length) {
+      setCellRange({
+        anchor: origin,
+        focus: {
+          rowIndex: Math.min(displayRows.length - 1, origin.rowIndex + matrix.length - 1),
+          colIndex: Math.min(visibleColumns.length - 1, origin.colIndex + Math.max(...matrix.map((line) => line.length)) - 1),
+        },
+      });
+      setActiveCell(origin);
+    }
+  };
+
+  const selectCell = (coord: CellCoord, edit = true) => {
+    clearEditorBlockSelection();
+    setSelectedRowIDs(new Set());
+    setActiveCell(coord);
+    setCellRange({ anchor: coord, focus: coord });
+    setFillRange(null);
+    setEditingCell(edit && editableColumnAt(coord.colIndex) ? coord : null);
+    tableWrapRef.current?.focus({ preventScroll: true });
+  };
+
+  const suppressNextCellClick = () => {
+    suppressNextCellClickRef.current?.();
+    const handleClick = (clickEvent: MouseEvent) => {
+      clickEvent.preventDefault();
+      clickEvent.stopPropagation();
+      clickEvent.stopImmediatePropagation();
+      cleanup();
+    };
+    const cleanup = () => {
+      document.removeEventListener('click', handleClick, true);
+      if (suppressNextCellClickRef.current === cleanup) suppressNextCellClickRef.current = null;
+    };
+    suppressNextCellClickRef.current = cleanup;
+    document.addEventListener('click', handleClick, true);
+    window.setTimeout(cleanup, 350);
+  };
+
+  const beginCellPointer = (coord: CellCoord, event: ReactPointerEvent<HTMLTableCellElement>) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement | null)?.closest('.akdb-cell-fill-handle')) return;
+    const recentlyClosedEditingCell = recentlyClosedEditingCellRef.current;
+    if (recentlyClosedEditingCell && !sameCell(recentlyClosedEditingCell, coord)) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextCellClick();
+      setActiveCell(recentlyClosedEditingCell);
+      setCellRange({ anchor: recentlyClosedEditingCell, focus: recentlyClosedEditingCell });
+      setFillRange(null);
+      setEditingCell(null);
+      return;
+    }
+    if (editingCell && !sameCell(editingCell, coord)) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextCellClick();
+      setActiveCell(editingCell);
+      setCellRange({ anchor: editingCell, focus: editingCell });
+      setFillRange(null);
+      setEditingCell(null);
+      (document.activeElement as HTMLElement | null)?.blur();
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('input, button, textarea, [contenteditable="true"], .akdb-option-select')) return;
+    closeRowContextMenu();
+    closeColumnMenu();
+    const anchor = coord;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    cellSelectionDragRef.current = { anchor, dragged: false };
+
+    const coordFromPoint = (clientX: number, clientY: number): CellCoord | null => {
+      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
+      if (!el) return null;
+      const rowIndex = Number(el.dataset.akdbRowIndex);
+      const colIndex = Number(el.dataset.akdbColIndex);
+      if (!Number.isFinite(rowIndex) || !Number.isFinite(colIndex)) return null;
+      return { rowIndex, colIndex };
+    };
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const state = cellSelectionDragRef.current;
+      if (!state) return;
+      if (!state.dragged && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 4) {
+        state.dragged = true;
+        setEditingCell(null);
+        (document.activeElement as HTMLElement | null)?.blur();
+        clearEditorBlockSelection();
+        setSelectedRowIDs(new Set());
+      }
+      if (!state.dragged) return;
+      moveEvent.preventDefault();
+      const focus = coordFromPoint(moveEvent.clientX, moveEvent.clientY);
+      if (!focus) return;
+      setActiveCell(anchor);
+      setCellRange({ anchor, focus });
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const dragged = cellSelectionDragRef.current?.dragged;
+      cellSelectionDragRef.current = null;
+      if (!dragged) {
+        window.setTimeout(() => selectCell(coord, true), 0);
+      }
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp, { once: true });
+  };
+
+  const beginFillDrag = (coord: CellCoord, event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || readonly) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = coord;
+    fillDragRef.current = { source, target: source };
+    setFillRange({ anchor: source, focus: source });
+    const targetFromPoint = (clientX: number, clientY: number) => {
+      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
+      if (!el) return null;
+      const rowIndex = Number(el.dataset.akdbRowIndex);
+      if (!Number.isFinite(rowIndex)) return null;
+      return { rowIndex, colIndex: source.colIndex };
+    };
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      const target = targetFromPoint(moveEvent.clientX, moveEvent.clientY);
+      if (!target) return;
+      fillDragRef.current = { source, target };
+      setFillRange({ anchor: source, focus: target });
+    };
+    const handleUp = async () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const final = fillDragRef.current;
+      fillDragRef.current = null;
+      setFillRange(null);
+      if (!final) return;
+      const bounds = cellRangeBounds({ anchor: final.source, focus: final.target });
+      if (bounds.rowStart === bounds.rowEnd) return;
+      const column = editableColumnAt(source.colIndex);
+      if (!column) return;
+      const sourceValue = rawCellValue(source.rowIndex, source.colIndex);
+      const patches: Array<{ rowID: string; column: DatabaseColumn; value: string }> = [];
+      for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex++) {
+        if (rowIndex === source.rowIndex) continue;
+        const row = displayRows[rowIndex]?.row;
+        if (row) patches.push({ rowID: row.uuid, column, value: sourceValue });
+      }
+      await updateCells(patches);
+      setCellRange({ anchor: source, focus: final.target });
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp, { once: true });
   };
 
   const closeRowContextMenu = () => setRowContextMenu(null);
@@ -513,13 +831,6 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       const affectedIDs = new Set(affectedRows.map((row) => row.uuid));
       setRows((prev) => prev.map((row) => affectedIDs.has(row.uuid) ? { ...row, values: { ...row.values, [col.id]: '' } } : row));
     }
-  };
-
-  const updateColumnOptionConfig = async (col: DatabaseColumn, patch: Record<string, any>) => {
-    if (readonly || col.readonly || (col.type !== 'select' && col.type !== 'status' && col.type !== 'multi_select')) return;
-    const nextConfig = { ...(col.config || {}), ...patch };
-    const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
-    setSchema(nextSchema);
   };
 
   const updateColumnConfig = async (col: DatabaseColumn, patch: Record<string, any>) => {
@@ -951,7 +1262,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             })}
           </div>
         )}
-        <div ref={tableWrapRef} className="akdb-table-wrap">
+        <div ref={tableWrapRef} className="akdb-table-wrap" tabIndex={-1}>
           <table className="akdb-table" style={{ minWidth: tableMinWidth }}>
             <colgroup>
               {visibleColumns.map((c, index) => <col key={c.id} style={{ width: columnWidth(c, index) }} />)}
@@ -1036,7 +1347,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
               className={columnDragState ? 'is-column-dragging' : undefined}
               style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
             >
-            {visibleColumns.length > 0 && displayRows.map(({ row, display }) => (
+            {visibleColumns.length > 0 && displayRows.map(({ row, display }, rowIndex) => (
               <tr
                 key={row.uuid}
                 data-akdb-row-id={row.uuid}
@@ -1045,30 +1356,76 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
                 onContextMenu={(event) => openRowContextMenu(row, event)}
               >
-                {visibleColumns.map((c, index) => (
+                {visibleColumns.map((c, index) => {
+                  const coord = { rowIndex, colIndex: index };
+                  const isActive = sameCell(activeCell, coord);
+                  const isEditing = sameCell(editingCell, coord);
+                  const isSelected = !isEditing && cellInRange(coord, fillRange || cellRange);
+                  const isFillSelected = !isEditing && cellInRange(coord, fillRange);
+                  const cellValue = c.column?.type === 'formula' ? String(display[c.id] ?? '') : String(row.values?.[c.column!.id] ?? '');
+                  return (
                   <EditableCell
                     key={c.id}
-                    value={String(display[c.id] ?? '')}
+                    value={cellValue}
                     column={c.column}
                     align={c.rule.align}
                     readonly={readonly || c.column?.type === 'formula' || !!c.rule.readonly}
+                    active={isActive}
+                    editingActive={isEditing}
+                    rangeSelected={isSelected}
+                    fillSelected={isFillSelected}
                     onChange={(v) => updateCell(row.uuid, c.column, v)}
+                    onEditStateChange={(editing) => {
+                      if (editing) {
+                        clearEditorBlockSelection();
+                        setSelectedRowIDs(new Set());
+                        setActiveCell(coord);
+                        setCellRange({ anchor: coord, focus: coord });
+                        setFillRange(null);
+                        setEditingCell(coord);
+                        return;
+                      }
+                      setEditingCell((current) => {
+                        if (!sameCell(current, coord)) return current;
+                        recentlyClosedEditingCellRef.current = coord;
+                        window.setTimeout(() => {
+                          if (sameCell(recentlyClosedEditingCellRef.current, coord)) recentlyClosedEditingCellRef.current = null;
+                        }, 0);
+                        return null;
+                      });
+                    }}
+                    onFillPointerDown={(event) => beginFillDrag(coord, event)}
                     onCreateOption={(label) => c.column ? createColumnOption(c.column, label) : Promise.resolve(null)}
                     onReorderOption={(sourceID, targetID) => c.column ? reorderColumnOption(c.column, sourceID, targetID) : Promise.resolve()}
                     onUpdateOption={(optionID, patch) => c.column ? updateColumnOption(c.column, optionID, patch) : Promise.resolve()}
                     onDeleteOption={(optionID) => c.column ? deleteColumnOption(c.column, optionID) : Promise.resolve()}
-                    onUpdateOptionConfig={(patch) => c.column ? updateColumnOptionConfig(c.column, patch) : Promise.resolve()}
                     onUpdateColumnConfig={(patch) => c.column ? updateColumnConfig(c.column, patch) : Promise.resolve()}
                     onEditProperty={(anchor) => openColumnMenu(index, anchor)}
                     cellProps={{
-                      className: columnDragState?.sourceIndex === index ? 'is-dragging' : undefined,
+                      className: [
+                        columnDragState?.sourceIndex === index ? 'is-dragging' : '',
+                        isActive && !isEditing ? 'is-akdb-cell-active' : '',
+                        isSelected ? 'is-akdb-cell-selected' : '',
+                        isFillSelected ? 'is-akdb-cell-fill-selected' : '',
+                      ].filter(Boolean).join(' ') || undefined,
+                      'data-akdb-row-index': rowIndex,
+                      'data-akdb-col-index': index,
+                      'data-akdb-row-id': row.uuid,
+                      'data-akdb-col-id': c.column?.id,
+                      onPointerDownCapture: (event) => beginCellPointer(coord, event),
+                      onClickCapture: (event) => {
+                        if (!suppressNextCellClickRef.current) return;
+                        suppressNextCellClickRef.current();
+                        event.preventDefault();
+                        event.stopPropagation();
+                      },
                       style: {
                         transform: columnDragTransform(index),
                         transition: columnDragState?.sourceIndex === index ? 'none' : undefined,
                       },
-                    }}
+                    } as TdHTMLAttributes<HTMLTableCellElement> & Record<string, any>}
                   />
-                ))}
+                );})}
                 {showColumnControls && <td className="akdb-action-cell" />}
                 {showFillColumn && <td className="akdb-fill-cell" aria-hidden="true" />}
               </tr>
@@ -1089,7 +1446,6 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             index={columnMenuIndex!}
             typeOpen={columnMenuSubmenu === 'type'}
             propertyOpen={columnMenuSubmenu === 'property'}
-            align={columnMenuColumn.rule.align}
             style={columnMenuRect}
             onOpenType={() => setColumnMenuSubmenu('type')}
             onCloseType={() => setColumnMenuSubmenu((current) => current === 'type' ? null : current)}
@@ -1581,7 +1937,6 @@ function ColumnHeaderMenu({
   onUpdateOption,
   onReorderOption,
   onDeleteOption,
-  align,
   onUpdateConfig,
   onChangeAlign,
   onFilter,
@@ -1606,7 +1961,6 @@ function ColumnHeaderMenu({
   onUpdateOption: (optionID: string, patch: Record<string, any>) => void;
   onReorderOption: (sourceID: string, targetID: string) => void;
   onDeleteOption: (optionID: string) => void;
-  align: ViewColumnRule['align'];
   onUpdateConfig: (patch: Record<string, any>) => void;
   onChangeAlign: (align: ViewColumnRule['align']) => void;
   onFilter: () => void;
@@ -1843,7 +2197,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const timezoneButtonRef = useRef<HTMLButtonElement | null>(null);
   const optionEditAnchorRef = useRef<HTMLButtonElement | null>(null);
   const optionAddButtonRef = useRef<HTMLButtonElement | null>(null);
-  const statusGroupEditAnchorRef = useRef<HTMLElement | null>(null);
+  const statusGroupEditAnchorRef = useRef<HTMLDivElement | null>(null);
   const optionListRef = useRef<HTMLDivElement | null>(null);
   const optionDragStateRef = useRef<typeof optionDragState>(null);
   const statusGroupDragStateRef = useRef<typeof statusGroupDragState>(null);
@@ -1870,7 +2224,6 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const optionEditRect = useSubmenuPosition(!!editingOptionID, optionEditAnchorRef, 252, 430);
   const statusGroupEditRect = useSubmenuPosition(!!editingStatusGroupID, statusGroupEditAnchorRef, 220, 180);
   const editingOption = options.find((option: any) => option.id === editingOptionID);
-  const renderCheck = (active: boolean) => active ? <Check size={16} className="akdb-column-type-check" /> : null;
   const statusGroups = Array.isArray(config.groups) && config.groups.length
     ? config.groups
     : [{ id: 'status-all', name: '状态', option_ids: options.map((option: any) => option.id) }];
@@ -3212,7 +3565,7 @@ function PrecisionSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }
   );
 }
 
-function EditableCell({ value, column, align, readonly, onChange, onCreateOption, onReorderOption, onUpdateOption, onDeleteOption, onUpdateOptionConfig, onUpdateColumnConfig, onEditProperty, cellProps }: { value: string; column?: DatabaseColumn; align?: ViewColumnRule['align']; readonly?: boolean; onChange: (value: string) => void; onCreateOption?: (label: string) => Promise<any | null>; onReorderOption?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateOptionConfig?: (patch: Record<string, any>) => Promise<void>; onUpdateColumnConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: (anchor: HTMLElement) => void; cellProps?: TdHTMLAttributes<HTMLTableCellElement> }) {
+function EditableCell({ value, column, align, readonly, active, editingActive, rangeSelected, fillSelected, onChange, onEditStateChange, onFillPointerDown, onCreateOption, onReorderOption, onUpdateOption, onDeleteOption, onUpdateColumnConfig, onEditProperty, cellProps }: { value: string; column?: DatabaseColumn; align?: ViewColumnRule['align']; readonly?: boolean; active?: boolean; editingActive?: boolean; rangeSelected?: boolean; fillSelected?: boolean; onChange: (value: string) => void; onEditStateChange?: (editing: boolean) => void; onFillPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void; onCreateOption?: (label: string) => Promise<any | null>; onReorderOption?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateColumnConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: (anchor: HTMLElement) => void; cellProps?: TdHTMLAttributes<HTMLTableCellElement> }) {
   const [local, setLocal] = useState(value);
   const [editing, setEditing] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -3220,8 +3573,18 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
   const cellRef = useRef<HTMLTableCellElement | null>(null);
   const dateButtonRef = useRef<HTMLButtonElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const skipNextCommitRef = useRef(false);
   const datePickerRect = useDropdownPosition(datePickerOpen, dateButtonRef, 280, 'below', -8);
   useEffect(() => setLocal(value), [value]);
+  useEffect(() => {
+    if (editingActive && !editing && column && column.type !== 'checkbox' && column.type !== 'select' && column.type !== 'status' && column.type !== 'multi_select' && column.type !== 'date') {
+      setEditing(true);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
+    }
+  }, [editingActive, editing, column]);
   useEffect(() => {
     if (editing && (column?.type === 'number' || column?.type === 'url')) inputRef.current?.focus();
   }, [editing, column?.type]);
@@ -3254,11 +3617,19 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
       document.removeEventListener('touchmove', preventScroll, true);
     };
   }, [focusRect]);
+  const isCellEditing = editing || !!editingActive;
   const tdProps = (className?: string): TdHTMLAttributes<HTMLTableCellElement> => ({
     ...cellProps,
-    className: [cellProps?.className, className, columnAlignClass({ align })].filter(Boolean).join(' ') || undefined,
+    className: [cellProps?.className, className, columnAlignClass({ align }), isCellEditing ? 'is-akdb-cell-editing' : '', !isCellEditing && rangeSelected ? 'is-akdb-cell-selected' : '', !isCellEditing && fillSelected ? 'is-akdb-cell-fill-selected' : '', active && !isCellEditing ? 'is-akdb-cell-active' : ''].filter(Boolean).join(' ') || undefined,
   });
   const focusOverlay = focusRect && column?.type !== 'date' ? createPortal(<div className="akdb-cell-focus-overlay" style={focusRect} />, document.body) : null;
+  const cellChrome = active && !isCellEditing && !readonly ? (
+    <span
+      className="akdb-cell-fill-handle"
+      role="presentation"
+      onPointerDown={onFillPointerDown}
+    />
+  ) : null;
   if (!column) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}</td>;
   if (column.type === 'checkbox') {
     const disabled = readonly || column.readonly;
@@ -3280,10 +3651,11 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
         >
           <CheckboxDisplay checked={checked} styleType={styleType} />
         </button>
+        {cellChrome}
       </td>
     );
   }
-  if (readonly || column.readonly) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}</td>;
+  if (readonly || column.readonly) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}{cellChrome}</td>;
   if (column.type === 'select' || column.type === 'status') {
     const options = (column.config?.options || []) as Array<{ id: string; value: string }>;
     return (
@@ -3298,7 +3670,7 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
           onReorder={onReorderOption}
           onUpdateOption={onUpdateOption}
           onDeleteOption={onDeleteOption}
-          onUpdateConfig={onUpdateOptionConfig}
+          onOpenChange={(open) => onEditStateChange?.(open)}
           onEditProperty={onEditProperty ? () => {
             if (cellRef.current) onEditProperty(cellRef.current);
           } : undefined}
@@ -3307,6 +3679,7 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
             onChange(next);
           }}
         />
+        {cellChrome}
       </td>
     );
   }
@@ -3331,9 +3704,10 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
           onReorder={onReorderOption}
           onUpdateOption={onUpdateOption}
           onDeleteOption={onDeleteOption}
-          onUpdateConfig={onUpdateOptionConfig}
+          onOpenChange={(open) => onEditStateChange?.(open)}
           onChange={changeIDs}
         />
+        {cellChrome}
       </td>
     );
   }
@@ -3348,6 +3722,7 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
           onClick={() => {
             updateFocusRect();
             setDatePickerOpen((next) => !next);
+            onEditStateChange?.(true);
           }}
           aria-haspopup="dialog"
           aria-expanded={datePickerOpen}
@@ -3355,21 +3730,30 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
           {display || <span className="akdb-date-cell-empty" />}
         </button>
         {focusOverlay}
+        {cellChrome}
         {datePickerOpen && datePickerRect && createPortal(
-          <DateTimePicker
-            value={local}
-            column={column}
-            style={datePickerRect}
-            onChange={(next) => {
-              setLocal(next);
-              onChange(next);
-            }}
-            onUpdateConfig={(patch) => void onUpdateColumnConfig?.(patch)}
-            onClose={() => {
+          <>
+            <CellPopupMask onClose={() => {
               setDatePickerOpen(false);
               setFocusRect(null);
-            }}
-          />,
+              onEditStateChange?.(false);
+            }} />
+            <DateTimePicker
+              value={local}
+              column={column}
+              style={datePickerRect}
+              onChange={(next) => {
+                setLocal(next);
+                onChange(next);
+              }}
+              onUpdateConfig={(patch) => void onUpdateColumnConfig?.(patch)}
+              onClose={() => {
+                setDatePickerOpen(false);
+                setFocusRect(null);
+                onEditStateChange?.(false);
+              }}
+            />
+          </>,
           document.body,
         )}
       </td>
@@ -3382,9 +3766,10 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
   if (column.type === 'number' && !editing && (column.config?.display_as === 'bar' || column.config?.display_as === 'ring')) {
     return (
       <td {...tdProps('akdb-number-visual-cell')} ref={cellRef}>
-        <button type="button" className="akdb-number-visual-btn" onClick={() => setEditing(true)}>
+        <button type="button" className="akdb-number-visual-btn" onClick={() => { setEditing(true); onEditStateChange?.(true); }}>
           <NumberVisualValue value={local} column={column} />
         </button>
+        {cellChrome}
       </td>
     );
   }
@@ -3396,6 +3781,7 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
         ref={cellRef}
         onClick={() => {
           setEditing(true);
+          onEditStateChange?.(true);
           requestAnimationFrame(() => {
             inputRef.current?.focus();
             inputRef.current?.select();
@@ -3422,14 +3808,19 @@ function EditableCell({ value, column, align, readonly, onChange, onCreateOption
     );
   }
   const commitValue = () => {
+    if (skipNextCommitRef.current) {
+      skipNextCommitRef.current = false;
+      setLocal(value);
+      return;
+    }
     const next = column.type === 'number' ? normalizeNumberValue(local, column) : local;
     if (next !== local) setLocal(next);
     if (next !== value) onChange(next);
   };
-  return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input ref={inputRef} value={inputValue} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={() => { setEditing(true); updateFocusRect(); }} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setEditing(false); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); }} />{focusOverlay}</td>;
+  return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input ref={inputRef} value={inputValue} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={() => { setEditing(true); onEditStateChange?.(true); updateFocusRect(); }} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setEditing(false); onEditStateChange?.(false); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); skipNextCommitRef.current = true; setLocal(value); setEditing(false); onEditStateChange?.(false); setFocusRect(null); (e.currentTarget as HTMLInputElement).blur(); } }} />{focusOverlay}{cellChrome}</td>;
 }
 
-function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onUpdateConfig, onEditProperty }: { value: string; options: any[]; config: Record<string, any>; isStatus?: boolean; anchorRef?: RefObject<HTMLElement>; onChange: (value: string) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: () => void }) {
+function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange, onEditProperty }: { value: string; options: any[]; config: Record<string, any>; isStatus?: boolean; anchorRef?: RefObject<HTMLElement>; onChange: (value: string) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void; onEditProperty?: () => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -3473,6 +3864,9 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
     setQuery('');
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [onOpenChange, open]);
   const selectOption = (optionID: string) => {
     onChange(optionID);
     setOpen(false);
@@ -3572,6 +3966,11 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
         )}
       </button>
       {open && menuRect && createPortal(
+        <>
+        <CellPopupMask onClose={() => {
+          setEditingOptionID(null);
+          setOpen(false);
+        }} />
         <div className={`akdb-option-menu akdb-option-select-menu ${isStatus ? 'is-status' : ''}`} role="dialog" tabIndex={-1} style={menuRect}>
           <div className="akdb-option-combobox" role="combobox" aria-expanded="true" aria-haspopup="listbox">
             {selected && !query && <OptionTag option={selected} config={config} removable onRemove={() => onChange('')} />}
@@ -3587,7 +3986,11 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
                   if (canCreate) createAndSelect();
                   else if (filteredOptions[0]) selectOption(filteredOptions[0].id);
                 }
-                if (event.key === 'Escape') setOpen(false);
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setOpen(false);
+                }
                 if (event.key === 'Backspace' && !query && selected) onChange('');
               }}
             />
@@ -3689,14 +4092,15 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
             />,
             document.body,
           )}
-        </div>,
+        </div>
+        </>,
         document.body,
       )}
     </div>
   );
 }
 
-function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onUpdateConfig }: { ids: string[]; options: any[]; config: Record<string, any>; anchorRef?: RefObject<HTMLElement>; onChange: (ids: string[]) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateConfig?: (patch: Record<string, any>) => Promise<void> }) {
+function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange }: { ids: string[]; options: any[]; config: Record<string, any>; anchorRef?: RefObject<HTMLElement>; onChange: (ids: string[]) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -3741,6 +4145,9 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
     setQuery('');
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [onOpenChange, open]);
   const toggleOption = (optionID: string) => {
     if (selectedIDs.has(optionID)) onChange(ids.filter((id) => id !== optionID));
     else onChange([...ids, optionID]);
@@ -3841,6 +4248,11 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
         )}
       </button>
       {open && menuRect && createPortal(
+        <>
+        <CellPopupMask onClose={() => {
+          setEditingOptionID(null);
+          setOpen(false);
+        }} />
         <div className="akdb-option-menu akdb-option-select-menu" role="dialog" tabIndex={-1} style={menuRect}>
           <div className="akdb-option-combobox" role="combobox" aria-expanded="true" aria-haspopup="listbox">
             {!query && selectedOptions.map((option: any) => (
@@ -3864,7 +4276,11 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
                   if (canCreate) createAndSelect();
                   else if (filteredOptions[0]) toggleOption(filteredOptions[0].id);
                 }
-                if (event.key === 'Escape') setOpen(false);
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setOpen(false);
+                }
                 if (event.key === 'Backspace' && !query && ids.length) onChange(ids.slice(0, -1));
               }}
             />
@@ -3949,10 +4365,25 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
             />,
             document.body,
           )}
-        </div>,
+        </div>
+        </>,
         document.body,
       )}
     </div>
+  );
+}
+
+function CellPopupMask({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="akdb-cell-popup-mask"
+      aria-hidden="true"
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
+    />
   );
 }
 

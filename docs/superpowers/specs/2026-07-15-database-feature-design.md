@@ -785,20 +785,27 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 - 视图设置菜单
 - 列显示 / 隐藏菜单
 - 图标选择器的按钮、搜索框、随机按钮和图标网格
+- 行菜单 / 行右键菜单 / 行 handler 菜单
+- database block handler 菜单中的 database 专属项（编辑图标、锁定数据库等）
+- 筛选、排序、视图设置、属性编辑、日期/时间/时区选择等所有 database 浮层
+
+新增或修改 database UI 前必须先检查本节。不能等视觉偏差出现后再逐个组件补丁式调字号、颜色、粗细。
 
 统一视觉基准：
 
 | 项 | 规范 |
 | --- | --- |
-| 主文字色 | `#37352f` |
-| 次级文字色 | `#787774` |
-| 主图标色 | 与主文字同色，接近 Notion `c-icoPri` |
-| 次级图标色 | `#8f8e8a` / `#9b9a97`，只用于辅助图标、说明、禁用态 |
+| 主文字色 | 优先使用 `--akdb-menu-text`，对应 Notion `--c-texPri`，当前基准为 `#2c2c2b`；不要使用纯黑 |
+| 操作菜单文字色 | 行菜单 / block handler 这类动作菜单可使用 `#37352f`，但字号、粗细、图标尺寸仍必须遵守本表 |
+| 次级文字色 | 优先使用 `--akdb-menu-text-secondary`，对应 Notion `--c-texSec`，当前基准为 `#7d7a75` |
+| 三级文字色 | 优先使用 `--akdb-menu-text-tertiary`，对应 Notion `--c-texTer`，当前基准为 `#a19e99` |
+| 主图标色 | 优先使用 `--akdb-menu-icon`，对应 Notion `--c-icoPri`，当前基准为 `#383836` |
+| 次级图标色 | 优先使用 `--akdb-menu-icon-secondary` / `--akdb-menu-icon-tertiary`，只用于辅助图标、说明、禁用态 |
 | 菜单背景 | `#fff` |
 | 输入框背景 | `#faf9f8` |
-| hover / active 背景 | `#f3f2f0` 或同级 Notion hover 色，不允许每个菜单单独发明 |
-| 菜单边框 | `rgba(55,53,47,.12)` |
-| 分割线 | `rgba(55,53,47,.10)` |
+| hover / active 背景 | 优先使用 `--akdb-menu-hover-bg`，对应 Notion `--ca-bacTerTra`，当前基准为 `rgba(42,28,0,.07)`；不允许每个菜单单独发明 |
+| 菜单边框 | 优先使用 `--akdb-menu-border`，对应 Notion `--ca-borPriTra`，当前基准为 `rgba(28,19,1,.11)` |
+| 分割线 | 优先使用 `--akdb-menu-divider`，对应 Notion `--ca-borSecTra`，当前基准为 `rgba(42,28,0,.07)` |
 | 菜单圆角 | 8px |
 | 控件圆角 | 6px |
 | 菜单项圆角 | 5px |
@@ -806,14 +813,21 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 | 输入 / 图标按钮高度 | 28px |
 | 普通菜单项高度 | 30px |
 | 菜单文字 | 14px / 400，`line-height: 1.2` |
-| 默认类型图标尺寸 | 18px，居中，`fill: currentColor` |
+| 菜单项文字 | 14px / 400；紧凑动作菜单可用 `line-height: 1.5`，但不得加粗 |
+| 章节标题 / 分组标题 | 12px / 500 / 20px，使用 `--akdb-menu-text-secondary` 或 `--akdb-menu-text-tertiary` |
+| 普通 lucide 动作图标 | 16px，`stroke-width: 2`，颜色用次级图标色；不要被全局 `--akdb-menu-icon-size: 18px` 强制放大 |
+| property type 默认图标 | 18px 视觉盒，内部 SVG 16px，可用 `transform: scale(1.2)`；只用于字段类型图标，不用于普通菜单动作 |
+| switch | 26px × 14px 轨道 + 2px padding，白色 14px 圆点；切换不应关闭父菜单，除非该菜单项本身是导航/确认动作 |
 
 实现约束：
 
 - `frontend/src/components/Editor/database/database.css` 应维护一组 database 菜单级 CSS 变量，例如 `--akdb-menu-text`、`--akdb-menu-icon`、`--akdb-menu-hover-bg`、`--akdb-menu-item-height`。新增 database 菜单必须优先复用这些变量。
+- 新增或修改 database 菜单前，必须先搜索 `database.css` 中是否已有同类 class：`akdb-row-context-*`、`akdb-column-menu-*`、`akdb-view-settings-*`、`akdb-option-*`、`akdb-filter-*`、`akdb-view-rule-*`。能复用就复用，不能复用时再扩展统一 token。
 - 列宽、隐藏、只读、对齐等视图显示属性属于 `<view><column><rule ... /></column></view>` 中的 view column rule，例如 `align="left|center|right"`，不写入数据源 `config.json` 的 column schema。不同 view 可以对同一个数据源列使用不同显示属性。
 - 不要在 JSX inline style 或单个 class 中临时写一套新的菜单尺寸、字号、粗细、圆角、图标颜色。
 - 新菜单如果视觉上需要差异，必须先判断它是否仍属于 database menu/popup 范畴；属于则扩展统一 token，而不是局部硬编码。
+- 行右键菜单属于普通动作菜单：宽度默认 220px，菜单项 30px 高，文字 14px / 400，lucide 图标 16px / 次级图标色。不要添加搜索框、group 标题或额外分组，除非该菜单的操作数量真的超过普通动作菜单承载范围。
+- database block handler 菜单属于 block 动作菜单，但 database 专属项仍要服从本节：普通动作图标 20px 容器内绘制，视觉重量不能重于普通 handler 图标；`锁定数据库` 的 switch 点击只切换状态，菜单不关闭。
 - 添加列菜单、列头菜单、更改类型二级菜单、编辑属性二级菜单必须保持一致的字号、行高、hover、图标颜色和图标尺寸。对齐方式属于编辑属性二级菜单的一部分，不要单独放回主列菜单。添加列菜单可以因双列布局保持 360px 宽，但内部 item 规格必须和其他菜单一致。
 - 类型默认图标以 Notion property type DOM 为准：`description`、`hashtag`、`arrow-circle-down`、`list/checkmark-list`、`burst`、`calendar`、`checkmark-square`、`link`、`formula`、`arrow-northeast` 等。项目内没有 `/icons/*.svg` 静态资源时，应映射到本地 `columnIcons.ts` 中同源或近似的 SVG path，而不是退回文字占位。
 - 图标 picker 里用户可选的图标列表仍使用 Notion 风格 SVG 图标库；列默认图标和用户自定义列图标都应通过统一的 `ColumnIconGlyph` 渲染。

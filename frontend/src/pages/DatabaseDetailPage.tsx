@@ -933,7 +933,7 @@ function OptionsEditor({ config, setConfig, defaultShape = 'pill' }: { config: R
   const addOption = () => {
     setConfig({
       ...config,
-      options: [...options, { id: crypto.randomUUID(), value: '新选项', color: 'gray', icon: 'none', shape: 'plain', color_mode: 'background' }],
+      options: [...options, { id: crypto.randomUUID(), value: '新选项', color: 'gray', icon: 'none', shape: defaultShape, color_mode: 'background' }],
     });
   };
   return (

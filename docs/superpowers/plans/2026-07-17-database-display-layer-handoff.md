@@ -85,6 +85,23 @@
 - 默认值不要放在源数据库定义里，后续应考虑放到展示 / 录入层处理。
 - 关联功能暂时不要继续设计，之后单独处理。
 
+### Database UI 修改前强制检查清单
+
+后续任何 agent 修改 database view / database block / database menu / database popup 前，必须先阅读原始规格 `docs/superpowers/specs/2026-07-15-database-feature-design.md` 的 `9.7 Database UI 统一菜单规范`。这不是参考建议，而是实现约束。
+
+每次新增或调整 database UI 时先检查：
+
+- 是否属于 database 菜单 / dropdown / popup / dialog / row context menu / block handler menu；属于则必须复用 `database.css` 的 `--akdb-menu-*` token 或 §9.7 中明确的动作菜单例外。
+- 字体是否符合对应层级：普通菜单项 14px / 400；分组标题 12px / 500；option tag 预览 13px / 400；不要临时加粗或改成纯黑。
+- 颜色是否来自统一 token：主文字、次级文字、三级文字、主图标、次级图标、hover、border、divider 都必须先用 `--akdb-menu-*`；不要在单个组件里硬编码一套新颜色。
+- 图标是否用对尺寸：普通 lucide 动作图标 16px；property type 图标使用 `ColumnIconGlyph` / Notion-like SVG，视觉盒 18px；不要把动作菜单图标强制放大到 property type 尺寸。
+- 菜单项尺寸是否稳定：普通 item 30px 高，control 28px 高，hover / active / selected 不得引发布局跳动。
+- 行菜单是普通动作菜单：默认 220px 宽、无搜索框、无 group 标题、无多余分组；除非操作数量增加到确实需要分组。
+- switch 类状态项点击后是否应该保持父菜单打开。Notion-like 设置项通常点击 switch 只切换状态，不关闭菜单。
+- 浮层是否通过 portal 挂到 `document.body`，且 z-index 不被表格、单元格编辑器或属性编辑菜单遮挡。
+- 任何确认、删除、警告、覆盖交互是否使用应用内自定义 dialog；绝不使用浏览器原生 `alert` / `confirm` / `prompt`。
+- 改动完成后至少运行 `git diff --check`；除非用户明确允许，不要随手跑完整 build。
+
 ## 接下来展示层建议优先级
 
 1. 表格视图继续打磨
