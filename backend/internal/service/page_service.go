@@ -2,6 +2,7 @@ package service
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -37,6 +38,8 @@ type PageService struct {
 	// gitSync is optional; when set, file writes notify the worker so auto-commit
 	// can pick them up. Safe to leave nil (default) — the hook becomes a no-op.
 	gitSync *GitSyncWorker
+
+	databaseTrashRestorer func(spaceSlug, trashRelPath string, trash frontmatter.DatabaseTrashData, spaceID int) (*model.Page, error)
 }
 
 // lockPage returns a deferred-call that unlocks the per-page mutex.
@@ -56,6 +59,10 @@ func (s *PageService) lockPage(pageID string) func() {
 // SetGitSyncWorker wires the auto-commit worker. Optional; call once at startup.
 func (s *PageService) SetGitSyncWorker(w *GitSyncWorker) {
 	s.gitSync = w
+}
+
+func (s *PageService) SetDatabaseTrashRestorer(restorer func(spaceSlug, trashRelPath string, trash frontmatter.DatabaseTrashData, spaceID int) (*model.Page, error)) {
+	s.databaseTrashRestorer = restorer
 }
 
 // markGitDirty notifies the auto-commit worker (if configured) that this space
@@ -876,10 +883,22 @@ func (s *PageService) UploadAsset(spaceSlug string, pageID string, filename stri
 // --- Trash ---
 
 type TrashedItem struct {
-	Name       string `json:"name"`
-	TrashPath  string `json:"trash_path"`
-	ParentPath string `json:"parent_path"`
-	FileName   string `json:"file_name"`
+	Name                    string                    `json:"name"`
+	TrashPath               string                    `json:"trash_path"`
+	ParentPath              string                    `json:"parent_path"`
+	FileName                string                    `json:"file_name"`
+	Type                    string                    `json:"type,omitempty"`
+	DatabaseID              string                    `json:"database_id,omitempty"`
+	DatabaseName            string                    `json:"database_name,omitempty"`
+	RowID                   string                    `json:"row_id,omitempty"`
+	PageExistedBeforeDelete bool                      `json:"page_existed_before_delete"`
+	RowPreview              []TrashedDatabaseRowField `json:"row_preview,omitempty"`
+}
+
+type TrashedDatabaseRowField struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 func (s *PageService) ListTrash(spaceSlug string) ([]TrashedItem, error) {
@@ -911,12 +930,14 @@ func (s *PageService) ListTrash(spaceSlug string) ([]TrashedItem, error) {
 
 		trashRelPath := filepath.Join(spaceSlug, ".trash", relPath)
 
-		items = append(items, TrashedItem{
+		item := TrashedItem{
 			Name:       pageName,
 			TrashPath:  trashRelPath,
 			ParentPath: parentPath,
 			FileName:   fileName,
-		})
+		}
+		s.enrichDatabaseTrashItem(spaceSlug, path, &item)
+		items = append(items, item)
 		return nil
 	})
 	if err != nil {
@@ -928,16 +949,157 @@ func (s *PageService) ListTrash(spaceSlug string) ([]TrashedItem, error) {
 	return items, nil
 }
 
+func (s *PageService) enrichDatabaseTrashItem(spaceSlug, path string, item *TrashedItem) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	fm, _, err := frontmatter.Parse(raw)
+	if err != nil || fm.DatabaseTrash == nil || fm.DatabaseTrash.Type != "database_row" {
+		return
+	}
+	trash := fm.DatabaseTrash
+	item.Type = trash.Type
+	item.DatabaseID = trash.DatabaseID
+	item.DatabaseName = trash.DatabaseName
+	item.RowID = trash.RowID
+	item.PageExistedBeforeDelete = trash.PageExistedBeforeDelete
+	if title := strings.TrimSpace(fm.Title); title != "" {
+		item.Name = title
+	} else if title := trashTitleFromValues(trash.RowValues); title != "" {
+		item.Name = title
+	} else if trash.RowID != "" {
+		item.Name = trash.RowID
+	}
+	item.RowPreview = s.databaseTrashRowPreview(spaceSlug, *trash)
+}
+
+func (s *PageService) databaseTrashRowPreview(spaceSlug string, trash frontmatter.DatabaseTrashData) []TrashedDatabaseRowField {
+	values := trash.RowValues
+	if len(values) == 0 {
+		return nil
+	}
+	cfg := s.readDatabaseTrashConfig(spaceSlug, trash.DatabaseDir)
+	displayValues := trash.RowDisplayValues
+	preview := make([]TrashedDatabaseRowField, 0, 4)
+	seen := map[string]bool{}
+	if cfg != nil {
+		for _, col := range cfg.Columns {
+			if isSystemDatabaseTrashPreviewColumn(col) {
+				continue
+			}
+			value := databaseTrashPreviewValue(col, values[col.ID], displayValues)
+			if value == "" {
+				continue
+			}
+			preview = append(preview, TrashedDatabaseRowField{ID: col.ID, Name: col.Name, Value: value})
+			seen[col.ID] = true
+			if len(preview) >= 4 {
+				return preview
+			}
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		if seen[key] || isSystemDatabaseTrashPreviewField(key) || strings.TrimSpace(value) == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := strings.TrimSpace(values[key])
+		if displayValues != nil {
+			if display := strings.TrimSpace(displayValues[key]); display != "" {
+				value = display
+			}
+		}
+		preview = append(preview, TrashedDatabaseRowField{ID: key, Name: key, Value: value})
+		if len(preview) >= 4 {
+			break
+		}
+	}
+	return preview
+}
+
+func databaseTrashPreviewValue(col model.DatabaseColumn, raw string, displayValues map[string]string) string {
+	if displayValues != nil {
+		if display := strings.TrimSpace(displayValues[col.ID]); display != "" {
+			return display
+		}
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	return strings.TrimSpace(databaseColumnDisplayValue(col, raw))
+}
+
+func isSystemDatabaseTrashPreviewColumn(col model.DatabaseColumn) bool {
+	return col.Readonly || col.Auto || isSystemDatabaseTrashPreviewField(col.ID) || isSystemDatabaseTrashPreviewField(col.Type)
+}
+
+func isSystemDatabaseTrashPreviewField(value string) bool {
+	switch value {
+	case "uuid", "created_time", "last_edited_time", "last_edited_user", "linked":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *PageService) readDatabaseTrashConfig(spaceSlug, databaseDir string) *model.DatabaseConfig {
+	if strings.TrimSpace(databaseDir) == "" {
+		return nil
+	}
+	spaceDir, _ := s.resolveSpaceDir(spaceSlug)
+	if spaceDir == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(spaceDir, "_database", databaseDir, "config.json"))
+	if err != nil {
+		return nil
+	}
+	var cfg model.DatabaseConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil
+	}
+	return &cfg
+}
+
+func trashTitleFromValues(values map[string]string) string {
+	if values == nil {
+		return ""
+	}
+	if title := strings.TrimSpace(values["title"]); title != "" {
+		return title
+	}
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func (s *PageService) RestoreFromTrash(spaceSlug string, trashRelPath string, spaceID int) (*model.Page, error) {
 	s.markGitDirty(spaceSlug)
-	repo, err := s.getRepo(spaceSlug)
-	if err != nil {
-		return nil, err
-	}
-
 	trashAbsPath := filepath.Join(s.docsDir, trashRelPath)
 	if _, err := os.Stat(trashAbsPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("trashed item not found")
+	}
+	if s.databaseTrashRestorer != nil {
+		if raw, err := os.ReadFile(trashAbsPath); err == nil {
+			fm, _, _ := frontmatter.Parse(raw)
+			if fm.DatabaseTrash != nil && fm.DatabaseTrash.Type == "database_row" {
+				return s.databaseTrashRestorer(spaceSlug, trashRelPath, *fm.DatabaseTrash, spaceID)
+			}
+		}
+	}
+
+	repo, err := s.getRepo(spaceSlug)
+	if err != nil {
+		return nil, err
 	}
 
 	fileName := filepath.Base(trashRelPath)

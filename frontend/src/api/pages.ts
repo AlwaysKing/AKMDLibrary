@@ -42,6 +42,16 @@ export interface TrashedItem {
   trash_path: string;
   parent_path: string;
   file_name: string;
+  type?: 'database_row' | string;
+  database_id?: string;
+  database_name?: string;
+  row_id?: string;
+  page_existed_before_delete?: boolean;
+  row_preview?: Array<{
+    id: string;
+    name: string;
+    value: string;
+  }>;
 }
 
 export const pagesApi = {

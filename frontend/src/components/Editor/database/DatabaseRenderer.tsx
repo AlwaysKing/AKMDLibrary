@@ -39,6 +39,7 @@ import './database.css';
 interface Props {
   spaceSlug: string;
   dbId: string;
+  blockId?: string;
   view?: DatabaseViewConfig;
   readonly?: boolean;
   columnControls?: boolean;
@@ -48,9 +49,10 @@ interface Props {
   onOpenRow?: (rowId: string) => void;
   onViewChange?: (view: DatabaseViewConfig) => void;
   onOpenViewSettings?: (pane: 'main' | 'visibility') => void;
+  onSelectionChange?: (count: number) => void;
 }
 
-export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings }: Props) {
+export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange }: Props) {
   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
   const [rows, setRows] = useState<DatabaseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +63,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   const [deletingColumn, setDeletingColumn] = useState(false);
   const [rowContextMenu, setRowContextMenu] = useState<{ row: DatabaseRow; top: number; left: number } | null>(null);
   const rowContextMenuRef = useRef<HTMLDivElement | null>(null);
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const [selectedRowIDs, setSelectedRowIDs] = useState<Set<string>>(() => new Set());
+  const [hoveredRowID, setHoveredRowID] = useState<string | null>(null);
+  const [rowDragState, setRowDragState] = useState<{ sourceRowID: string; targetRowID: string; sourceIndex: number; targetIndex: number; placement: 'before' | 'after' } | null>(null);
+  const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
+  const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
+  const [deletingRows, setDeletingRows] = useState(false);
   const [columnDragState, setColumnDragState] = useState<{
     sourceIndex: number;
     targetIndex: number;
@@ -76,6 +85,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   } | null>(null);
   const [columnWidthDrafts, setColumnWidthDrafts] = useState<Record<string, number>>({});
   const columnDragStateRef = useRef<typeof columnDragState>(null);
+  const rowDragStateRef = useRef<typeof rowDragState>(null);
   const resizeColumnRef = useRef<{ id: string; startX: number; startWidth: number } | null>(null);
   const addColumnButtonRef = useRef<HTMLButtonElement | null>(null);
   const columnMenuAnchorRef = useRef<HTMLElement | null>(null);
@@ -139,11 +149,137 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
     if (activeView.limit && activeView.limit > 0) items = items.slice(0, activeView.limit);
     return items;
   }, [activeView, rows, schema, visibleColumns]);
+  const displayRowIDs = useMemo(() => displayRows.map(({ row }) => row.uuid), [displayRows]);
+
+  useEffect(() => {
+    const visible = new Set(displayRowIDs);
+    setSelectedRowIDs((current) => {
+      const next = new Set(Array.from(current).filter((id) => visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [displayRowIDs]);
+
+  useEffect(() => {
+    if (readonly) setSelectedRowIDs(new Set());
+  }, [readonly]);
+
+  useEffect(() => {
+    if (!selectedRowIDs.size) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedRowIDs(new Set());
+        return;
+      }
+      if (event.key !== 'Backspace' && event.key !== 'Delete') return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      requestDeleteSelectedRows();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRowIDs, readonly, spaceSlug, dbId]);
+
+  useEffect(() => {
+    onSelectionChange?.(selectedRowIDs.size);
+  }, [onSelectionChange, selectedRowIDs.size]);
+
+  useEffect(() => {
+    return () => onSelectionChange?.(0);
+  }, [onSelectionChange]);
+
+  useEffect(() => {
+    document.body.classList.toggle('akdb-row-selection-active', selectedRowIDs.size > 0);
+    return () => document.body.classList.remove('akdb-row-selection-active');
+  }, [selectedRowIDs.size]);
+
+  useEffect(() => {
+    const handleEditorDragSelect = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        blockId?: string;
+        mode: 'rows' | 'block' | 'clear';
+        rect?: { left: number; right: number; top: number; bottom: number };
+      }>).detail;
+      if (!detail) return;
+      if (detail.mode === 'clear') {
+        setSelectedRowIDs(new Set());
+        return;
+      }
+      if (!blockId || detail.blockId !== blockId) return;
+      if (detail.mode === 'block') {
+        setSelectedRowIDs(new Set());
+        return;
+      }
+      if (!detail.rect) return;
+      const next = new Set<string>();
+      tableWrapRef.current?.querySelectorAll<HTMLTableRowElement>('tr[data-akdb-row-id]').forEach((rowEl) => {
+        const rect = rowEl.getBoundingClientRect();
+        if (
+          detail.rect!.left < rect.right &&
+          detail.rect!.right > rect.left &&
+          detail.rect!.top < rect.bottom &&
+          detail.rect!.bottom > rect.top
+        ) {
+          const id = rowEl.dataset.akdbRowId;
+          if (id) next.add(id);
+        }
+      });
+      setSelectedRowIDs(next);
+    };
+    document.addEventListener('akdb-editor-drag-select', handleEditorDragSelect);
+    return () => document.removeEventListener('akdb-editor-drag-select', handleEditorDragSelect);
+  }, [blockId]);
+
+  useEffect(() => {
+    const handleDeleteSelectedRows = (event: Event) => {
+      const detail = (event as CustomEvent<{ blockId?: string }>).detail;
+      if (!blockId || detail?.blockId !== blockId) return;
+      requestDeleteSelectedRows();
+    };
+    document.addEventListener('akdb-delete-selected-rows', handleDeleteSelectedRows);
+    return () => document.removeEventListener('akdb-delete-selected-rows', handleDeleteSelectedRows);
+  }, [blockId, selectedRowIDs, readonly, spaceSlug, dbId]);
+
+  useEffect(() => {
+    const handleDeleteActiveSelectedRows = () => {
+      if (!selectedRowIDs.size) return;
+      requestDeleteSelectedRows();
+    };
+    document.addEventListener('akdb-delete-active-selected-rows', handleDeleteActiveSelectedRows);
+    return () => document.removeEventListener('akdb-delete-active-selected-rows', handleDeleteActiveSelectedRows);
+  }, [selectedRowIDs, readonly]);
 
   const createRow = async (defaults: Record<string, string> = {}) => {
     if (readonly) return;
     await databasesApi.createRow(spaceSlug, dbId, defaults);
     await refresh();
+  };
+
+  const createRowBelow = async (rowID: string) => {
+    if (readonly) return;
+    const created = await databasesApi.createRow(spaceSlug, dbId, {});
+    const ordered = rows.map((row) => row.uuid);
+    const next = ordered.filter((id) => id !== created.uuid);
+    const index = next.indexOf(rowID);
+    if (index === -1) {
+      next.push(created.uuid);
+    } else {
+      next.splice(index + 1, 0, created.uuid);
+    }
+    const reordered = await databasesApi.reorderRows(spaceSlug, dbId, next);
+    setRows(reordered.rows || []);
+  };
+
+  const reorderRows = async (sourceRowID: string, targetRowID: string, placement: 'before' | 'after' = 'before') => {
+    if (readonly || sourceRowID === targetRowID) return;
+    const ordered = rows.map((row) => row.uuid);
+    const next = ordered.filter((id) => id !== sourceRowID);
+    const targetIndex = next.indexOf(targetRowID);
+    if (targetIndex === -1) return;
+    next.splice(placement === 'after' ? targetIndex + 1 : targetIndex, 0, sourceRowID);
+    const reordered = await databasesApi.reorderRows(spaceSlug, dbId, next);
+    setRows(reordered.rows || []);
   };
 
   useEffect(() => {
@@ -176,16 +312,34 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
 
   const closeRowContextMenu = () => setRowContextMenu(null);
 
-  const openRowContextMenu = (row: DatabaseRow, event: ReactMouseEvent<HTMLElement>) => {
+  const clearEditorBlockSelection = () => {
+    document.dispatchEvent(new CustomEvent('akdb-clear-block-selection'));
+  };
+
+  const toggleRowSelection = (rowID: string) => {
+    clearEditorBlockSelection();
+    setSelectedRowIDs((current) => {
+      const next = new Set(current);
+      if (next.has(rowID)) next.delete(rowID);
+      else next.add(rowID);
+      return next;
+    });
+  };
+
+  const openRowContextMenuAt = (row: DatabaseRow, clientX: number, clientY: number) => {
     if (readonly) return;
-    event.preventDefault();
-    event.stopPropagation();
     closeColumnMenu();
     setRowContextMenu({
       row,
-      left: Math.max(8, Math.min(event.clientX, window.innerWidth - 320)),
-      top: Math.max(8, Math.min(event.clientY, window.innerHeight - 360)),
+      left: Math.max(8, Math.min(clientX, window.innerWidth - 320)),
+      top: Math.max(8, Math.min(clientY, window.innerHeight - 360)),
     });
+  };
+
+  const openRowContextMenu = (row: DatabaseRow, event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openRowContextMenuAt(row, event.clientX, event.clientY);
   };
 
   const copyRowLink = async (row: DatabaseRow) => {
@@ -202,10 +356,105 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   };
 
   const deleteRowById = async (rowId: string) => {
-    if (readonly) return;
-    await databasesApi.deleteRow(spaceSlug, dbId, rowId);
-    setRows((prev) => prev.filter((row) => row.uuid !== rowId));
     closeRowContextMenu();
+    requestDeleteRows([rowId]);
+  };
+
+  function requestDeleteRows(rowIDs: string[]) {
+    if (readonly) return;
+    const ids = rowIDs.filter(Boolean);
+    if (ids.length === 0) return;
+    setPendingDeleteRows(ids);
+  };
+
+  function requestDeleteSelectedRows() {
+    if (readonly || selectedRowIDs.size === 0) return;
+    requestDeleteRows(Array.from(selectedRowIDs));
+  }
+
+  async function confirmDeleteRows() {
+    if (readonly || !pendingDeleteRows?.length) return;
+    setDeletingRows(true);
+    const ids = pendingDeleteRows;
+    const idSet = new Set(ids);
+    try {
+      await Promise.all(ids.map((rowId) => databasesApi.deleteRow(spaceSlug, dbId, rowId)));
+      setRows((prev) => prev.filter((row) => !idSet.has(row.uuid)));
+      setSelectedRowIDs((current) => new Set(Array.from(current).filter((id) => !idSet.has(id))));
+      setPendingDeleteRows(null);
+      closeRowContextMenu();
+    } finally {
+      setDeletingRows(false);
+    }
+  }
+
+  const beginRowDrag = (row: DatabaseRow, index: number, event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || readonly) return;
+    const rowEl = tableWrapRef.current?.querySelector<HTMLTableRowElement>(`tr[data-akdb-row-id="${CSS.escape(row.uuid)}"]`);
+    if (!rowEl) return;
+    const rowRect = rowEl.getBoundingClientRect();
+    const previewCells = Array.from(rowEl.cells).map((cell) => {
+      const rect = cell.getBoundingClientRect();
+      return { width: rect.width, text: cell.innerText };
+    });
+    const pointerOffsetY = event.clientY - rowRect.top;
+    event.preventDefault();
+    event.stopPropagation();
+    closeRowContextMenu();
+    closeColumnMenu();
+    const startClientY = event.clientY;
+    let hasDragged = false;
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      if (!hasDragged && Math.abs(moveEvent.clientY - startClientY) > 4) {
+        hasDragged = true;
+        setRowDragState({ sourceRowID: row.uuid, targetRowID: row.uuid, sourceIndex: index, targetIndex: index, placement: 'before' });
+        rowDragStateRef.current = { sourceRowID: row.uuid, targetRowID: row.uuid, sourceIndex: index, targetIndex: index, placement: 'before' };
+        setRowDragPreview({
+          left: rowRect.left,
+          top: moveEvent.clientY - pointerOffsetY,
+          width: rowRect.width,
+          height: rowRect.height,
+          cells: previewCells,
+        });
+      }
+      if (!hasDragged) return;
+      moveEvent.preventDefault();
+      setRowDragPreview((current) => current ? { ...current, top: moveEvent.clientY - pointerOffsetY } : current);
+      const rowsEls = Array.from(tableWrapRef.current?.querySelectorAll<HTMLTableRowElement>('tr[data-akdb-row-id]') || []);
+      let targetIndex = Math.max(0, rowsEls.length - 1);
+      let targetRowID = rowsEls[targetIndex]?.dataset.akdbRowId || row.uuid;
+      let placement: 'before' | 'after' = 'after';
+      for (let i = 0; i < rowsEls.length; i++) {
+        const rect = rowsEls[i].getBoundingClientRect();
+        const center = rect.top + rect.height / 2;
+        if (moveEvent.clientY <= center) {
+          targetIndex = i;
+          targetRowID = rowsEls[i].dataset.akdbRowId || row.uuid;
+          placement = 'before';
+          break;
+        }
+      }
+      const next = { sourceRowID: row.uuid, targetRowID, sourceIndex: index, targetIndex, placement };
+      rowDragStateRef.current = next;
+      setRowDragState(next);
+    };
+    const handleUp = async (upEvent: PointerEvent) => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const final = rowDragStateRef.current;
+      rowDragStateRef.current = null;
+      setRowDragState(null);
+      setRowDragPreview(null);
+      if (hasDragged && final && final.sourceRowID !== final.targetRowID) {
+        await reorderRows(final.sourceRowID, final.targetRowID, final.placement);
+      }
+      if (!hasDragged) {
+        openRowContextMenuAt(row, upEvent.clientX, upEvent.clientY);
+      }
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp, { once: true });
   };
 
   const createColumnOption = async (col: DatabaseColumn, label: string) => {
@@ -526,6 +775,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
   };
   const tableMinWidth = visibleColumns.reduce((total, column, index) => total + columnWidth(column, index), showColumnControls ? 64 : 0);
   const columnMenuColumn = columnMenuIndex == null ? undefined : visibleColumns[columnMenuIndex];
+  const selectableRowCount = displayRowIDs.length;
+  const selectedVisibleRowCount = displayRowIDs.filter((id) => selectedRowIDs.has(id)).length;
+  const allVisibleRowsSelected = selectableRowCount > 0 && selectedVisibleRowCount === selectableRowCount;
+  const someVisibleRowsSelected = selectedVisibleRowCount > 0;
+
+  const toggleAllVisibleRows = () => {
+    clearEditorBlockSelection();
+    setSelectedRowIDs(allVisibleRowsSelected ? new Set() : new Set(displayRowIDs));
+  };
 
   if (loading) return <div className="akdb-empty">加载中...</div>;
   if (!schema) return <>{missingState || <div className="akdb-empty">数据源已丢失</div>}</>;
@@ -614,95 +872,177 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
 
   return (
     <div className="akdb-frame">
-      <div className="akdb-table-wrap">
-        <table className="akdb-table" style={{ minWidth: tableMinWidth }}>
-          <colgroup>
-            {visibleColumns.map((c, index) => <col key={c.id} style={{ width: columnWidth(c, index) }} />)}
-            {showColumnControls && <col style={{ width: 64 }} />}
-            {showFillColumn && <col />}
-          </colgroup>
-          <thead
-            className={columnDragState ? 'is-column-dragging' : undefined}
-            style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
-          >
-            <tr>
-              {visibleColumns.map((c, index) => (
-                <th
-                  key={c.id}
-                  data-column-index={index}
-                  className={columnDragState?.sourceIndex === index ? 'is-dragging' : undefined}
-                  style={{ transform: columnDragTransform(index), transition: columnDragState?.sourceIndex === index ? 'none' : undefined }}
-                  onPointerDown={showColumnControls ? (event) => beginColumnDrag(index, event) : undefined}
-                  onClick={showColumnControls ? (event) => handleColumnHeaderClick(index, event) : undefined}
-                  onContextMenu={showColumnControls ? (event) => handleColumnHeaderContextMenu(index, event) : undefined}
+      <div className="akdb-table-shell">
+        {visibleColumns.length > 0 && (
+          <div className="akdb-row-gutter" aria-hidden={readonly ? 'true' : undefined}>
+            {!readonly && selectableRowCount > 0 && (
+              <div className={`akdb-row-gutter-item akdb-row-gutter-head ${someVisibleRowsSelected ? 'is-checkbox-visible' : ''}`} style={{ top: 0 }}>
+                <span className="akdb-row-selector">
+                  <button
+                    type="button"
+                    className={`akdb-row-checkbox akdb-row-select-all ${someVisibleRowsSelected ? 'is-checked' : ''}`}
+                    aria-label={allVisibleRowsSelected ? '取消选择所有行' : '选择所有行'}
+                    aria-pressed={allVisibleRowsSelected}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      toggleAllVisibleRows();
+                    }}
+                  >
+                    {allVisibleRowsSelected ? <Check size={12} strokeWidth={2.4} /> : someVisibleRowsSelected ? <span aria-hidden="true" className="akdb-row-checkbox-minus" /> : null}
+                  </button>
+                </span>
+              </div>
+            )}
+            {displayRows.map(({ row }, index) => {
+              const selected = selectedRowIDs.has(row.uuid);
+              const menuOpenForRow = rowContextMenu?.row.uuid === row.uuid;
+              const controlsVisible = hoveredRowID === row.uuid || menuOpenForRow;
+              const checkboxVisible = selected || controlsVisible;
+              const isDraggingRow = rowDragState?.sourceRowID === row.uuid;
+              return (
+                <div
+                  key={row.uuid}
+                  className={`akdb-row-gutter-item ${controlsVisible ? 'is-controls-visible' : ''} ${checkboxVisible ? 'is-checkbox-visible' : ''} ${isDraggingRow ? 'is-row-dragging' : ''}`}
+                  style={{ top: 36 + index * 36 }}
+                  onMouseEnter={() => setHoveredRowID(row.uuid)}
+                  onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
                 >
-                  <span className="akdb-col-head">
-                    <span className="akdb-col-type"><ColumnIconGlyph icon={columnIconID(c.column)} /></span>
-                    <span>{c.name}</span>
-                  </span>
-                  {showColumnControls && (
-                    <span
-                      className="akdb-col-resizer"
-                      role="separator"
-                      aria-orientation="vertical"
-                      onPointerDown={(event) => resizeColumn(event, c, index)}
+                  <span className="akdb-row-selector">
+                    <button
+                      type="button"
+                      className="akdb-row-add"
+                      aria-label="添加行"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={async (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        await createRowBelow(row.uuid);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="akdb-row-drag-handle"
+                      aria-label="拖拽排序或打开菜单"
+                      onPointerDown={(event) => beginRowDrag(row, index, event)}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
                       }}
                     />
-                  )}
-                </th>
-              ))}
-              {showColumnControls && (
-                <th className="akdb-action-cell">
-                  <span className="akdb-column-actions">
-                    <button
-                      ref={addColumnButtonRef}
-                      type="button"
-                      aria-label="新增字段"
-                      aria-haspopup="dialog"
-                      aria-expanded={addColumnOpen}
-                      onClick={() => {
-                        setAddColumnOpen((open) => !open);
-                      }}
-                    >
-                      <Plus size={16} />
-                    </button>
                     <button
                       type="button"
-                      aria-label="显示或隐藏字段"
-                      aria-haspopup="dialog"
-                      onClick={() => {
-                        setAddColumnOpen(false);
-                        onOpenViewSettings?.('visibility');
+                      className={`akdb-row-checkbox ${selected ? 'is-checked' : ''}`}
+                      aria-label="选择行"
+                      aria-pressed={selected}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        toggleRowSelection(row.uuid);
                       }}
                     >
-                      <MoreHorizontal size={16} />
+                      {selected && <Check size={12} strokeWidth={2.4} />}
                     </button>
                   </span>
-                  {addColumnOpen && addColumnMenuRect && schema && createPortal(
-                    <AddColumnMenu
-                      spaceSlug={spaceSlug}
-                      schema={schema}
-                      onCreateSource={createSourceColumn}
-                      style={addColumnMenuRect}
-                    />,
-                    document.body,
-                  )}
-                </th>
-              )}
-              {showFillColumn && <th className="akdb-fill-cell" aria-hidden="true" />}
-            </tr>
-          </thead>
-          <tbody
-            className={columnDragState ? 'is-column-dragging' : undefined}
-            style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
-          >
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div ref={tableWrapRef} className="akdb-table-wrap">
+          <table className="akdb-table" style={{ minWidth: tableMinWidth }}>
+            <colgroup>
+              {visibleColumns.map((c, index) => <col key={c.id} style={{ width: columnWidth(c, index) }} />)}
+              {showColumnControls && <col style={{ width: 64 }} />}
+              {showFillColumn && <col />}
+            </colgroup>
+            <thead
+              className={columnDragState ? 'is-column-dragging' : undefined}
+              style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
+            >
+              <tr>
+                {visibleColumns.map((c, index) => (
+                  <th
+                    key={c.id}
+                    data-column-index={index}
+                    className={columnDragState?.sourceIndex === index ? 'is-dragging' : undefined}
+                    style={{ transform: columnDragTransform(index), transition: columnDragState?.sourceIndex === index ? 'none' : undefined }}
+                    onPointerDown={showColumnControls ? (event) => beginColumnDrag(index, event) : undefined}
+                    onClick={showColumnControls ? (event) => handleColumnHeaderClick(index, event) : undefined}
+                    onContextMenu={showColumnControls ? (event) => handleColumnHeaderContextMenu(index, event) : undefined}
+                  >
+                    <span className="akdb-col-head">
+                      <span className="akdb-col-type"><ColumnIconGlyph icon={columnIconID(c.column)} /></span>
+                      <span>{c.name}</span>
+                    </span>
+                    {showColumnControls && (
+                      <span
+                        className="akdb-col-resizer"
+                        role="separator"
+                        aria-orientation="vertical"
+                        onPointerDown={(event) => resizeColumn(event, c, index)}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                      />
+                    )}
+                  </th>
+                ))}
+                {showColumnControls && (
+                  <th className="akdb-action-cell">
+                    <span className="akdb-column-actions">
+                      <button
+                        ref={addColumnButtonRef}
+                        type="button"
+                        aria-label="新增字段"
+                        aria-haspopup="dialog"
+                        aria-expanded={addColumnOpen}
+                        onClick={() => {
+                          setAddColumnOpen((open) => !open);
+                        }}
+                      >
+                        <Plus size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="显示或隐藏字段"
+                        aria-haspopup="dialog"
+                        onClick={() => {
+                          setAddColumnOpen(false);
+                          onOpenViewSettings?.('visibility');
+                        }}
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                    </span>
+                    {addColumnOpen && addColumnMenuRect && schema && createPortal(
+                      <AddColumnMenu
+                        spaceSlug={spaceSlug}
+                        schema={schema}
+                        onCreateSource={createSourceColumn}
+                        style={addColumnMenuRect}
+                      />,
+                      document.body,
+                    )}
+                  </th>
+                )}
+                {showFillColumn && <th className="akdb-fill-cell" aria-hidden="true" />}
+              </tr>
+            </thead>
+            <tbody
+              className={columnDragState ? 'is-column-dragging' : undefined}
+              style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
+            >
             {visibleColumns.length > 0 && displayRows.map(({ row, display }) => (
               <tr
                 key={row.uuid}
-                className={rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : undefined}
+                data-akdb-row-id={row.uuid}
+                className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${rowDragState?.targetRowID === row.uuid ? 'is-row-drop-target' : ''}`}
+                onMouseEnter={() => setHoveredRowID(row.uuid)}
+                onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
                 onContextMenu={(event) => openRowContextMenu(row, event)}
               >
                 {visibleColumns.map((c, index) => (
@@ -741,7 +1081,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
               </tr>
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
         {columnMenuColumn && columnMenuRect && createPortal(
           <ColumnHeaderMenu
             column={columnMenuColumn}
@@ -800,6 +1141,22 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
           />,
           document.body,
         )}
+        {rowDragPreview && createPortal(
+          <div
+            className="akdb-row-drag-preview"
+            style={{
+              left: rowDragPreview.left,
+              top: rowDragPreview.top,
+              width: rowDragPreview.width,
+              height: rowDragPreview.height,
+            }}
+          >
+            {rowDragPreview.cells.map((cell, index) => (
+              <span key={index} style={{ width: cell.width }}>{cell.text}</span>
+            ))}
+          </div>,
+          document.body,
+        )}
         {pendingDeleteColumn && createPortal(
           <DeleteColumnDialog
             column={pendingDeleteColumn}
@@ -808,6 +1165,17 @@ export default function DatabaseRenderer({ spaceSlug, dbId, view, readonly, colu
               if (!deletingColumn) setPendingDeleteColumn(null);
             }}
             onConfirm={confirmDeleteSourceColumn}
+          />,
+          document.body,
+        )}
+        {pendingDeleteRows && createPortal(
+          <DeleteRowsDialog
+            count={pendingDeleteRows.length}
+            loading={deletingRows}
+            onCancel={() => {
+              if (!deletingRows) setPendingDeleteRows(null);
+            }}
+            onConfirm={confirmDeleteRows}
           />,
           document.body,
         )}
@@ -834,6 +1202,32 @@ function DeleteColumnDialog({ column, loading, onCancel, onConfirm }: { column: 
         <div className="akdb-bind-dialog-body">
           <span>确定要删除「{column.name}」列吗？</span>
           <span>这会从数据源中永久删除该列及所有行里的对应数据，不能通过视图设置恢复。</span>
+        </div>
+        <div className="akdb-bind-dialog-actions">
+          <button type="button" className="akdb-dialog-ghost" disabled={loading} onClick={onCancel}>取消</button>
+          <button type="button" className="akdb-dialog-danger" disabled={loading} onClick={onConfirm}>
+            {loading ? '删除中...' : '删除'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteRowsDialog({ count, loading, onCancel, onConfirm }: { count: number; loading: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="akdb-dialog-backdrop" role="presentation" onMouseDown={onCancel}>
+      <div
+        className="akdb-bind-dialog akdb-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="akdb-delete-rows-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="akdb-bind-dialog-title" id="akdb-delete-rows-title">删除行</div>
+        <div className="akdb-bind-dialog-body">
+          <span>确定要删除选中的 {count} 行吗？</span>
+          <span>这些行对应的数据页会进入回收站，可以之后恢复。</span>
         </div>
         <div className="akdb-bind-dialog-actions">
           <button type="button" className="akdb-dialog-ghost" disabled={loading} onClick={onCancel}>取消</button>
@@ -1013,9 +1407,7 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
       style={style}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <input placeholder="搜索操作..." aria-label="搜索操作" />
       <div className="akdb-row-context-section">
-        <div className="akdb-row-context-heading">页面</div>
         <button type="button" className="akdb-row-context-item" onClick={onOpen}>
           <FileText size={16} />
           <span>打开页面</span>

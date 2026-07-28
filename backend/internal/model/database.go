@@ -85,6 +85,10 @@ type ReorderDatabaseColumnsRequest struct {
 	ColumnIDs []string `json:"column_ids"`
 }
 
+type ReorderDatabaseRowsRequest struct {
+	RowIDs []string `json:"row_ids"`
+}
+
 type CreateDatabaseRowRequest struct {
 	Values map[string]string `json:"values"`
 }

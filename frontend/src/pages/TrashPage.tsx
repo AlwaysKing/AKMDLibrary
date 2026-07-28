@@ -45,6 +45,42 @@ export default function TrashPage() {
     }
   };
 
+  const renderItemDescription = (item: TrashedItem) => {
+    if (item.type !== 'database_row') {
+      return (
+        <p className="text-xs text-notion-textSecondary mt-0.5">
+          原路径：{item.parent_path || '根目录'}/{item.file_name}
+        </p>
+      );
+    }
+
+    const fields = item.row_preview ?? [];
+    return (
+      <div className="mt-1 text-xs text-notion-textSecondary">
+        {fields.length > 0 ? (
+          <p className="line-clamp-2">
+            {fields.map((field) => field.value).join(' · ')}
+          </p>
+        ) : (
+          <p>无可预览字段</p>
+        )}
+      </div>
+    );
+  };
+
+  const renderItemTitle = (item: TrashedItem) => {
+    if (item.type !== 'database_row') {
+      return <p className="text-notion-text font-medium">{item.name}</p>;
+    }
+    const databaseName = item.database_name || item.database_id || '未知数据库';
+    return (
+      <p className="flex items-baseline gap-1.5">
+        <span className="text-notion-text text-[17px] font-semibold">{databaseName}</span>
+        <span className="text-notion-textSecondary text-xs font-medium">数据库的数据页</span>
+      </p>
+    );
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -80,11 +116,9 @@ export default function TrashPage() {
                   key={item.trash_path}
                   className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-notion-hover transition-colors group"
                 >
-                  <div>
-                    <p className="text-notion-text font-medium">{item.name}</p>
-                    <p className="text-xs text-notion-textSecondary mt-0.5">
-                      原路径：{item.parent_path || '根目录'}/{item.file_name}
-                    </p>
+                  <div className="min-w-0 pr-4">
+                    {renderItemTitle(item)}
+                    {renderItemDescription(item)}
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button

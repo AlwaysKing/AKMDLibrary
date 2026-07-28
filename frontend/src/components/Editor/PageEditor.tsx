@@ -2461,6 +2461,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   } | null>(null);
   const [syncedPaste, setSyncedPaste] = useState<ClipboardPayload | null>(null);
   const [syncedDelete, setSyncedDelete] = useState<{ block: any; quotedCount: number } | null>(null);
+  const [databaseDelete, setDatabaseDelete] = useState<{ ids: string[]; count: number } | null>(null);
   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
   const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string; type?: 'image' | 'video' } | null>(null);
   const imageReplaceInputRef = useRef<HTMLInputElement | null>(null);
@@ -5273,6 +5274,42 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     }
   }, [editor, persistEditorNow, syncedDelete]);
 
+  const requestDatabaseBlockDelete = useCallback((ids: string[]) => {
+    const databaseIds = blocksForIds(editor, ids).filter((block) => block.type === 'database').map((block) => block.id);
+    if (databaseIds.length === 0) return false;
+    setDatabaseDelete({ ids, count: databaseIds.length });
+    return true;
+  }, [editor]);
+
+  const confirmDatabaseBlockDelete = useCallback(async () => {
+    if (!databaseDelete) return;
+    const ids = databaseDelete.ids;
+    setDatabaseDelete(null);
+    await removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
+    setBlockSelection(null);
+    (document.activeElement as HTMLElement)?.blur?.();
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    editor.focus();
+  }, [databaseDelete, editor]);
+
+  useEffect(() => {
+    const handleDatabaseDeleteRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ blockId?: string }>).detail;
+      if (!detail?.blockId) return;
+      requestDatabaseBlockDelete([detail.blockId]);
+    };
+    document.addEventListener('akdb-request-delete-database-block', handleDatabaseDeleteRequest);
+    return () => document.removeEventListener('akdb-request-delete-database-block', handleDatabaseDeleteRequest);
+  }, [requestDatabaseBlockDelete]);
+
+  useEffect(() => {
+    const handleClearBlockSelection = () => {
+      setBlockSelection(null);
+    };
+    document.addEventListener('akdb-clear-block-selection', handleClearBlockSelection);
+    return () => document.removeEventListener('akdb-clear-block-selection', handleClearBlockSelection);
+  }, []);
+
   // Paste handler — capture phase to intercept before BlockNote/ProseMirror processes
   useEffect(() => {
     const container = editorRef.current;
@@ -5612,6 +5649,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (targetEl && (targetEl.tagName === 'INPUT' || targetEl.tagName === 'TEXTAREA')) {
         return;
       }
+      if (
+        document.body.classList.contains('akdb-row-selection-active') &&
+        (e.key === 'Backspace' || e.key === 'Delete')
+      ) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        document.dispatchEvent(new CustomEvent('akdb-delete-active-selected-rows'));
+        return;
+      }
       const selectedIdsAtStart = getSelectedBlockIds();
       const targetInsideEditor = !!targetEl?.closest('[data-page-editor="true"]');
       const targetInsideSideMenu = !!targetEl?.closest('.bn-side-menu, [data-floating-ui-focusable]');
@@ -5841,6 +5887,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
           e.preventDefault();
           e.stopImmediatePropagation();
+          if (requestDatabaseBlockDelete(ids)) {
+            return;
+          }
           console.log(`[delete.fire] path=generic ids=[${ids.join(',')}]`);
           removeBlocksEnhanced(editor, ids.map(id => ({ id } as any)));
           updateSelection([]);
@@ -6037,6 +6086,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const intersecting: string[] = [];
       const blockOuterMap = new Map<string, Element>();
       const forcedSyncedBlockIds = new Set<string>();
+      const intersectingDatabaseIds = new Set<string>();
 
       blockOuters.forEach(outer => {
         const blockEl = outer.querySelector(':scope > .bn-block[data-id]');
@@ -6057,6 +6107,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         if (rectDocLeft < bRight && rectDocRight > bLeft &&
             rectDocTop < bBottom && rectDocBottom > bTop) {
           intersecting.push(id);
+          if (outer.querySelector('.akdb-block-shell')) {
+            intersectingDatabaseIds.add(id);
+          }
           const syncRenderer = outer.querySelector(
             ':scope > .bn-block > .react-renderer.node-syncedBlockSource, :scope > .bn-block > .react-renderer.node-syncedBlockMirror'
           );
@@ -6077,6 +6130,13 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
         }
       });
+
+      const dragRectViewport = {
+        left: rectDocLeft - sLeft,
+        right: rectDocRight - sLeft,
+        top: rectDocTop - sTop,
+        bottom: rectDocBottom - sTop,
+      };
 
       // --- Notion-style toggle selection logic ---
       // Toggle = title + content (children). Toggle and its children are mutually exclusive in selection:
@@ -6167,6 +6227,37 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             const idx = result.indexOf(did);
             if (idx >= 0) result.splice(idx, 1);
           }
+        }
+      }
+
+      document.dispatchEvent(new CustomEvent('akdb-editor-drag-select', {
+        detail: { mode: 'clear' },
+      }));
+      for (const databaseId of intersectingDatabaseIds) {
+        const databaseOuter = blockOuterMap.get(databaseId);
+        if (!databaseOuter || !result.includes(databaseId)) continue;
+        const parentGroup = getParentGroup(databaseOuter);
+        let hasSelectedSibling = false;
+        if (parentGroup) {
+          for (const rid of result) {
+            if (rid === databaseId) continue;
+            const rOuter = blockOuterMap.get(rid);
+            if (rOuter && getParentGroup(rOuter) === parentGroup) {
+              hasSelectedSibling = true;
+              break;
+            }
+          }
+        }
+        if (hasSelectedSibling) {
+          document.dispatchEvent(new CustomEvent('akdb-editor-drag-select', {
+            detail: { blockId: databaseId, mode: 'block' },
+          }));
+        } else {
+          const idx = result.indexOf(databaseId);
+          if (idx >= 0) result.splice(idx, 1);
+          document.dispatchEvent(new CustomEvent('akdb-editor-drag-select', {
+            detail: { blockId: databaseId, mode: 'rows', rect: dragRectViewport },
+          }));
         }
       }
 
@@ -6305,6 +6396,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if ((e.target as HTMLElement).closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-align-menu, .bn-image-caption, .bn-resize-handle, .bn-file-block-content-wrapper')) {
         return;
       }
+      if ((e.target as HTMLElement).closest('.akdb-row-context-menu, .akdb-filter-menu, .akdb-add-column-menu, .akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-status-group-edit-menu')) {
+        return;
+      }
+      if ((e.target as HTMLElement).closest('.akdb-block-shell')) {
+        if (getSelectedBlockIds().length > 0) {
+          updateSelection([]);
+        }
+        return;
+      }
       // Don't clear selection when clicking side menu (drag handle, add button)
       if ((e.target as HTMLElement).closest('.bn-side-menu, [data-floating-ui-focusable]')) return;
       // If a floating menu is open, this click just closes the menu — don't deselect yet
@@ -6314,6 +6414,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         updateSelection([]);
         setBlockSelection(null);
       }
+      document.dispatchEvent(new CustomEvent('akdb-editor-drag-select', {
+        detail: { mode: 'clear' },
+      }));
     };
 
     document.addEventListener('keydown', handleKeyDown, true);
@@ -6346,7 +6449,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [editor, readOnly]);
+  }, [editor, readOnly, requestDatabaseBlockDelete]);
 
   // Side menu hover zone: only show side menu when mouse is within restricted horizontal area
   // Notion behavior: buttons visible from blockLeft - 150px to blockLeft + blockWidth * 0.7
@@ -7625,6 +7728,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           onClose={() => setSyncedDelete(null)}
         />
       )}
+      {databaseDelete && (
+        <DatabaseBlockDeleteDialog
+          count={databaseDelete.count}
+          total={databaseDelete.ids.length}
+          onCancel={() => setDatabaseDelete(null)}
+          onConfirm={confirmDatabaseBlockDelete}
+        />
+      )}
       <input
         ref={imageReplaceInputRef}
         type="file"
@@ -7667,6 +7778,31 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function DatabaseBlockDeleteDialog({ count, total, onCancel, onConfirm }: { count: number; total: number; onCancel: () => void; onConfirm: () => void }) {
+  const databaseText = count > 1 ? `${count} 个数据库视图` : '数据库视图';
+  return (
+    <div className="akdb-dialog-backdrop" role="presentation" onMouseDown={onCancel}>
+      <div
+        className="akdb-bind-dialog akdb-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="akdb-delete-database-block-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="akdb-bind-dialog-title" id="akdb-delete-database-block-title">删除数据库视图</div>
+        <div className="akdb-bind-dialog-body">
+          <span>{total > count ? `选中的 ${total} 个块中包含 ${databaseText}，确定要删除吗？` : `确定要删除选中的 ${databaseText} 吗？`}</span>
+          <span>这只会移除页面中的数据库视图块，不会删除绑定的数据源。</span>
+        </div>
+        <div className="akdb-bind-dialog-actions">
+          <button type="button" className="akdb-dialog-ghost" onClick={onCancel}>取消</button>
+          <button type="button" className="akdb-dialog-danger" onClick={onConfirm}>删除</button>
+        </div>
+      </div>
     </div>
   );
 }

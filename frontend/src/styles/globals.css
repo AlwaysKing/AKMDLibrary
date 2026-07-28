@@ -1289,6 +1289,38 @@ body.drag-menu-open .bn-side-menu .bn-button[draggable="true"] {
   color: rgba(55, 53, 47, 0.35);
 }
 
+.drag-handle-menu-switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  box-sizing: content-box;
+  width: 26px;
+  height: 14px;
+  border-radius: 999px;
+  padding: 2px;
+  background: rgba(42, 28, 0, 0.18);
+  transition: background 0.16s ease;
+}
+
+.drag-handle-menu-switch > span {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+  transform: translateX(0);
+  transition: transform 0.16s ease;
+}
+
+.drag-handle-menu-switch.is-active {
+  background: var(--c-bluBacAccPri, #2383e2);
+}
+
+.drag-handle-menu-switch.is-active > span {
+  transform: translateX(12px);
+}
+
 .drag-handle-menu-divider {
   height: 1px;
   background: rgba(55, 53, 47, 0.09);

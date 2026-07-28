@@ -11,7 +11,7 @@ interface PageIconProps {
   spaceSlug?: string;
   pageId?: string;
   compact?: boolean;
-  autoOpen?: boolean;
+  autoOpen?: boolean | number;
   emojiOnly?: boolean;
   triggerClassName?: string;
   onOpenChange?: (open: boolean) => void;

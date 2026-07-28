@@ -13,6 +13,7 @@ import (
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
 	"github.com/alwaysking/akmdlibrary/pkg/databasecsv"
+	"github.com/alwaysking/akmdlibrary/pkg/frontmatter"
 	"github.com/google/uuid"
 )
 
@@ -477,6 +478,43 @@ func (s *DatabaseService) CreateRow(spaceSlug, dbID, username string, values map
 	return &created, nil
 }
 
+func (s *DatabaseService) ReorderRows(spaceSlug, dbID string, rowIDs []string) (*model.DatabaseRowsResponse, error) {
+	root, dir, cfg, err := s.findDB(spaceSlug, dbID)
+	if err != nil {
+		return nil, err
+	}
+	unlock := s.lockDBs([]string{s.lockKey(spaceSlug, dir)})
+	defer unlock()
+	dbDir := filepath.Join(root, dir)
+	table, err := databasecsv.Read(filepath.Join(dbDir, "data.csv"))
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]map[string]string, len(table.Rows))
+	for _, row := range table.Rows {
+		byID[row["uuid"]] = row
+	}
+	next := make([]map[string]string, 0, len(table.Rows))
+	seen := map[string]bool{}
+	for _, id := range rowIDs {
+		if row, ok := byID[id]; ok {
+			next = append(next, row)
+			seen[id] = true
+		}
+	}
+	for _, row := range table.Rows {
+		if seen[row["uuid"]] {
+			continue
+		}
+		next = append(next, row)
+	}
+	if err := databasecsv.Write(filepath.Join(dbDir, "data.csv"), headerForConfig(cfg), next); err != nil {
+		return nil, err
+	}
+	s.markGitDirty(spaceSlug)
+	return s.ListRows(spaceSlug, dbID, 0, 0)
+}
+
 func (s *DatabaseService) GetRow(spaceSlug, dbID, rowID string) (*model.DatabaseRow, error) {
 	root, dir, _, err := s.findDB(spaceSlug, dbID)
 	if err != nil {
@@ -558,12 +596,28 @@ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
 	}
 	unlock := s.lockDBs([]string{s.lockKey(spaceSlug, dir)})
 	defer unlock()
-	found := false
+	dbDir := filepath.Join(root, dir)
+	var deletedRow map[string]string
+	table, err := databasecsv.Read(filepath.Join(dbDir, "data.csv"))
+	if err != nil {
+		return err
+	}
+	for _, row := range table.Rows {
+		if row["uuid"] == rowID {
+			deletedRow = cloneStringMap(row)
+			break
+		}
+	}
+	if deletedRow == nil {
+		return errors.New("row not found")
+	}
+	if err := s.writeRowTrashPackage(spaceSlug, root, dir, cfg, rowID, deletedRow); err != nil {
+		return err
+	}
 	err = s.rewriteRows(filepath.Join(root, dir), cfg, func(rows []map[string]string) []map[string]string {
 		next := rows[:0]
 		for _, row := range rows {
 			if row["uuid"] == rowID {
-				found = true
 				continue
 			}
 			next = append(next, row)
@@ -573,13 +627,80 @@ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
 	if err != nil {
 		return err
 	}
-	if !found {
-		return errors.New("row not found")
-	}
 	_ = os.Remove(filepath.Join(root, dir, "subpages", rowID+".md"))
 	_ = s.rebuildAllLinked(spaceSlug)
 	s.markGitDirty(spaceSlug)
 	return nil
+}
+
+func (s *DatabaseService) RestoreTrashedRow(spaceSlug, trashRelPath string, trash frontmatter.DatabaseTrashData, spaceID int) (*model.Page, error) {
+	if trash.Type != "database_row" || trash.DatabaseID == "" || trash.RowID == "" {
+		return nil, errors.New("invalid database row trash metadata")
+	}
+	root, dir, cfg, err := s.findDB(spaceSlug, trash.DatabaseID)
+	if err != nil {
+		return nil, err
+	}
+	unlock := s.lockDBs([]string{s.lockKey(spaceSlug, dir)})
+	defer unlock()
+
+	trashAbsPath := filepath.Join(s.docsDir, trashRelPath)
+	raw, err := os.ReadFile(trashAbsPath)
+	if err != nil {
+		return nil, err
+	}
+	fm, body, _ := frontmatter.Parse(raw)
+	fm.DatabaseTrash = nil
+	if fm.ID == "" {
+		fm.ID = trash.RowID
+	}
+	if fm.Title == "" {
+		fm.Title = s.titleFromValues(cfg, trash.RowValues)
+	}
+	if fm.Type == "" {
+		fm.Type = "database-row"
+	}
+	if fm.DB == "" {
+		fm.DB = cfg.ID
+	}
+
+	targetRelPath := filepath.Join(spaceSlug, "_database", dir, "subpages", trash.RowID+".md")
+	targetAbsPath := filepath.Join(s.docsDir, targetRelPath)
+	wrotePage := false
+	if trash.RestorePageBinding {
+		if _, err := os.Stat(targetAbsPath); err == nil {
+			return nil, fmt.Errorf("row page already exists")
+		}
+		if err := os.MkdirAll(filepath.Dir(targetAbsPath), 0755); err != nil {
+			return nil, err
+		}
+		if err := databasecsv.AtomicWriteFile(targetAbsPath, frontmatter.Render(fm, body), 0644); err != nil {
+			return nil, err
+		}
+		wrotePage = true
+	}
+
+	if err := s.restoreRowValues(root, dir, cfg, trash.RowID, trash.RowValues); err != nil {
+		if wrotePage {
+			_ = os.Remove(targetAbsPath)
+		}
+		return nil, err
+	}
+	if err := os.Remove(trashAbsPath); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	trashChildDir := strings.TrimSuffix(trashAbsPath, ".md")
+	if info, err := os.Stat(trashChildDir); err == nil && info.IsDir() {
+		if trash.RestorePageBinding {
+			targetChildDir := strings.TrimSuffix(targetAbsPath, ".md")
+			_ = os.Rename(trashChildDir, targetChildDir)
+		} else {
+			_ = os.RemoveAll(trashChildDir)
+		}
+	}
+	_ = s.rebuildAllLinked(spaceSlug)
+	s.markGitDirty(spaceSlug)
+	return &model.Page{ID: trash.RowID, Title: fm.Title, FilePath: targetRelPath}, nil
 }
 
 func (s *DatabaseService) GetRowPage(spaceSlug, dbID, rowID string) (*model.DatabaseRowPage, error) {
@@ -623,6 +744,206 @@ func (s *DatabaseService) PutRowPage(spaceSlug, dbID, rowID, markdown string) er
 	}
 	s.markGitDirty(spaceSlug)
 	return nil
+}
+
+func (s *DatabaseService) writeRowTrashPackage(spaceSlug, root, dir string, cfg *model.DatabaseConfig, rowID string, row map[string]string) error {
+	dbDir := filepath.Join(root, dir)
+	pagePath := filepath.Join(dbDir, "subpages", rowID+".md")
+	raw, err := os.ReadFile(pagePath)
+	pageExisted := err == nil
+	body := ""
+	fm := frontmatter.FrontmatterData{
+		ID:    rowID,
+		Title: s.titleFromValues(cfg, row),
+		Type:  "database-row",
+		DB:    cfg.ID,
+	}
+	if pageExisted {
+		parsed, parsedBody, _ := frontmatter.Parse(raw)
+		fm = parsed
+		body = parsedBody
+		if fm.ID == "" {
+			fm.ID = rowID
+		}
+		if fm.Title == "" {
+			fm.Title = s.titleFromValues(cfg, row)
+		}
+		if fm.Type == "" {
+			fm.Type = "database-row"
+		}
+		if fm.DB == "" {
+			fm.DB = cfg.ID
+		}
+	}
+	values := cloneStringMap(row)
+	delete(values, "uuid")
+	displayValues := s.rowDisplayValues(cfg, values)
+	fm.DatabaseTrash = &frontmatter.DatabaseTrashData{
+		Type:                    "database_row",
+		DatabaseID:              cfg.ID,
+		DatabaseDir:             dir,
+		DatabaseName:            cfg.Name,
+		RowID:                   rowID,
+		PageExistedBeforeDelete: pageExisted,
+		RestorePageBinding:      pageExisted,
+		DeletedAt:               time.Now().UTC().Format(time.RFC3339),
+		RowValues:               values,
+		RowDisplayValues:        displayValues,
+	}
+	trashRel, trashAbs, err := s.databaseRowTrashPath(spaceSlug, dir, rowID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(trashAbs), 0755); err != nil {
+		return err
+	}
+	if err := databasecsv.AtomicWriteFile(trashAbs, frontmatter.Render(fm, body), 0644); err != nil {
+		return err
+	}
+	if pageExisted {
+		childDir := strings.TrimSuffix(pagePath, ".md")
+		if info, err := os.Stat(childDir); err == nil && info.IsDir() {
+			trashChild := strings.TrimSuffix(filepath.Join(s.docsDir, trashRel), ".md")
+			_ = os.RemoveAll(trashChild)
+			_ = os.Rename(childDir, trashChild)
+		}
+	}
+	return nil
+}
+
+func (s *DatabaseService) rowDisplayValues(cfg *model.DatabaseConfig, values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for _, col := range cfg.Columns {
+		raw := strings.TrimSpace(values[col.ID])
+		if raw == "" {
+			continue
+		}
+		display := strings.TrimSpace(databaseColumnDisplayValue(col, raw))
+		if display != "" {
+			out[col.ID] = display
+		}
+	}
+	for key, raw := range values {
+		if _, ok := out[key]; ok {
+			continue
+		}
+		if display := strings.TrimSpace(raw); display != "" {
+			out[key] = display
+		}
+	}
+	return out
+}
+
+func databaseColumnDisplayValue(col model.DatabaseColumn, raw string) string {
+	switch col.Type {
+	case "select", "status":
+		if option, ok := databaseOptionByID(col, raw); ok {
+			return option
+		}
+	case "multi_select", "linked":
+		var ids []string
+		if err := json.Unmarshal([]byte(raw), &ids); err == nil {
+			labels := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if label, ok := databaseOptionByID(col, id); ok {
+					labels = append(labels, label)
+				} else if trimmed := strings.TrimSpace(id); trimmed != "" {
+					labels = append(labels, trimmed)
+				}
+			}
+			return strings.Join(labels, "、")
+		}
+	}
+	return raw
+}
+
+func databaseOptionByID(col model.DatabaseColumn, id string) (string, bool) {
+	options, ok := col.Config["options"].([]any)
+	if !ok {
+		return "", false
+	}
+	for _, item := range options {
+		option, ok := item.(map[string]any)
+		if !ok || fmt.Sprint(option["id"]) != id {
+			continue
+		}
+		value := strings.TrimSpace(fmt.Sprint(option["value"]))
+		if value == "" {
+			value = strings.TrimSpace(fmt.Sprint(option["name"]))
+		}
+		return value, value != ""
+	}
+	return "", false
+}
+
+func (s *DatabaseService) databaseRowTrashPath(spaceSlug, dir, rowID string) (string, string, error) {
+	spaceDir, actualSlug, err := s.resolveSpaceDir(spaceSlug)
+	if err != nil {
+		return "", "", err
+	}
+	base := filepath.Join("_database_"+dir+"_subpages", rowID+".md")
+	rel := filepath.Join(actualSlug, ".trash", base)
+	abs := filepath.Join(spaceDir, ".trash", base)
+	counter := 2
+	for {
+		if _, err := os.Stat(abs); os.IsNotExist(err) {
+			return rel, abs, nil
+		}
+		base = filepath.Join("_database_"+dir+"_subpages", fmt.Sprintf("%s %d.md", rowID, counter))
+		rel = filepath.Join(actualSlug, ".trash", base)
+		abs = filepath.Join(spaceDir, ".trash", base)
+		counter++
+	}
+}
+
+func (s *DatabaseService) restoreRowValues(root, dir string, cfg *model.DatabaseConfig, rowID string, values map[string]string) error {
+	dbDir := filepath.Join(root, dir)
+	exists := false
+	if err := s.rewriteRows(dbDir, cfg, func(rows []map[string]string) []map[string]string {
+		for _, row := range rows {
+			if row["uuid"] == rowID {
+				exists = true
+				return rows
+			}
+		}
+		row := map[string]string{"uuid": rowID}
+		for _, c := range cfg.Columns {
+			row[c.ID] = defaultCell(c)
+			if c.Type == "formula" {
+				continue
+			}
+			if values != nil {
+				if value, ok := values[c.ID]; ok {
+					row[c.ID] = value
+				}
+			}
+		}
+		rows = append(rows, row)
+		return rows
+	}); err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("row already exists")
+	}
+	return nil
+}
+
+func (s *DatabaseService) titleFromValues(cfg *model.DatabaseConfig, values map[string]string) string {
+	for _, c := range cfg.Columns {
+		if c.Type == "text" && strings.TrimSpace(values[c.ID]) != "" {
+			return values[c.ID]
+		}
+	}
+	return "Untitled"
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func (s *DatabaseService) findDB(spaceSlug, dbID string) (string, string, *model.DatabaseConfig, error) {

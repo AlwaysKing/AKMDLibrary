@@ -8,19 +8,36 @@ import (
 )
 
 type FrontmatterData struct {
-	ID          string `yaml:"id,omitempty"`
-	Icon        string `yaml:"icon,omitempty"`
-	Cover       string `yaml:"cover,omitempty"`
-	FullPage    *bool  `yaml:"full_page,omitempty"`
-	Locked      *bool  `yaml:"locked,omitempty"`
-	IconLarge   *bool  `yaml:"icon_large,omitempty"`
-	CoverOffset *int   `yaml:"cover_offset,omitempty"`
-	Starred     *bool  `yaml:"starred,omitempty"`
+	ID            string             `yaml:"id,omitempty"`
+	Title         string             `yaml:"title,omitempty"`
+	Type          string             `yaml:"type,omitempty"`
+	DB            string             `yaml:"db,omitempty"`
+	Icon          string             `yaml:"icon,omitempty"`
+	Cover         string             `yaml:"cover,omitempty"`
+	FullPage      *bool              `yaml:"full_page,omitempty"`
+	Locked        *bool              `yaml:"locked,omitempty"`
+	IconLarge     *bool              `yaml:"icon_large,omitempty"`
+	CoverOffset   *int               `yaml:"cover_offset,omitempty"`
+	Starred       *bool              `yaml:"starred,omitempty"`
+	DatabaseTrash *DatabaseTrashData `yaml:"database_trash,omitempty"`
+}
+
+type DatabaseTrashData struct {
+	Type                    string            `yaml:"type,omitempty"`
+	DatabaseID              string            `yaml:"database_id,omitempty"`
+	DatabaseDir             string            `yaml:"database_dir,omitempty"`
+	DatabaseName            string            `yaml:"database_name,omitempty"`
+	RowID                   string            `yaml:"row_id,omitempty"`
+	PageExistedBeforeDelete bool              `yaml:"page_existed_before_delete"`
+	RestorePageBinding      bool              `yaml:"restore_page_binding"`
+	DeletedAt               string            `yaml:"deleted_at,omitempty"`
+	RowValues               map[string]string `yaml:"row_values,omitempty"`
+	RowDisplayValues        map[string]string `yaml:"row_display_values,omitempty"`
 }
 
 // IsEmpty returns true if all fields are zero values.
 func (fm FrontmatterData) IsEmpty() bool {
-	return fm.ID == "" && fm.Icon == "" && fm.Cover == "" && fm.FullPage == nil && fm.Locked == nil && fm.IconLarge == nil && fm.CoverOffset == nil && fm.Starred == nil
+	return fm.ID == "" && fm.Title == "" && fm.Type == "" && fm.DB == "" && fm.Icon == "" && fm.Cover == "" && fm.FullPage == nil && fm.Locked == nil && fm.IconLarge == nil && fm.CoverOffset == nil && fm.Starred == nil && fm.DatabaseTrash == nil
 }
 
 // Parse extracts frontmatter and body from raw markdown file bytes.

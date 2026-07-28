@@ -27,6 +27,7 @@ export interface DatabaseViewConfig {
   id: string;
   type: DatabaseViewType;
   name: string;
+  readonly?: boolean;
   columns: ViewColumnRule[];
   filters?: ViewFilterRule[];
   sorts?: ViewSortRule[];
@@ -80,6 +81,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
       id: attrs.id,
       type: attrs.type as DatabaseViewType,
       name: attrs.name || attrs.type,
+      readonly: attrs.readonly === 'true',
       columns,
       filters,
       sorts,
@@ -135,7 +137,7 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
       v.endDate ? `    <end-date property="${esc(v.endDate)}"/>` : '',
       v.limit ? `    <limit>${v.limit}</limit>` : '',
     ].filter(Boolean).join('\n');
-    return `  <view id="${esc(v.id)}" type="${esc(v.type)}" name="${esc(v.name)}">\n    <column>\n${cols}\n    </column>${extra ? `\n${extra}` : ''}\n  </view>`;
+    return `  <view id="${esc(v.id)}" type="${esc(v.type)}" name="${esc(v.name)}"${v.readonly ? ' readonly="true"' : ''}>\n    <column>\n${cols}\n    </column>${extra ? `\n${extra}` : ''}\n  </view>`;
   }).join('\n\n');
 }
 

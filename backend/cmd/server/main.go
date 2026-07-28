@@ -99,6 +99,7 @@ func main() {
 	searchService := service.NewSearchService(docsDir)
 	databaseService := service.NewDatabaseService(docsDir)
 	databaseService.SetGitSyncWorker(gitSyncWorker)
+	pageService.SetDatabaseTrashRestorer(databaseService.RestoreTrashedRow)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -247,6 +248,7 @@ func main() {
 		r.Post("/api/spaces/{slug}/databases/{dbId}/columns/reorder", databaseHandler.ReorderColumns)
 		r.Get("/api/spaces/{slug}/databases/{dbId}/rows", databaseHandler.ListRows)
 		r.Post("/api/spaces/{slug}/databases/{dbId}/rows", databaseHandler.CreateRow)
+		r.Post("/api/spaces/{slug}/databases/{dbId}/rows/reorder", databaseHandler.ReorderRows)
 		r.Get("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.GetRow)
 		r.Patch("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.UpdateRow)
 		r.Delete("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.DeleteRow)

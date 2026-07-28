@@ -160,6 +160,18 @@ func (h *DatabaseHandler) CreateRow(w http.ResponseWriter, r *http.Request) {
 	}
 	respondJSON(w, out, err)
 }
+func (h *DatabaseHandler) ReorderRows(w http.ResponseWriter, r *http.Request) {
+	if !h.check(w, r, true) {
+		return
+	}
+	var req model.ReorderDatabaseRowsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	out, err := h.databaseService.ReorderRows(chi.URLParam(r, "slug"), chi.URLParam(r, "dbId"), req.RowIDs)
+	respondJSON(w, out, err)
+}
 func (h *DatabaseHandler) GetRow(w http.ResponseWriter, r *http.Request) {
 	if !h.check(w, r, false) {
 		return

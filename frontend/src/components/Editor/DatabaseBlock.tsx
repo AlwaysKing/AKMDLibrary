@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowUpDown, ChevronDown, Columns3, Database, Eye, Filter, G
 import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
 import { useSpaceStore } from '../../stores/spaceStore';
+import PageIcon from './PageIcon';
 import DatabaseRenderer, { ColumnIconGlyph, defaultColumnIconID } from './database/DatabaseRenderer';
 import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
@@ -37,6 +38,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
+  const [selectedRowCount, setSelectedRowCount] = useState(0);
+  const [iconPickerRequest, setIconPickerRequest] = useState(0);
   const filterRef = useRef<HTMLDivElement | null>(null);
   const sortRef = useRef<HTMLDivElement | null>(null);
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -48,6 +51,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
 
   const parsed = useMemo(() => parseDatabaseMarkdown(viewsText), [viewsText]);
   const activeView = parsed.views.find((v) => v.id === viewId) || parsed.views[0];
+  const viewLocked = !!activeView?.readonly;
 
   useEffect(() => {
     if (!slug || (!pickerOpen && src)) return;
@@ -61,6 +65,26 @@ function DatabaseBlockComponent({ block, editor }: any) {
   useEffect(() => {
     setSourceAvailable(!!src);
   }, [src]);
+
+  useEffect(() => {
+    const handleEditIcon = (event: Event) => {
+      const detail = (event as CustomEvent<{ blockId?: string }>).detail;
+      if (detail?.blockId !== block.id) return;
+      setIconPickerRequest((value) => value + 1);
+    };
+    document.addEventListener('akdb-edit-database-icon', handleEditIcon);
+    return () => document.removeEventListener('akdb-edit-database-icon', handleEditIcon);
+  }, [block.id]);
+
+  useEffect(() => {
+    const handleToggleLock = (event: Event) => {
+      const detail = (event as CustomEvent<{ blockId?: string }>).detail;
+      if (detail?.blockId !== block.id || !activeView) return;
+      updateView({ ...activeView, readonly: !activeView.readonly });
+    };
+    document.addEventListener('akdb-toggle-database-lock', handleToggleLock);
+    return () => document.removeEventListener('akdb-toggle-database-lock', handleToggleLock);
+  }, [activeView, block.id]);
 
   useEffect(() => {
     if (!slug || !src) {
@@ -129,6 +153,12 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const cancelBind = () => {
     if (binding) return;
     setPendingBind(null);
+  };
+
+  const updateIcon = (nextIcon: string) => {
+    editor.updateBlock(block.id, {
+      props: { ...block.props, icon: nextIcon },
+    } as any);
   };
 
   const create = async () => {
@@ -289,7 +319,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
     if (nextTitle === title) return;
     editor.updateBlock(block.id, { props: { ...block.props, title: nextTitle } } as any);
   };
-  const controlsDisabled = !src || !sourceAvailable;
+  const sourceControlsDisabled = !src || !sourceAvailable;
+  const controlsDisabled = sourceControlsDisabled || viewLocked;
   const filterColumns = useMemo(() => {
     const query = filterQuery.trim().toLowerCase();
     const columns = schemaColumns.filter((column) => !column.readonly && column.type !== 'linked');
@@ -441,6 +472,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
       <button className="akdb-primary-chevron" type="button" aria-label="新建选项" disabled={controlsDisabled}><ChevronDown size={18} /></button>
     </div>
   );
+  const rowSelectionToolbar = selectedRowCount > 0 ? <RowSelectionToolbar blockId={block.id} count={selectedRowCount} /> : null;
 
   return (
     <div
@@ -451,8 +483,17 @@ function DatabaseBlockComponent({ block, editor }: any) {
     >
       <div className="akdb-block-header">
         <div className="akdb-block-titlebar">
+          <div className={`akdb-block-page-icon ${icon ? 'has-icon' : ''}`}>
+            <PageIcon
+              icon={icon || null}
+              compact
+              autoOpen={iconPickerRequest}
+              emojiOnly
+              triggerClassName="akdb-database-icon-trigger"
+              onSelect={updateIcon}
+            />
+          </div>
           <div className={`akdb-block-title ${draftTitle.trim() ? 'has-title' : ''}`}>
-            {icon && <span className="akdb-block-icon">{icon}</span>}
             <input
               value={draftTitle}
               aria-label="数据库块名称"
@@ -469,19 +510,22 @@ function DatabaseBlockComponent({ block, editor }: any) {
           </div>
           {parsed.views.length <= 1 && <button className="akdb-ghost-icon" type="button" disabled={controlsDisabled} onClick={() => addView('table')} aria-label="新增表格视图"><Plus size={19} /></button>}
         </div>
+        {parsed.views.length <= 1 && rowSelectionToolbar}
         {parsed.views.length <= 1 && actions}
       </div>
 
       {parsed.views.length > 1 && (
         <div className="akdb-view-row">
-          <div className="akdb-view-tabs">
-            {parsed.views.map((v) => (
-              <button key={v.id} type="button" disabled={controlsDisabled} onClick={() => switchView(v.id)} className={v.id === activeView?.id ? 'is-active' : ''}>
-                {v.name}
-              </button>
-            ))}
-            <button type="button" disabled={controlsDisabled} onClick={() => addView('table')}><Plus size={15} /></button>
-          </div>
+          {rowSelectionToolbar || (
+            <div className="akdb-view-tabs">
+              {parsed.views.map((v) => (
+                <button key={v.id} type="button" disabled={sourceControlsDisabled} onClick={() => switchView(v.id)} className={v.id === activeView?.id ? 'is-active' : ''}>
+                  {v.name}
+                </button>
+              ))}
+              <button type="button" disabled={controlsDisabled} onClick={() => addView('table')}><Plus size={15} /></button>
+            </div>
+          )}
           {actions}
         </div>
       )}
@@ -525,11 +569,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
         <DatabaseRenderer
           spaceSlug={slug}
           dbId={src}
+          blockId={block.id}
           view={activeView}
+          readonly={viewLocked}
           onViewChange={updateView}
           createRequest={createRowRequest}
           missingState={emptyState('missing')}
           onAvailabilityChange={setSourceAvailable}
+          onSelectionChange={setSelectedRowCount}
           onOpenViewSettings={openViewSettings}
           onOpenRow={(rowId) => navigate(`/s/${slug}/db/${src}/row/${rowId}`)}
         />
@@ -544,6 +591,26 @@ function DatabaseBlockComponent({ block, editor }: any) {
         />,
         document.body,
       )}
+    </div>
+  );
+}
+
+function RowSelectionToolbar({ blockId, count }: { blockId: string; count: number }) {
+  return (
+    <div className="akdb-row-selection-toolbar" role="toolbar" aria-label="行操作">
+      <span className="akdb-row-selection-count">已选择 {count} 个</span>
+      <span className="akdb-row-selection-divider" aria-hidden="true" />
+      <button
+        type="button"
+        aria-label="删除选中行"
+        onClick={() => {
+          document.dispatchEvent(new CustomEvent('akdb-delete-selected-rows', {
+            detail: { blockId },
+          }));
+        }}
+      >
+        <Trash2 size={15} />
+      </button>
     </div>
   );
 }

@@ -22,6 +22,7 @@ import { showToast } from '../Toast';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { setBlockDragData, isDragHandled, clearBlockDragData, getBlockDragData, syncSubpageOrderToBackend } from './blockDragState';
 import PageIcon from './PageIcon';
+import { parseDatabaseMarkdown } from './database/viewConfig';
 
 // ==================== Menu Context ====================
 interface MenuContextValue {
@@ -386,6 +387,12 @@ const SideMenuButton: React.FC<{
       // 延迟到 BlockNote/ProseMirror 重渲染完成后再应用样式
       setTimeout(() => {
         setBlockSelection([targetBlockId]);
+        const targetBlock = findBlockDeep(editor.document, targetBlockId);
+        if (targetBlock?.type === 'database') {
+          document.dispatchEvent(new CustomEvent('akdb-editor-drag-select', {
+            detail: { blockId: targetBlockId, mode: 'block' },
+          }));
+        }
       }, 100);
     };
 
@@ -1830,6 +1837,23 @@ const FitWidthIcon: React.FC = () => (
   </svg>
 );
 
+const EditIconMenuIcon: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="10" cy="10" r="7.35" />
+    <path d="M7.35 8.35h.01" />
+    <path d="M12.65 8.35h.01" />
+    <path d="M7.45 12.15c.62.82 1.47 1.23 2.55 1.23s1.93-.41 2.55-1.23" />
+  </svg>
+);
+
+const DatabaseLockIcon: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3.25" y="8.25" width="9.5" height="8" rx="1.5" />
+    <path d="M5.5 8.25V6a3.5 3.5 0 0 1 6.56-1.7" />
+    <path d="M13.5 4.55c.86 0 1.55.7 1.55 1.55v2.15" />
+  </svg>
+);
+
 // Notion "Copy link" icon (chain link)
 const LinkIcon: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
@@ -2345,6 +2369,7 @@ function ColorSubmenu({ onClose }: { onClose: () => void }) {
 function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
   const editor = useBlockNoteEditor();
   const [activeSubmenu, setActiveSubmenu] = useState<'turn-into' | 'color' | null>(null);
+  const [databaseLockOverride, setDatabaseLockOverride] = useState<boolean | null>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const handleSubmenuEnter = useCallback((menu: 'turn-into' | 'color') => {
@@ -2357,6 +2382,20 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
   }, []);
 
   const blockId = getDragHandleBlockId();
+  const currentBlock = blockId ? findBlockDeep(editor.document, blockId) : null;
+  const isDatabase = currentBlock?.type === 'database';
+  const isTable = currentBlock?.type === 'table';
+  const parsedDatabaseLocked = (() => {
+    if (!isDatabase || !currentBlock) return false;
+    const parsed = parseDatabaseMarkdown(currentBlock.props?.views || '');
+    const activeView = parsed.views.find((view) => view.id === currentBlock.props?.viewId) || parsed.views[0];
+    return !!activeView?.readonly;
+  })();
+  const isDatabaseLocked = databaseLockOverride ?? parsedDatabaseLocked;
+
+  useEffect(() => {
+    setDatabaseLockOverride(null);
+  }, [blockId, parsedDatabaseLocked]);
 
   const handleCopyLink = async () => {
     const linkBlockId = getDragHandleLinkBlockId();
@@ -2377,6 +2416,22 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
+  const handleEditDatabaseIcon = () => {
+    if (!blockId || !isDatabase) return;
+    document.dispatchEvent(new CustomEvent('akdb-edit-database-icon', {
+      detail: { blockId },
+    }));
+    onClose();
+  };
+
+  const handleToggleDatabaseLock = () => {
+    if (!blockId || !isDatabase) return;
+    setDatabaseLockOverride(!isDatabaseLocked);
+    document.dispatchEvent(new CustomEvent('akdb-toggle-database-lock', {
+      detail: { blockId },
+    }));
+  };
+
   const handleDuplicate = () => {
     if (!blockId) return;
     const block = findBlockDeep(editor.document, blockId);
@@ -2393,17 +2448,20 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
 
   const handleDelete = async () => {
     if (!blockId) return;
+    if (currentBlock?.type === 'database') {
+      document.dispatchEvent(new CustomEvent('akdb-request-delete-database-block', {
+        detail: { blockId },
+      }));
+      onClose();
+      return;
+    }
     await removeBlocksEnhanced(editor, [blockId]);
     onClose();
   };
 
   const isConvertible = (() => {
-    const currentBlock = blockId ? findBlockDeep(editor.document, blockId) : null;
     return currentBlock ? !NON_CONVERTIBLE_TYPES.has(currentBlock.type) : false;
   })();
-
-  const currentBlock = blockId ? findBlockDeep(editor.document, blockId) : null;
-  const isTable = currentBlock?.type === 'table';
 
   const isBookmark = (() => {
     return currentBlock?.type === 'bookmark';
@@ -2458,6 +2516,20 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="drag-handle-menu">
+      {isDatabase && (
+        <>
+          <div className="drag-handle-menu-item" onClick={handleEditDatabaseIcon}>
+            <span className="drag-handle-menu-item-icon"><EditIconMenuIcon /></span>
+            <span className="drag-handle-menu-item-label">编辑图标</span>
+          </div>
+          <div className="drag-handle-menu-item" onClick={handleToggleDatabaseLock}>
+            <span className="drag-handle-menu-item-icon"><DatabaseLockIcon /></span>
+            <span className="drag-handle-menu-item-label">锁定数据库</span>
+            <span className={`drag-handle-menu-switch ${isDatabaseLocked ? 'is-active' : ''}`} aria-hidden="true"><span /></span>
+          </div>
+        </>
+      )}
+
       {/* Convert bookmark to mention */}
       {isBookmark && (
         <div className="drag-handle-menu-item" onClick={handleConvertToMention}>

@@ -87,6 +87,10 @@ export const databasesApi = {
     const res = await apiClient.post(`/spaces/${spaceSlug}/databases/${dbId}/rows`, { values });
     return res.data;
   },
+  async reorderRows(spaceSlug: string, dbId: string, rowIds: string[]): Promise<DatabaseRowsResponse> {
+    const res = await apiClient.post(`/spaces/${spaceSlug}/databases/${dbId}/rows/reorder`, { row_ids: rowIds });
+    return res.data;
+  },
   async updateRow(spaceSlug: string, dbId: string, rowId: string, values: Record<string, string>): Promise<DatabaseRow> {
     const res = await apiClient.patch(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}`, { values });
     return res.data;
