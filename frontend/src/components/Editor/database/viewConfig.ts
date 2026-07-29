@@ -1,4 +1,4 @@
-export type DatabaseViewType = 'table' | 'board' | 'gallery' | 'list' | 'calendar' | 'timeline';
+export type DatabaseViewType = 'table' | 'board' | 'timeline' | 'calendar' | 'list' | 'gallery' | 'chart' | 'activity' | 'map';
 
 export interface ViewColumnRule {
   property?: string;
@@ -27,7 +27,14 @@ export interface DatabaseViewConfig {
   id: string;
   type: DatabaseViewType;
   name: string;
+  icon?: string;
+  source?: string;
   readonly?: boolean;
+  showSourceTitle?: boolean;
+  showVerticalLines?: boolean;
+  showPageIcon?: boolean;
+  wrapContent?: boolean;
+  openMode?: 'peek' | 'full' | 'center';
   columns: ViewColumnRule[];
   filters?: ViewFilterRule[];
   sorts?: ViewSortRule[];
@@ -81,7 +88,14 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
       id: attrs.id,
       type: attrs.type as DatabaseViewType,
       name: attrs.name || attrs.type,
+      icon: attrs.icon,
+      source: attrs.source || attrs.src,
       readonly: attrs.readonly === 'true',
+      showSourceTitle: optionalBooleanAttr(attrs['show-source-title']),
+      showVerticalLines: optionalBooleanAttr(attrs['show-vertical-lines']),
+      showPageIcon: optionalBooleanAttr(attrs['show-page-icon']),
+      wrapContent: optionalBooleanAttr(attrs['wrap-content']),
+      openMode: normalizeOpenMode(attrs['open-mode']),
       columns,
       filters,
       sorts,
@@ -137,7 +151,20 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
       v.endDate ? `    <end-date property="${esc(v.endDate)}"/>` : '',
       v.limit ? `    <limit>${v.limit}</limit>` : '',
     ].filter(Boolean).join('\n');
-    return `  <view id="${esc(v.id)}" type="${esc(v.type)}" name="${esc(v.name)}"${v.readonly ? ' readonly="true"' : ''}>\n    <column>\n${cols}\n    </column>${extra ? `\n${extra}` : ''}\n  </view>`;
+    const viewAttrs = [
+      `id="${esc(v.id)}"`,
+      `type="${esc(v.type)}"`,
+      `name="${esc(v.name)}"`,
+      v.icon ? `icon="${esc(v.icon)}"` : '',
+      v.source ? `source="${esc(v.source)}"` : '',
+      v.readonly ? 'readonly="true"' : '',
+      v.showSourceTitle === false ? 'show-source-title="false"' : '',
+      v.showVerticalLines === false ? 'show-vertical-lines="false"' : '',
+      v.showPageIcon === false ? 'show-page-icon="false"' : '',
+      v.wrapContent ? 'wrap-content="true"' : '',
+      v.openMode && v.openMode !== 'peek' ? `open-mode="${esc(v.openMode)}"` : '',
+    ].filter(Boolean).join(' ');
+    return `  <view ${viewAttrs}>\n    <column>\n${cols}\n    </column>${extra ? `\n${extra}` : ''}\n  </view>`;
   }).join('\n\n');
 }
 
@@ -204,6 +231,15 @@ function normalizeFilterOperator(op = ''): ViewFilterOperator {
 }
 function normalizeColumnAlign(align = ''): ViewColumnRule['align'] {
   if (align === 'left' || align === 'center' || align === 'right') return align;
+  return undefined;
+}
+function optionalBooleanAttr(value?: string): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
+function normalizeOpenMode(value = ''): DatabaseViewConfig['openMode'] {
+  if (value === 'peek' || value === 'full' || value === 'center') return value;
   return undefined;
 }
 function encodeRuleValue(value: string | string[] | boolean) {

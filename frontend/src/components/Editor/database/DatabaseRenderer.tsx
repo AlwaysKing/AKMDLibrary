@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns3,
+  Activity,
   GripVertical,
   Filter,
   HelpCircle,
@@ -18,7 +19,9 @@ import {
   Info,
   List,
   Lock,
+  Map as MapIcon,
   MoreHorizontal,
+  PieChart,
   Plus,
   Repeat2,
   Search,
@@ -54,6 +57,31 @@ interface Props {
 
 type CellCoord = { rowIndex: number; colIndex: number };
 type CellRange = { anchor: CellCoord; focus: CellCoord };
+
+const DATABASE_POPUP_SELECTOR = [
+  '.akdb-filter-menu',
+  '.akdb-view-rule-editor',
+  '.akdb-view-rule-dropdown-menu',
+  '.akdb-view-rule-action-menu',
+  '.akdb-view-tab-context-menu',
+  '.akdb-row-context-menu',
+  '.akdb-add-column-menu',
+  '.akdb-column-menu',
+  '.akdb-column-type-submenu',
+  '.akdb-column-property-submenu',
+  '.akdb-column-number-submenu',
+  '.akdb-option-menu',
+  '.akdb-option-edit-menu',
+  '.akdb-option-color-palette',
+  '.akdb-date-picker',
+  '.akdb-date-picker-submenu',
+  '.akdb-timezone-submenu',
+  '.akdb-column-icon-popover',
+  '.akdb-status-group-edit-menu',
+  '.akdb-view-settings-menu',
+  '.akdb-dialog-backdrop',
+  '.akdb-cell-popup-mask',
+].join(',');
 
 export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange }: Props) {
   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
@@ -108,6 +136,17 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const showFillColumn = !readonly;
   useDropdownOutsideClose(addColumnOpen, addColumnButtonRef, () => setAddColumnOpen(false), '.akdb-add-column-menu');
   useDropdownOutsideClose(columnMenuIndex !== null, columnMenuAnchorRef, () => closeColumnMenu(), '.akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-status-group-edit-menu');
+  useEffect(() => {
+    const handlePopupContextMenu = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest(DATABASE_POPUP_SELECTOR)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    document.addEventListener('contextmenu', handlePopupContextMenu, true);
+    return () => document.removeEventListener('contextmenu', handlePopupContextMenu, true);
+  }, []);
   useEffect(() => () => {
     suppressNextCellClickRef.current?.();
   }, []);
@@ -181,7 +220,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const handleMouseDown = (event: globalThis.MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!activeCell && !cellRange) return;
-      if (target?.closest('.akdb-table-wrap, .akdb-row-context-menu, .akdb-column-menu, .akdb-option-menu, .akdb-date-picker')) return;
+      if (target?.closest(`.akdb-table-wrap, .akdb-text-editor-overlay, ${DATABASE_POPUP_SELECTOR}`)) return;
       setActiveCell(null);
       setEditingCell(null);
       setCellRange(null);
@@ -535,6 +574,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       return;
     }
     const target = event.target as HTMLElement | null;
+    const textPreviewElement = target?.closest<HTMLElement>('.akdb-text-cell-preview');
     const inputElement = target?.closest<HTMLInputElement>('input');
     const cellElement = target?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
     const textEditingElement = target?.closest<HTMLElement>('textarea, [contenteditable="true"]');
@@ -592,7 +632,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       const dragged = cellSelectionDragRef.current?.dragged;
       cellSelectionDragRef.current = null;
       if (!dragged) {
-        window.setTimeout(() => selectCell(coord, true), 0);
+        if (!textPreviewElement) window.setTimeout(() => selectCell(coord, true), 0);
       } else {
         suppressNextCellClick();
       }
@@ -1211,6 +1251,22 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     );
   }
 
+  if (activeView.type === 'chart' || activeView.type === 'activity' || activeView.type === 'map') {
+    const meta = {
+      chart: { label: '图表', icon: <PieChart size={15} /> },
+      activity: { label: '动态', icon: <Activity size={15} /> },
+      map: { label: '地图', icon: <MapIcon size={15} /> },
+    }[activeView.type];
+    return (
+      <Frame title={schema.name} icon={meta.icon} onAdd={() => createRow()} readonly={readonly}>
+        <div className="akdb-view-placeholder">
+          <strong>{meta.label}视图</strong>
+          <span>视图框架已就绪，具体展示能力待完善。</span>
+        </div>
+      </Frame>
+    );
+  }
+
   return (
     <div className="akdb-frame">
       <div className="akdb-table-shell">
@@ -1293,7 +1349,14 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
           </div>
         )}
         <div ref={tableWrapRef} className="akdb-table-wrap" tabIndex={-1} onPointerDownCapture={beginCellPointerFromTable}>
-          <table className="akdb-table" style={{ minWidth: tableMinWidth }}>
+          <table
+            className={[
+              'akdb-table',
+              activeView.showVerticalLines === false ? 'is-hide-vertical-lines' : '',
+              activeView.wrapContent ? 'is-wrap-content' : '',
+            ].filter(Boolean).join(' ')}
+            style={{ minWidth: tableMinWidth }}
+          >
             <colgroup>
               {visibleColumns.map((c, index) => <col key={c.id} style={{ width: columnWidth(c, index) }} />)}
               {showColumnControls && <col style={{ width: 64 }} />}
@@ -3601,7 +3664,21 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
   const [focusRect, setFocusRect] = useState<CSSProperties | null>(null);
   const cellRef = useRef<HTMLTableCellElement | null>(null);
   const dateButtonRef = useRef<HTMLButtonElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const textEditorFocusedRef = useRef(false);
+  const focusTextEditorAtEnd = () => {
+    const input = inputRef.current;
+    if (!(input instanceof HTMLTextAreaElement)) return;
+    input.focus();
+    const caret = input.value.length;
+    input.setSelectionRange(caret, caret);
+  };
+  const setInputElement = (element: HTMLInputElement | HTMLTextAreaElement | null) => {
+    inputRef.current = element;
+    if (element instanceof HTMLTextAreaElement && editing && column?.type === 'text' && !column.config?.secret) {
+      requestAnimationFrame(updateTextEditorRect);
+    }
+  };
   const skipNextCommitRef = useRef(false);
   const datePickerRect = useDropdownPosition(datePickerOpen, dateButtonRef, 280, 'below', -8);
   useEffect(() => setLocal(value), [value]);
@@ -3617,6 +3694,17 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
   useEffect(() => {
     if (editing && (column?.type === 'number' || column?.type === 'url')) inputRef.current?.focus();
   }, [editing, column?.type]);
+  useLayoutEffect(() => {
+    if (!editing) {
+      textEditorFocusedRef.current = false;
+      return;
+    }
+    if (column?.type !== 'text' || column.config?.secret || !focusRect || textEditorFocusedRef.current) return;
+    const input = inputRef.current;
+    if (!input) return;
+    focusTextEditorAtEnd();
+    textEditorFocusedRef.current = true;
+  }, [editing, focusRect, column?.type, column?.config?.secret]);
   useDropdownOutsideClose(datePickerOpen, dateButtonRef, () => { setDatePickerOpen(false); setFocusRect(null); }, '.akdb-date-picker, .akdb-column-number-submenu');
   const updateFocusRect = () => {
     const rect = cellRef.current?.getBoundingClientRect();
@@ -3629,10 +3717,59 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
       height: rect.height + 2,
     });
   };
+  const updateTextEditorRect = () => {
+    const rect = cellRef.current?.getBoundingClientRect();
+    const input = inputRef.current;
+    if (!rect) return;
+    const viewportPadding = 8;
+    const maxHeight = Math.max(96, window.innerHeight - viewportPadding * 2);
+    let contentHeight = rect.height;
+    if (input instanceof HTMLTextAreaElement) {
+      const previousHeight = input.style.height;
+      const previousOverflowY = input.style.overflowY;
+      input.style.height = '0px';
+      input.style.overflowY = 'hidden';
+      contentHeight = input.scrollHeight;
+      input.style.height = previousHeight;
+      input.style.overflowY = previousOverflowY;
+    }
+    const height = Math.min(maxHeight, Math.max(rect.height, contentHeight));
+    const maxTop = window.innerHeight - viewportPadding - height;
+    const top = Math.max(viewportPadding, Math.min(rect.top, maxTop));
+    const nextRect = {
+      position: 'fixed',
+      left: rect.left,
+      top,
+      width: rect.width,
+      height,
+      maxHeight,
+      overflowY: contentHeight > maxHeight ? 'auto' : 'hidden',
+    } as CSSProperties;
+    setFocusRect((current) => {
+      if (
+        current
+        && current.left === nextRect.left
+        && current.top === nextRect.top
+        && current.width === nextRect.width
+        && current.height === nextRect.height
+        && current.maxHeight === nextRect.maxHeight
+        && current.overflowY === nextRect.overflowY
+      ) return current;
+      return nextRect;
+    });
+  };
   useEffect(() => {
     if (!focusRect) return;
-    const update = () => updateFocusRect();
+    const update = () => {
+      if (column?.type === 'text' && !column.config?.secret && editing) {
+        updateTextEditorRect();
+        return;
+      }
+      updateFocusRect();
+    };
     const preventScroll = (event: WheelEvent | TouchEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest('.akdb-text-editor-overlay')) return;
       event.preventDefault();
     };
     window.addEventListener('scroll', update, true);
@@ -3645,7 +3782,11 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
       document.removeEventListener('wheel', preventScroll, true);
       document.removeEventListener('touchmove', preventScroll, true);
     };
-  }, [focusRect]);
+  }, [focusRect, editing, column?.type, column?.config?.secret]);
+  useLayoutEffect(() => {
+    if (!editing || column?.type !== 'text' || column.config?.secret) return;
+    updateTextEditorRect();
+  }, [editing, local, column?.type, column?.config?.secret]);
   const isCellEditing = editing || !!editingActive;
   const tdProps = (className?: string): TdHTMLAttributes<HTMLTableCellElement> => ({
     ...cellProps,
@@ -3792,6 +3933,74 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
   const inputType = column.type === 'text' && column.config?.secret ? 'password' : 'text';
   const numberInputProps = column.type === 'number' ? getNumberInputProps(column) : {};
   const inputValue = column.type === 'number' && !editing ? formatNumberValue(local, column) : local;
+  const commitValue = () => {
+    if (skipNextCommitRef.current) {
+      skipNextCommitRef.current = false;
+      setLocal(value);
+      return;
+    }
+    const next = column.type === 'number' ? normalizeNumberValue(local, column) : local;
+    if (next !== local) setLocal(next);
+    if (next !== value) onChange(next);
+  };
+  if (column.type === 'text' && !column.config?.secret) {
+    const textEditor = editing && focusRect ? createPortal(
+      <textarea
+        ref={setInputElement}
+        className="akdb-text-editor-overlay"
+        value={local}
+        wrap="soft"
+        maxLength={maxLength}
+        style={focusRect}
+        onChange={(event) => setLocal(event.currentTarget.value)}
+        onBlur={() => {
+          commitValue();
+          setEditing(false);
+          onEditStateChange?.(false);
+          setFocusRect(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.blur();
+            return;
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            skipNextCommitRef.current = true;
+            setLocal(value);
+            setEditing(false);
+            onEditStateChange?.(false);
+            setFocusRect(null);
+            event.currentTarget.blur();
+          }
+        }}
+      />,
+      document.body,
+    ) : null;
+    return (
+      <td {...tdProps('akdb-editable-cell akdb-text-cell')} ref={cellRef}>
+        <button
+          type="button"
+          className="akdb-text-cell-preview"
+          onClick={() => {
+            setEditing(true);
+            onEditStateChange?.(true);
+            requestAnimationFrame(() => {
+              updateTextEditorRect();
+              focusTextEditorAtEnd();
+            });
+          }}
+        >
+          {local}
+        </button>
+        {textEditor}
+        {cellChrome}
+      </td>
+    );
+  }
   if (column.type === 'number' && !editing && (column.config?.display_as === 'bar' || column.config?.display_as === 'ring')) {
     return (
       <td {...tdProps('akdb-number-visual-cell')} ref={cellRef}>
@@ -3836,17 +4045,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
       </td>
     );
   }
-  const commitValue = () => {
-    if (skipNextCommitRef.current) {
-      skipNextCommitRef.current = false;
-      setLocal(value);
-      return;
-    }
-    const next = column.type === 'number' ? normalizeNumberValue(local, column) : local;
-    if (next !== local) setLocal(next);
-    if (next !== value) onChange(next);
-  };
-  return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input ref={inputRef} value={inputValue} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={() => { setEditing(true); onEditStateChange?.(true); updateFocusRect(); }} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setEditing(false); onEditStateChange?.(false); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); skipNextCommitRef.current = true; setLocal(value); setEditing(false); onEditStateChange?.(false); setFocusRect(null); (e.currentTarget as HTMLInputElement).blur(); } }} />{focusOverlay}{cellChrome}</td>;
+  return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input ref={setInputElement} value={inputValue} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={() => { setEditing(true); onEditStateChange?.(true); updateFocusRect(); }} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setEditing(false); onEditStateChange?.(false); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); skipNextCommitRef.current = true; setLocal(value); setEditing(false); onEditStateChange?.(false); setFocusRect(null); (e.currentTarget as HTMLInputElement).blur(); } }} />{focusOverlay}{cellChrome}</td>;
 }
 
 function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange, onEditProperty }: { value: string; options: any[]; config: Record<string, any>; isStatus?: boolean; anchorRef?: RefObject<HTMLElement>; onChange: (value: string) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void; onEditProperty?: () => void }) {

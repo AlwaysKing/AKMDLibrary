@@ -817,6 +817,7 @@ func_call  := identifier "(" (expression ("," expression)*)? ")"
 | 章节标题 / 分组标题 | 12px / 500 / 20px，使用 `--akdb-menu-text-secondary` 或 `--akdb-menu-text-tertiary` |
 | 普通 lucide 动作图标 | 16px，`stroke-width: 2`，颜色用次级图标色；不要被全局 `--akdb-menu-icon-size: 18px` 强制放大 |
 | property type 默认图标 | 18px 视觉盒，内部 SVG 16px，可用 `transform: scale(1.2)`；只用于字段类型图标，不用于普通菜单动作 |
+| 预览卡片 | 用于视图布局、数字“显示为”等三列卡片选择器：`font-size: 11px`、`font-weight: 500`、`line-height: 1`、`border-radius: 6px`、`padding: 6px`、内容高度 `36px`；图标/预览视觉盒 20px，和文字间距 4px；普通态 1px 边框，选中态 2px 蓝色内描边。所有同类卡片必须复用 `--akdb-preview-card-*` token，不要单独写 `13px` 或固定大高度。 |
 | switch | 26px × 14px 轨道 + 2px padding，白色 14px 圆点；切换不应关闭父菜单，除非该菜单项本身是导航/确认动作 |
 
 实现约束：
