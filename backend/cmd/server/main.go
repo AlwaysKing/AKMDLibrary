@@ -149,6 +149,7 @@ func main() {
 
 	// Public routes
 	r.Post("/api/auth/login", authHandler.Login)
+	r.Post("/api/auth/refresh", authHandler.Refresh)
 	r.Post("/api/auth/logout", authHandler.Logout)
 	r.Get("/api/site-settings", siteSettingHandler.Get)
 	// Claude WebSocket（独立鉴权——浏览器 WS 不能用 Authorization header）

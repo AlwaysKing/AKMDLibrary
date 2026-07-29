@@ -33,7 +33,7 @@ func (s *AuthService) Login(username, password string) (*model.LoginResponse, er
 		return nil, errors.New("invalid credentials")
 	}
 
-	token, err := s.generateToken(user.ID)
+	token, err := s.GenerateAccessToken(user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
@@ -59,15 +59,37 @@ func (s *AuthService) Me(userID int) (*model.User, error) {
 	return user, nil
 }
 
-func (s *AuthService) generateToken(userID int) (string, error) {
+func (s *AuthService) GenerateAccessToken(userID int) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
-		"exp":     time.Now().Add(24 * time.Hour).Unix(),
+		"type":    "access",
+		"exp":     time.Now().Add(time.Hour).Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 	return token.SignedString([]byte(s.jwtSecret))
+}
+
+func (s *AuthService) GenerateRefreshToken(userID int, rememberMe bool) (string, time.Duration, error) {
+	ttl := 24 * time.Hour
+	if rememberMe {
+		ttl = 30 * 24 * time.Hour
+	}
+
+	claims := jwt.MapClaims{
+		"user_id": userID,
+		"type":    "refresh",
+		"exp":     time.Now().Add(ttl).Unix(),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(s.jwtSecret))
+	if err != nil {
+		return "", 0, err
+	}
+
+	return tokenString, ttl, nil
 }
 
 func (s *AuthService) VerifyToken(tokenString string) (int, error) {
@@ -83,11 +105,68 @@ func (s *AuthService) VerifyToken(tokenString string) (int, error) {
 	}
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		userID := int(claims["user_id"].(float64))
-		return userID, nil
+		tokenType, _ := claims["type"].(string)
+		// Accept legacy tokens without a type claim so existing sessions are not
+		// forced out immediately after deployment.
+		if tokenType != "" && tokenType != "access" {
+			return 0, errors.New("invalid token type")
+		}
+		return userIDFromClaims(claims)
 	}
 
 	return 0, errors.New("invalid token")
+}
+
+func (s *AuthService) VerifyRefreshToken(tokenString string) (int, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(s.jwtSecret), nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		if tokenType, _ := claims["type"].(string); tokenType != "refresh" {
+			return 0, errors.New("invalid token type")
+		}
+		return userIDFromClaims(claims)
+	}
+
+	return 0, errors.New("invalid token")
+}
+
+func (s *AuthService) Refresh(refreshToken string) (*model.LoginResponse, error) {
+	userID, err := s.VerifyRefreshToken(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := s.Me(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := s.GenerateAccessToken(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	return &model.LoginResponse{
+		Token: token,
+		User:  user,
+	}, nil
+}
+
+func userIDFromClaims(claims jwt.MapClaims) (int, error) {
+	userIDValue, ok := claims["user_id"].(float64)
+	if !ok {
+		return 0, errors.New("missing user_id")
+	}
+	return int(userIDValue), nil
 }
 
 func (s *AuthService) HashPassword(password string) (string, error) {

@@ -3,6 +3,7 @@ import apiClient from './client';
 export interface LoginRequest {
   username: string;
   password: string;
+  remember_me?: boolean;
 }
 
 export interface AuthResponse {
@@ -28,6 +29,11 @@ export const authApi = {
 
   logout: async (): Promise<void> => {
     await apiClient.post('/auth/logout');
+  },
+
+  refresh: async (): Promise<AuthResponse> => {
+    const response = await apiClient.post<AuthResponse>('/auth/refresh');
+    return response.data;
   },
 
   me: async (): Promise<User> => {

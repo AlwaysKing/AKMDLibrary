@@ -9,6 +9,7 @@ interface AuthState {
   login: (credentials: LoginRequest) => Promise<void>;
   logout: () => void;
   fetchMe: () => Promise<void>;
+  refreshSession: () => Promise<boolean>;
   initialize: () => void;
   updateProfile: (data: { display_name?: string; avatar_url?: string }) => Promise<void>;
 }
@@ -31,6 +32,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    void authApi.logout().catch(() => {});
     localStorage.removeItem('token');
     set({
       token: null,
@@ -48,13 +50,32 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
+  refreshSession: async () => {
+    try {
+      const response = await authApi.refresh();
+      localStorage.setItem('token', response.token);
+      set({
+        token: response.token,
+        user: response.user,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      return true;
+    } catch {
+      localStorage.removeItem('token');
+      set({ token: null, user: null, isAuthenticated: false, isLoading: false });
+      return false;
+    }
+  },
+
   initialize: () => {
     const token = localStorage.getItem('token');
     if (token) {
       set({ token, isLoading: true });
       useAuthStore.getState().fetchMe();
     } else {
-      set({ isLoading: false });
+      set({ isLoading: true });
+      useAuthStore.getState().refreshSession();
     }
   },
 

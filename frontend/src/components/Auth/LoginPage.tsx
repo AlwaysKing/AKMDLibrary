@@ -6,6 +6,7 @@ import { siteSettingsApi, SiteSettings } from '../../api/siteSettings';
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>({});
@@ -13,6 +14,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     siteSettingsApi.get().then(setSiteSettings).catch(() => {});
+    const rememberedUsername = readCookie('akmd_remembered_username');
+    if (rememberedUsername) {
+      setUsername(rememberedUsername);
+    }
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -21,7 +26,12 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      await login({ username, password });
+      await login({ username, password, remember_me: rememberMe });
+      if (rememberMe) {
+        writeCookie('akmd_remembered_username', username, 30);
+      } else {
+        deleteCookie('akmd_remembered_username');
+      }
       // login() 设置 isAuthenticated = true 后，/login 路由自动切换为 HomeRedirect
       // HomeRedirect 会统一处理：优先恢复 location.state.from（ProtectedRoute 保存），其次使用 last_active_space 偏好
       // 不需要手动 navigate，避免与 HomeRedirect 产生竞态条件
@@ -86,6 +96,16 @@ export default function LoginPage() {
               />
             </div>
 
+            <label className="flex items-center gap-2 text-sm text-notion-textSecondary">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 rounded border-notion-border text-blue-500 focus:ring-blue-500"
+              />
+              记住我
+            </label>
+
             {error && (
               <div className="bg-red-50 text-red-600 px-3 py-2 rounded-lg text-sm">
                 {error}
@@ -108,4 +128,22 @@ export default function LoginPage() {
       </div>
     </div>
   );
+}
+
+function readCookie(name: string): string {
+  const prefix = `${name}=`;
+  const cookie = document.cookie
+    .split('; ')
+    .find((item) => item.startsWith(prefix));
+  if (!cookie) return '';
+  return decodeURIComponent(cookie.slice(prefix.length));
+}
+
+function writeCookie(name: string, value: string, days: number) {
+  const maxAge = days * 24 * 60 * 60;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; samesite=lax`;
+}
+
+function deleteCookie(name: string) {
+  document.cookie = `${name}=; path=/; max-age=0; samesite=lax`;
 }
