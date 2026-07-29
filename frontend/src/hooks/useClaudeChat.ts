@@ -7,8 +7,17 @@ export interface ChatMessage {
   id: string; // 用于 react key
   role: 'user' | 'assistant' | 'system';
   content: string;
+  turnId?: string;
   variant?: 'denied' | 'error'; // system 消息的子类型
   attachments?: { filename: string }[]; // 用户消息附带的文件名列表（仅 UI 展示）
+}
+
+export interface AgentIOEvent {
+  id: string;
+  turnId: string | null;
+  direction: 'stdin' | 'stdout' | 'stderr' | 'system';
+  content: string;
+  timestamp: string;
 }
 
 /** 当前 UI 状态，发给后端拼装到 claude message 前置 block */
@@ -26,6 +35,8 @@ interface UseClaudeChatOptions {
 
 interface UseClaudeChatReturn {
   messages: ChatMessage[];
+  agentEvents: AgentIOEvent[];
+  activeTurnId: string | null;
   status: ChatStatus;
   isConnected: boolean;
   sessionId: string | null;
@@ -52,10 +63,14 @@ function nextId() {
 
 export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClaudeChatOptions): UseClaudeChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [agentEvents, setAgentEvents] = useState<AgentIOEvent[]>([]);
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [status, setStatus] = useState<ChatStatus>('idle');
   const [isConnected, setIsConnected] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const activeTurnRef = useRef<string | null>(null);
+  const pendingAssistantRef = useRef<Array<{ turnId: string; content: string }>>([]);
 
   // session_init 之前用户拖的文件暂存这里，session_init 后自动 flush
   const pendingQueueRef = useRef<Array<{
@@ -74,6 +89,26 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
   // 回调用 ref 持有，避免 connect() 闭包捕获旧版本导致回调失效
   const onToolFileChangedRef = useRef(onToolFileChanged);
   onToolFileChangedRef.current = onToolFileChanged;
+
+  const finishTurn = (turnId: string | null) => {
+    if (turnId) {
+      const pending = pendingAssistantRef.current.filter(message => message.turnId === turnId);
+      if (pending.length > 0) {
+        setMessages(prev => [
+          ...prev,
+          ...pending.map(message => ({
+            id: nextId(),
+            role: 'assistant' as const,
+            turnId: message.turnId,
+            content: message.content,
+          })),
+        ]);
+      }
+      pendingAssistantRef.current = pendingAssistantRef.current.filter(message => message.turnId !== turnId);
+    }
+    activeTurnRef.current = null;
+    setActiveTurnId(null);
+  };
 
   // 创建 WS 连接（lazy：仅在 send 时触发）
   const connect = useCallback(() => {
@@ -132,11 +167,31 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
           }
           break;
         case 'status':
-          setStatus(msg.status === 'answering' ? 'answering' : 'idle');
+          if (msg.status === 'answering') {
+            setStatus('answering');
+          } else {
+            finishTurn(activeTurnRef.current);
+            setStatus('idle');
+          }
           break;
         case 'assistant_message':
-          setMessages(prev => [...prev, { id: nextId(), role: 'assistant', content: msg.content }]);
-          setStatus('idle');
+          if (activeTurnRef.current) {
+            pendingAssistantRef.current.push({
+              turnId: activeTurnRef.current,
+              content: msg.content,
+            });
+          } else {
+            setMessages(prev => [...prev, { id: nextId(), role: 'assistant', content: msg.content }]);
+          }
+          break;
+        case 'agent_io':
+          setAgentEvents(prev => [...prev, {
+            id: nextId(),
+            turnId: activeTurnRef.current,
+            direction: msg.direction,
+            content: msg.content,
+            timestamp: msg.timestamp,
+          }]);
           break;
         case 'permission_denied':
           setMessages(prev => [...prev, {
@@ -151,6 +206,7 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
           try { onToolFileChangedRef.current?.({ tool: msg.tool, filePath: msg.filePath }); } catch (e) { console.error('[useClaudeChat] onToolFileChanged handler error:', e); }
           break;
         case 'error':
+          finishTurn(activeTurnRef.current);
           setMessages(prev => [...prev, {
             id: nextId(),
             role: 'system',
@@ -167,6 +223,10 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
   // 注意：这里不 auto-connect，由 send 触发 lazy connect
   useEffect(() => {
     setMessages([]);
+    setAgentEvents([]);
+    activeTurnRef.current = null;
+    pendingAssistantRef.current = [];
+    setActiveTurnId(null);
     setStatus('idle');
     setSessionId(null);
     return () => {
@@ -176,6 +236,9 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
       }
       setIsConnected(false);
       setSessionId(null);
+      activeTurnRef.current = null;
+      pendingAssistantRef.current = [];
+      setActiveTurnId(null);
       pendingSendRef.current = [];
     };
   }, [spaceSlug, enabled]);
@@ -187,12 +250,19 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
 
     // 用户消息 bubble 上附带附件文件名（仅 UI 展示用，后端会通过 attachmentId 解析）
     const fileMeta = attachments?.map(a => ({ filename: a.filename })) || [];
+    const turnId = nextId();
     setMessages(prev => [...prev, {
-      id: nextId(),
+      id: turnId,
       role: 'user',
       content: trimmed,
       attachments: fileMeta.length > 0 ? fileMeta : undefined,
     }]);
+    activeTurnRef.current = turnId;
+    setActiveTurnId(turnId);
+    // Claude 进程在首次发送前就已启动，归档到首轮提问中，避免漏掉启动阶段通讯。
+    setAgentEvents(prev => prev.map(event => (
+      event.turnId === null ? { ...event, turnId } : event
+    )));
 
     // WS 未连：入队 + 触发 lazy connect，等 onopen flush
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -243,6 +313,10 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
 
   const reset = useCallback(() => {
     setMessages([]);
+    setAgentEvents([]);
+    activeTurnRef.current = null;
+    pendingAssistantRef.current = [];
+    setActiveTurnId(null);
     setStatus('idle');
   }, []);
 
@@ -254,5 +328,5 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
     console.log('[useClaudeChat] sent stop');
   }, []);
 
-  return { messages, status, isConnected, sessionId, send, stop, uploadAttachment, reset };
+  return { messages, agentEvents, activeTurnId, status, isConnected, sessionId, send, stop, uploadAttachment, reset };
 }

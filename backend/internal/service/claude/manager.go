@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -114,28 +115,56 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
 		}
 	}
 
+	var writeMu sync.Mutex
+	writeEvent := func(data []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return params.Conn.Write(ctx, websocket.MessageText, data)
+	}
+
 	cb := SessionCallbacks{
 		OnStatus: func(status string) {
 			data, _ := json.Marshal(EventStatus{Type: "status", Status: status})
-			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+			if err := writeEvent(data); err != nil {
+				log.Printf("[claude manager] write status event failed: %v", err)
+			}
 		},
 		OnAssistantText: func(text string) {
 			data, _ := json.Marshal(EventAssistantMessage{Type: "assistant_message", Content: text})
-			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+			if err := writeEvent(data); err != nil {
+				log.Printf("[claude manager] write assistant message failed: %v", err)
+			}
+		},
+		OnAgentIO: func(direction, content string) {
+			data, _ := json.Marshal(EventAgentIO{
+				Type:      "agent_io",
+				Direction: direction,
+				Content:   content,
+				Timestamp: time.Now().Format(time.RFC3339Nano),
+			})
+			if err := writeEvent(data); err != nil {
+				log.Printf("[claude manager] write agent io event failed: %v", err)
+			}
 		},
 		OnPermissionDenied: func(tool, path, reason string) {
 			data, _ := json.Marshal(EventPermissionDenied{Type: "permission_denied", Tool: tool, Path: path, Reason: reason})
-			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+			if err := writeEvent(data); err != nil {
+				log.Printf("[claude manager] write permission denied event failed: %v", err)
+			}
 		},
 		OnToolFileChanged: func(tool, filePath string) {
 			// session 已经把路径构造为 Page.file_path 格式（spaceSlug/...），直接透传
 			log.Printf("[claude manager][debug] OnToolFileChanged tool=%s filePath=%s", tool, filePath)
 			data, _ := json.Marshal(EventToolFileChanged{Type: "tool_file_changed", Tool: tool, FilePath: filePath})
-			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+			if err := writeEvent(data); err != nil {
+				log.Printf("[claude manager] write tool file changed event failed: %v", err)
+			}
 		},
 		OnError: func(message string) {
 			data, _ := json.Marshal(EventError{Type: "error", Message: message})
-			_ = params.Conn.Write(ctx, websocket.MessageText, data)
+			if err := writeEvent(data); err != nil {
+				log.Printf("[claude manager] write error event failed: %v", err)
+			}
 		},
 	}
 	sess := NewSession(SessionParams{
@@ -158,7 +187,7 @@ func (m *Manager) StartSession(ctx context.Context, params StartSessionParams) (
 
 	// 推 session_init，前端拿到后才能上传附件
 	initData, _ := json.Marshal(EventSessionInit{Type: "session_init", SessionID: sessionID})
-	if err := params.Conn.Write(ctx, websocket.MessageText, initData); err != nil {
+	if err := writeEvent(initData); err != nil {
 		log.Printf("[claude manager] push session_init failed: %v", err)
 	}
 

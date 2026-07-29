@@ -25,6 +25,7 @@ import (
 type SessionCallbacks struct {
 	OnStatus           func(status string) // "answering" | "idle"
 	OnAssistantText    func(text string)
+	OnAgentIO          func(direction, content string)
 	OnPermissionDenied func(tool, path, reason string)
 	OnToolFileChanged  func(tool, filePath string) // Write/Edit/MultiEdit 成功执行后触发
 	OnError            func(message string)
@@ -62,11 +63,11 @@ type pendingToolUse struct {
 }
 
 type SessionParams struct {
-	SessionID    string                         // 由 manager 生成
-	SpaceSlug    string                         // 用于构造与 Page.file_path 一致的路径
-	SpaceDir     string                         // 子进程 cwd
-	AttachDir    string                         // /tmp/.../session/<id>，由 manager 创建好
-	EnvOverrides map[string]string              // settings.json.env 的覆盖
+	SessionID    string            // 由 manager 生成
+	SpaceSlug    string            // 用于构造与 Page.file_path 一致的路径
+	SpaceDir     string            // 子进程 cwd
+	AttachDir    string            // /tmp/.../session/<id>，由 manager 创建好
+	EnvOverrides map[string]string // settings.json.env 的覆盖
 	SystemPrompt string
 	UserCanWrite bool
 	ToolConfig   ToolConfig
@@ -130,7 +131,7 @@ func (s *Session) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = logWriter{}
+	cmd.Stderr = sessionLogWriter{session: s}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start claude: %w", err)
@@ -139,6 +140,7 @@ func (s *Session) Start(ctx context.Context) error {
 	s.stdin = stdin
 	s.stdout = stdout
 
+	s.emitAgentIO("system", "claude process started")
 	s.wg.Add(1)
 	go s.readLoop()
 
@@ -147,18 +149,28 @@ func (s *Session) Start(ctx context.Context) error {
 		if err != nil && ctx.Err() == nil {
 			// 把退出原因一并记到日志（前端只收到精简版）
 			log.Printf("[claude session] process exit: %v", err)
+			s.emitAgentIO("system", fmt.Sprintf("claude process exited with error: %v", err))
 			s.callbacks.OnError(fmt.Sprintf("claude 进程退出: %v", err))
+			return
+		}
+		if ctx.Err() == nil {
+			s.emitAgentIO("system", "claude process exited")
 		}
 		s.wg.Wait()
 	}()
 	return nil
 }
 
-// logWriter 把 claude stderr 转发到 log。
-type logWriter struct{}
+// sessionLogWriter 把 claude stderr 同步转发到日志和前端。
+type sessionLogWriter struct {
+	session *Session
+}
 
-func (logWriter) Write(p []byte) (int, error) {
+func (w sessionLogWriter) Write(p []byte) (int, error) {
 	log.Printf("[claude stderr] %s", string(p))
+	if w.session != nil {
+		w.session.emitAgentIO("stderr", string(p))
+	}
 	return len(p), nil
 }
 
@@ -176,10 +188,15 @@ func (s *Session) readLoop() {
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("[claude session] scanner error: %v", err)
+		s.emitAgentIO("system", fmt.Sprintf("claude stdout scanner error: %v", err))
+		s.callbacks.OnError(fmt.Sprintf("读取 claude 输出失败: %v", err))
+		return
 	}
+	s.emitAgentIO("system", "claude stdout closed")
 }
 
 func (s *Session) handleLine(line []byte) {
+	s.emitAgentIO("stdout", string(line))
 	// 先探一下 type 字段
 	var probe struct {
 		Type string `json:"type"`
@@ -312,7 +329,11 @@ func (s *Session) handleControlRequest(line []byte) {
 	})
 	// 回应 claude；allow 时把原始 input 原样回传为 updatedInput（Claude Code 2.1.201+ 要求）
 	resp := NewControlResponse(cr.RequestID, result.Allowed, result.Reason, cr.Request.Input)
-	s.writeJSON(resp)
+	if err := s.writeJSON(resp); err != nil {
+		log.Printf("[claude session] write permission response failed: %v", err)
+		s.callbacks.OnError(fmt.Sprintf("回复 Claude 权限请求失败: %v", err))
+		return
+	}
 	// 拒绝时通知前端
 	if !result.Allowed {
 		s.callbacks.OnPermissionDenied(cr.Request.ToolName, result.Path, result.Reason)
@@ -320,17 +341,22 @@ func (s *Session) handleControlRequest(line []byte) {
 }
 
 // writeJSON 把消息写到 claude stdin（线程安全）。
-func (s *Session) writeJSON(v any) {
+func (s *Session) writeJSON(v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal claude stdin message: %w", err)
 	}
 	raw = append(raw, '\n')
 	s.stdoutMu.Lock()
 	defer s.stdoutMu.Unlock()
-	if s.stdin != nil {
-		_, _ = s.stdin.Write(raw)
+	if s.stdin == nil {
+		return fmt.Errorf("claude stdin is unavailable")
 	}
+	s.emitAgentIO("stdin", string(raw))
+	if _, err := s.stdin.Write(raw); err != nil {
+		return fmt.Errorf("write claude stdin: %w", err)
+	}
+	return nil
 }
 
 // SendInterrupt 中止当前回答：向 claude 发 control_request subtype=interrupt。
@@ -343,20 +369,27 @@ func (s *Session) SendInterrupt() {
 		},
 		"request_id": fmt.Sprintf("interrupt_%d", time.Now().UnixMilli()),
 	}
-	s.writeJSON(msg)
+	if err := s.writeJSON(msg); err != nil {
+		log.Printf("[claude session] send interrupt failed: %v", err)
+		s.callbacks.OnError(fmt.Sprintf("中止 Claude 回答失败: %v", err))
+		return
+	}
 	log.Printf("[claude session] sent interrupt")
 }
-//
+
 // 拼装顺序：
-//   1. 当前文档（如果 context.ActivePageID 不为空）：text block
-//   2. 选中文本（如果 context.Selection 不为空）：text block
-//   3. 每个附件：图片走 image block（直接看），其他文件走 text block（告诉路径）
-//   4. 用户提示词原文（含 @filename 标记，原样透传）
+//  1. 当前文档（如果 context.ActivePageID 不为空）：text block
+//  2. 选中文本（如果 context.Selection 不为空）：text block
+//  3. 每个附件：图片走 image block（直接看），其他文件走 text block（告诉路径）
+//  4. 用户提示词原文（含 @filename 标记，原样透传）
 func (s *Session) SendUserMessage(text string, ctx *ClientContext, attachments []string) {
 	s.callbacks.OnStatus("answering")
 
 	blocks := s.buildContextBlocks(text, ctx, attachments)
-	s.writeJSON(NewUserMessageFromBlocks(blocks))
+	if err := s.writeJSON(NewUserMessageFromBlocks(blocks)); err != nil {
+		log.Printf("[claude session] send user message failed: %v", err)
+		s.callbacks.OnError(fmt.Sprintf("发送消息给 Claude 失败: %v", err))
+	}
 }
 
 // buildContextBlocks 把 UI 状态翻译成 claude 的 content blocks。
@@ -366,7 +399,11 @@ func (s *Session) buildContextBlocks(text string, ctx *ClientContext, attachment
 	// 当前文档：page id → file_path → 绝对路径
 	if ctx != nil && ctx.ActivePageID != "" && s.pageRepo != nil {
 		if page, err := s.pageRepo.GetByID(ctx.ActivePageID); err == nil && page != nil {
-			absPath := filepath.Join(s.spaceDir, page.FilePath)
+			relPath := page.FilePath
+			if s.spaceSlug != "" {
+				relPath = strings.TrimPrefix(relPath, s.spaceSlug+"/")
+			}
+			absPath := filepath.Join(s.spaceDir, relPath)
 			blocks = append(blocks, ContentBlock{
 				Type: "text",
 				Text: fmt.Sprintf("当前文件: %s", absPath),
@@ -520,6 +557,12 @@ func (s *Session) HandleWebSocket(ctx context.Context, c *websocket.Conn) {
 			// 用户点击中止按钮：向 claude 发 interrupt
 			s.SendInterrupt()
 		}
+	}
+}
+
+func (s *Session) emitAgentIO(direction, content string) {
+	if s.callbacks.OnAgentIO != nil {
+		s.callbacks.OnAgentIO(direction, content)
 	}
 }
 

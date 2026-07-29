@@ -51,7 +51,7 @@ export function ChatPanel({ spaceSlug, open, onClose }: Props) {
     }
   };
 
-  const { messages, status, send, stop, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true, onToolFileChanged: handleToolFileChanged });
+  const { messages, agentEvents, activeTurnId, status, send, stop, uploadAttachment } = useClaudeChat({ spaceSlug, enabled: true, onToolFileChanged: handleToolFileChanged });
   // 初始位置：让面板距右边缘和底边缘各 20px（与 size 460x520 配合）
   const [pos, setPos] = useState({ x: window.innerWidth - 480, y: window.innerHeight - 540 });
   const [size, setSize] = useState({ w: 460, h: 520 });
@@ -273,7 +273,7 @@ export function ChatPanel({ spaceSlug, open, onClose }: Props) {
           <X className="w-4 h-4" />
         </button>
       </div>
-      <MessageList messages={messages} status={status} />
+      <MessageList messages={messages} agentEvents={agentEvents} activeTurnId={activeTurnId} status={status} />
       <MessageInput
         onSend={handleSend}
         disabled={status === 'answering'}

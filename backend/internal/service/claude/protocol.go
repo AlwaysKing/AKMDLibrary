@@ -209,8 +209,17 @@ type EventStatus struct {
 }
 
 type EventAssistantMessage struct {
-	Type    string `json:"type"`    // "assistant_message"
+	Type    string `json:"type"` // "assistant_message"
 	Content string `json:"content"`
+}
+
+// EventAgentIO 镜像后端与 Claude 子进程之间的原始通讯。
+// direction 为 stdin、stdout、stderr 或 system；content 保留原始内容，供前端还原完整流程。
+type EventAgentIO struct {
+	Type      string `json:"type"`      // "agent_io"
+	Direction string `json:"direction"` // "stdin" | "stdout" | "stderr" | "system"
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"` // RFC3339Nano
 }
 
 type EventPermissionDenied struct {
@@ -249,10 +258,10 @@ type EventSessionInit struct {
 // ClientMessage 是前端 WS 发来的消息。
 // Context/Attachments 是可选字段（向后兼容老前端）。
 type ClientMessage struct {
-	Type        string             `json:"type"` // "user_message"
-	Content     string             `json:"content"`
-	Context     *ClientContext     `json:"context,omitempty"`
-	Attachments []string           `json:"attachments,omitempty"` // attachment uuid 列表
+	Type        string         `json:"type"` // "user_message"
+	Content     string         `json:"content"`
+	Context     *ClientContext `json:"context,omitempty"`
+	Attachments []string       `json:"attachments,omitempty"` // attachment uuid 列表
 }
 
 // ClientContext 描述用户当前 UI 状态。
