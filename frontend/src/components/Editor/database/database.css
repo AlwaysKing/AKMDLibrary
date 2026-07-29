@@ -145,7 +145,8 @@
 .akdb-view-rule-check { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid rgba(55,53,47,.18); border-radius: 4px; color: #2383e2; font-size: 13px; line-height: 1; }
 .akdb-view-rule-dot { display: inline-block; flex: 0 0 10px; width: 10px; height: 10px; border-radius: 999px; }
 .akdb-view-rule-clear { display: flex; align-items: center; width: 100%; height: var(--akdb-menu-item-height); margin-top: 4px; border: 0; border-top: 1px solid var(--akdb-menu-divider); border-radius: 0; background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font-size: var(--akdb-menu-font-size); font-weight: 400; }
-.akdb-view-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 34px; margin: 0 0 6px 8px; }
+.akdb-view-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; margin: 0 0 6px 8px; padding: 4px 0; }
+.akdb-view-row.is-title-replacement { margin-bottom: 0; }
 .akdb-view-row .akdb-block-actions { padding-right: 8px; }
 .akdb-view-tabs { display: flex; align-items: center; gap: 2px; height: 30px; min-width: 0; }
 .akdb-view-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 28px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: #787774; cursor: pointer; padding: 0 8px; font-size: 13px; }

@@ -384,6 +384,8 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
           src: attrs.src || '',
           viewId: attrs.view || '',
           views: innerLines.join('\n').trim(),
+          title: attrs.title || '数据库',
+          icon: attrs.icon || '',
         },
       });
       continue;
@@ -1173,7 +1175,15 @@ function serializeRegularBlock(block: any, listDepth = 0): string {
       const src = block.props?.src || '';
       const viewId = block.props?.viewId || '';
       const views = block.props?.views || '';
-      return `<database src="${escapeHtmlAttribute(src)}" view="${escapeHtmlAttribute(viewId)}">\n${views}\n</database>`;
+      const title = block.props?.title || '';
+      const icon = block.props?.icon || '';
+      const attrs = [
+        `src="${escapeHtmlAttribute(src)}"`,
+        `view="${escapeHtmlAttribute(viewId)}"`,
+        title && title !== '数据库' ? `title="${escapeHtmlAttribute(title)}"` : '',
+        icon ? `icon="${escapeHtmlAttribute(icon)}"` : '',
+      ].filter(Boolean).join(' ');
+      return `<database ${attrs}>\n${views}\n</database>`;
     }
 
     case 'quote': {

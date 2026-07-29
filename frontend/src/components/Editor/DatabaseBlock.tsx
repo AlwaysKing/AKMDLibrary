@@ -561,6 +561,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
     </div>
   );
   const rowSelectionToolbar = selectedRowCount > 0 ? <RowSelectionToolbar blockId={block.id} count={selectedRowCount} /> : null;
+  const showViewTabs = parsed.views.length > 1 || !showDatabaseTitle;
+  const showBlockHeader = showDatabaseTitle;
 
   return (
     <div
@@ -569,43 +571,45 @@ function DatabaseBlockComponent({ block, editor }: any) {
       onMouseMoveCapture={stopEditorTableHandles}
       onMouseUpCapture={stopEditorTableHandlesAndEndSelection}
     >
-      <div className="akdb-block-header">
-        {showDatabaseTitle && (
-          <div className="akdb-block-titlebar">
-            <div className={`akdb-block-page-icon ${icon ? 'has-icon' : ''}`}>
-              <PageIcon
-                icon={icon || null}
-                compact
-                autoOpen={iconPickerRequest}
-                emojiOnly
-                triggerClassName="akdb-database-icon-trigger"
-                onSelect={updateIcon}
-              />
+      {showBlockHeader && (
+        <div className="akdb-block-header">
+          {showDatabaseTitle && (
+            <div className="akdb-block-titlebar">
+              <div className={`akdb-block-page-icon ${icon ? 'has-icon' : ''}`}>
+                <PageIcon
+                  icon={icon || null}
+                  compact
+                  autoOpen={iconPickerRequest}
+                  emojiOnly
+                  triggerClassName="akdb-database-icon-trigger"
+                  onSelect={updateIcon}
+                />
+              </div>
+              <div className={`akdb-block-title ${draftTitle.trim() ? 'has-title' : ''}`}>
+                <input
+                  value={draftTitle}
+                  aria-label="数据库块名称"
+                  style={{ width: `${Math.max(draftTitle.length || 0, 3)}em` }}
+                  onChange={(event) => setDraftTitle(event.currentTarget.value)}
+                  onBlur={(event) => renameTitle(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              {parsed.views.length <= 1 && <button className="akdb-ghost-icon" type="button" disabled={controlsDisabled} onClick={() => addView('table')} aria-label="新增表格视图"><Plus size={19} /></button>}
             </div>
-            <div className={`akdb-block-title ${draftTitle.trim() ? 'has-title' : ''}`}>
-              <input
-                value={draftTitle}
-                aria-label="数据库块名称"
-                style={{ width: `${Math.max(draftTitle.length || 0, 3)}em` }}
-                onChange={(event) => setDraftTitle(event.currentTarget.value)}
-                onBlur={(event) => renameTitle(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    event.currentTarget.blur();
-                  }
-                }}
-              />
-            </div>
-            {parsed.views.length <= 1 && <button className="akdb-ghost-icon" type="button" disabled={controlsDisabled} onClick={() => addView('table')} aria-label="新增表格视图"><Plus size={19} /></button>}
-          </div>
-        )}
-        {parsed.views.length <= 1 && rowSelectionToolbar}
-        {parsed.views.length <= 1 && actions}
-      </div>
+          )}
+          {!showViewTabs && rowSelectionToolbar}
+          {!showViewTabs && actions}
+        </div>
+      )}
 
-      {parsed.views.length > 1 && (
-        <div className="akdb-view-row">
+      {showViewTabs && (
+        <div className={`akdb-view-row ${!showDatabaseTitle && parsed.views.length <= 1 ? 'is-title-replacement' : ''}`}>
           {rowSelectionToolbar || (
             <div className="akdb-view-tabs">
               {parsed.views.map((v) => (
