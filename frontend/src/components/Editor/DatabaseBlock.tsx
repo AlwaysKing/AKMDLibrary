@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
-import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, defaultColumnIconID } from './database/DatabaseRenderer';
+import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
 import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
 
@@ -166,6 +166,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
         type: 'database',
         props: { src: db.id, viewId: view.id, views: serializeDatabaseMarkdown([view]) },
       } as any);
+      requestDatabaseImmediateSync();
       setPickerOpen(false);
       setPendingBind(null);
     } finally {
@@ -182,6 +183,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     editor.updateBlock(block.id, {
       props: { ...block.props, icon: nextIcon },
     } as any);
+    requestDatabaseImmediateSync();
   };
 
   const create = async () => {
@@ -194,6 +196,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
         type: 'database',
         props: { src: db.id, viewId: view.id, views: serializeDatabaseMarkdown([view]) },
       } as any);
+      requestDatabaseImmediateSync();
       setPickerOpen(false);
       setNewName('');
     } finally {
@@ -205,10 +208,12 @@ function DatabaseBlockComponent({ block, editor }: any) {
     const next: DatabaseViewConfig = { ...defaultView([]), type, name: viewName(type), source: activeSource && activeSource !== src ? activeSource : undefined };
     const views = [...parsed.views, next];
     editor.updateBlock(block.id, { props: { ...block.props, viewId: next.id, views: serializeDatabaseMarkdown(views) } } as any);
+    requestDatabaseImmediateSync();
   };
 
   const switchView = (id: string) => {
     editor.updateBlock(block.id, { props: { ...block.props, viewId: id } } as any);
+    requestDatabaseImmediateSync();
   };
 
   const updateView = (nextView: DatabaseViewConfig) => {
@@ -224,6 +229,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
         views: serializeDatabaseMarkdown(nextViews),
       },
     } as any);
+    requestDatabaseImmediateSync();
   };
 
   const duplicateView = (targetView: DatabaseViewConfig) => {
@@ -239,6 +245,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     const nextViews = [...parsed.views];
     nextViews.splice(sourceIndex >= 0 ? sourceIndex + 1 : nextViews.length, 0, nextView);
     editor.updateBlock(block.id, { props: { ...block.props, viewId: nextView.id, views: serializeDatabaseMarkdown(nextViews) } } as any);
+    requestDatabaseImmediateSync();
   };
 
   const changeViewSource = async (targetView: DatabaseViewConfig, sourceId: string) => {
@@ -258,6 +265,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
       endDate: undefined,
     } : view);
     editor.updateBlock(block.id, { props: { ...block.props, viewId: targetView.id, views: serializeDatabaseMarkdown(nextViews) } } as any);
+    requestDatabaseImmediateSync();
     setViewContextMenu(null);
   };
 
@@ -266,6 +274,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     const nextViews = parsed.views.filter((view) => view.id !== targetView.id);
     const nextViewId = targetView.id === activeView?.id ? nextViews[0]?.id || '' : viewId;
     editor.updateBlock(block.id, { props: { ...block.props, viewId: nextViewId, views: serializeDatabaseMarkdown(nextViews) } } as any);
+    requestDatabaseImmediateSync();
   };
 
   const openViewSettings = (pane: 'main' | 'visibility' | 'layout' = 'main') => {
@@ -398,6 +407,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     const nextTitle = value.trim() || '数据库';
     if (nextTitle === title) return;
     editor.updateBlock(block.id, { props: { ...block.props, title: nextTitle } } as any);
+    requestDatabaseImmediateSync();
   };
   const sourceControlsDisabled = !activeSource || !sourceAvailable;
   const controlsDisabled = sourceControlsDisabled || viewLocked;

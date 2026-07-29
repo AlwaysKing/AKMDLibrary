@@ -2430,6 +2430,8 @@ const IMAGE_TOOLBAR_ICONS = {
 
 export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false, codeTheme }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const immediateSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const immediateSyncQueuedRef = useRef(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [editorEl, setEditorEl] = useState<HTMLDivElement | null>(null);
   // Stable callback ref — avoids React calling null→element on every re-render
@@ -5184,6 +5186,63 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     await useSpaceStore.getState().refreshAll();
   }, [editor, persistFileContentBlocks]);
 
+  const requestImmediateEditorSync = useCallback((force = false) => {
+    if (readOnlyRef.current) return;
+    if (!force && !hasChangesRef.current) return;
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = undefined;
+    }
+
+    if (immediateSyncInFlightRef.current) {
+      immediateSyncQueuedRef.current = true;
+      return;
+    }
+
+    onSyncStatusChangeRef.current?.('unsaved');
+    immediateSyncInFlightRef.current = (async () => {
+      do {
+        immediateSyncQueuedRef.current = false;
+        await persistEditorNow();
+      } while (immediateSyncQueuedRef.current);
+    })().catch((err) => {
+      hasChangesRef.current = true;
+      onSyncStatusChangeRef.current?.('unsaved');
+      console.error('[PageEditor] Immediate sync failed:', err);
+    }).finally(() => {
+      immediateSyncInFlightRef.current = null;
+    });
+  }, [persistEditorNow]);
+
+  useEffect(() => {
+    if (readOnly) return;
+
+    const runImmediateDatabaseSync = () => {
+      requestImmediateEditorSync(true);
+    };
+
+    document.addEventListener('akdb-request-immediate-sync', runImmediateDatabaseSync);
+    return () => document.removeEventListener('akdb-request-immediate-sync', runImmediateDatabaseSync);
+  }, [requestImmediateEditorSync, readOnly]);
+
+  useEffect(() => {
+    if (readOnly) return;
+    const container = editorRef.current;
+    if (!container) return;
+
+    const handleFocusOut = () => {
+      window.setTimeout(() => {
+        const activeElement = document.activeElement;
+        if (activeElement && container.contains(activeElement)) return;
+        requestImmediateEditorSync(false);
+      }, 0);
+    };
+
+    container.addEventListener('focusout', handleFocusOut);
+    return () => container.removeEventListener('focusout', handleFocusOut);
+  }, [requestImmediateEditorSync, readOnly]);
+
   const insertBlocksAtCursor = useCallback((blocks: any[]) => {
     const currentBlock = editor.getTextCursorPosition().block;
     const blocksToInsert = blocks.map((b: any) => {
@@ -5290,7 +5349,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     (document.activeElement as HTMLElement)?.blur?.();
     document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     editor.focus();
-  }, [databaseDelete, editor]);
+    await persistEditorNow();
+  }, [databaseDelete, editor, persistEditorNow]);
 
   useEffect(() => {
     const handleDatabaseDeleteRequest = (event: Event) => {
