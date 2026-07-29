@@ -156,6 +156,10 @@
 .akdb-table tbody.is-column-dragging { overflow: hidden; contain: paint; }
 .akdb-table th, .akdb-table td { border-right: 1px solid rgba(55,53,47,.10); border-bottom: 1px solid rgba(55,53,47,.10); height: 36px; padding: 0 8px; text-align: left; vertical-align: middle; }
 .akdb-table th:last-child, .akdb-table td:last-child { border-right: 0; }
+.akdb-table,
+.akdb-table tbody,
+.akdb-table tbody tr,
+.akdb-table tbody td { cursor: pointer; }
 .akdb-table tbody tr.is-context-selected td,
 .akdb-table tbody tr.is-row-selected td { background: rgba(35,131,226,.12); }
 .akdb-table tbody tr.is-row-drop-target td { box-shadow: inset 0 2px 0 rgba(35,131,226,.78); }
@@ -165,12 +169,15 @@
 .akdb-table td.is-akdb-cell-editing { background: #fff; }
 .akdb-table td.is-akdb-cell-active { z-index: 4; }
 .akdb-table td.is-akdb-cell-active::after { content: ""; position: absolute; inset: -1px; z-index: 3; border: 2px solid var(--c-bluTexAccPri, #2383e2); border-radius: 2px; pointer-events: none; }
+.akdb-table td.is-akdb-cell-active[data-akdb-col-index="0"]::after { left: 0; }
 .akdb-cell-fill-handle { position: absolute; right: -5px; bottom: -5px; z-index: 5; width: 9px; height: 9px; box-sizing: border-box; border: 1px solid #fff; border-radius: 999px; background: var(--c-bluTexAccPri, #2383e2); cursor: ns-resize; touch-action: none; }
 .akdb-table td.is-akdb-cell-active .akdb-cell-fill-handle { display: block; }
 .akdb-table td.akdb-editable-cell { position: relative; }
 .akdb-table td.akdb-editable-cell:focus-within { z-index: 119; }
 .akdb-table td.akdb-editable-cell input { position: relative; z-index: 1; }
-.akdb-table td.akdb-editable-cell.is-akdb-cell-editing input { background: #fff; }
+.akdb-table td.akdb-editable-cell:not(.is-akdb-cell-editing),
+.akdb-table td.akdb-editable-cell:not(.is-akdb-cell-editing) input { cursor: pointer; }
+.akdb-table td.akdb-editable-cell.is-akdb-cell-editing input { background: #fff; cursor: text; }
 .akdb-cell-focus-overlay { z-index: 118; border: 1px solid rgba(55,53,47,.12); border-radius: 6px; background: #fff; box-shadow: 0 8px 22px rgba(15,23,42,.14), 0 1px 4px rgba(15,23,42,.08); pointer-events: none; }
 .akdb-date-cell { overflow: visible; }
 .akdb-date-cell-btn { position: relative; z-index: 1; display: flex; align-items: center; width: 100%; min-height: 28px; border: 0; background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0; font: inherit; text-align: inherit; }

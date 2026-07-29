@@ -509,7 +509,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     window.setTimeout(cleanup, 350);
   };
 
-  const beginCellPointer = (coord: CellCoord, event: ReactPointerEvent<HTMLTableCellElement>) => {
+  const beginCellPointer = (coord: CellCoord, event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
     if ((event.target as HTMLElement | null)?.closest('.akdb-cell-fill-handle')) return;
     const recentlyClosedEditingCell = recentlyClosedEditingCellRef.current;
@@ -535,7 +535,16 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       return;
     }
     const target = event.target as HTMLElement | null;
-    if (target?.closest('input, button, textarea, [contenteditable="true"], .akdb-option-select')) return;
+    const inputElement = target?.closest<HTMLInputElement>('input');
+    const cellElement = target?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
+    const textEditingElement = target?.closest<HTMLElement>('textarea, [contenteditable="true"]');
+    if (textEditingElement && (!cellElement || cellElement.contains(textEditingElement))) {
+      return;
+    }
+    if (inputElement && sameCell(editingCell, coord)) {
+      return;
+    }
+    if (inputElement) event.preventDefault();
     closeRowContextMenu();
     closeColumnMenu();
     const anchor = coord;
@@ -555,31 +564,52 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const handleMove = (moveEvent: PointerEvent) => {
       const state = cellSelectionDragRef.current;
       if (!state) return;
-      if (!state.dragged && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > 4) {
+      const distance = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+      if (!state.dragged && distance > 4) {
         state.dragged = true;
+        suppressNextCellClick();
+        moveEvent.preventDefault();
+        moveEvent.stopPropagation();
         setEditingCell(null);
         (document.activeElement as HTMLElement | null)?.blur();
         clearEditorBlockSelection();
         setSelectedRowIDs(new Set());
+        setActiveCell(anchor);
+        setCellRange({ anchor, focus: anchor });
       }
       if (!state.dragged) return;
       moveEvent.preventDefault();
+      moveEvent.stopPropagation();
       const focus = coordFromPoint(moveEvent.clientX, moveEvent.clientY);
       if (!focus) return;
       setActiveCell(anchor);
       setCellRange({ anchor, focus });
     };
     const handleUp = () => {
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
+      document.removeEventListener('pointermove', handleMove, true);
+      document.removeEventListener('pointerup', handleUp, true);
+      document.removeEventListener('pointercancel', handleUp, true);
       const dragged = cellSelectionDragRef.current?.dragged;
       cellSelectionDragRef.current = null;
       if (!dragged) {
         window.setTimeout(() => selectCell(coord, true), 0);
+      } else {
+        suppressNextCellClick();
       }
     };
-    window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', handleUp, { once: true });
+    document.addEventListener('pointermove', handleMove, true);
+    document.addEventListener('pointerup', handleUp, true);
+    document.addEventListener('pointercancel', handleUp, true);
+  };
+
+  const beginCellPointerFromTable = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    const cell = target?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
+    if (!cell) return;
+    const rowIndex = Number(cell.dataset.akdbRowIndex);
+    const colIndex = Number(cell.dataset.akdbColIndex);
+    if (!Number.isFinite(rowIndex) || !Number.isFinite(colIndex)) return;
+    beginCellPointer({ rowIndex, colIndex }, event);
   };
 
   const beginFillDrag = (coord: CellCoord, event: ReactPointerEvent<HTMLElement>) => {
@@ -1262,7 +1292,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             })}
           </div>
         )}
-        <div ref={tableWrapRef} className="akdb-table-wrap" tabIndex={-1}>
+        <div ref={tableWrapRef} className="akdb-table-wrap" tabIndex={-1} onPointerDownCapture={beginCellPointerFromTable}>
           <table className="akdb-table" style={{ minWidth: tableMinWidth }}>
             <colgroup>
               {visibleColumns.map((c, index) => <col key={c.id} style={{ width: columnWidth(c, index) }} />)}
@@ -1412,7 +1442,6 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                       'data-akdb-col-index': index,
                       'data-akdb-row-id': row.uuid,
                       'data-akdb-col-id': c.column?.id,
-                      onPointerDownCapture: (event) => beginCellPointer(coord, event),
                       onClickCapture: (event) => {
                         if (!suppressNextCellClickRef.current) return;
                         suppressNextCellClickRef.current();
@@ -3844,6 +3873,7 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
   const editAnchorRef = useRef<HTMLButtonElement | null>(null);
   const dragStateRef = useRef<typeof dragState>(null);
   const suppressOptionClickRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
   const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, !isStatus);
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
@@ -3865,8 +3895,11 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
   useEffect(() => {
-    onOpenChange?.(open);
-  }, [onOpenChange, open]);
+    onOpenChangeRef.current = onOpenChange;
+  }, [onOpenChange]);
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
   const selectOption = (optionID: string) => {
     onChange(optionID);
     setOpen(false);
@@ -4124,6 +4157,7 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
   const editAnchorRef = useRef<HTMLButtonElement | null>(null);
   const dragStateRef = useRef<typeof dragState>(null);
   const suppressOptionClickRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
   const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay');
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
@@ -4146,8 +4180,11 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
   useEffect(() => {
-    onOpenChange?.(open);
-  }, [onOpenChange, open]);
+    onOpenChangeRef.current = onOpenChange;
+  }, [onOpenChange]);
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
   const toggleOption = (optionID: string) => {
     if (selectedIDs.has(optionID)) onChange(ids.filter((id) => id !== optionID));
     else onChange([...ids, optionID]);
