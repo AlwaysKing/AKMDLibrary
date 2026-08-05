@@ -560,31 +560,16 @@ function parseQuotedCount(block: any): number {
   }
 }
 
-function getDomSelectedBlockIds(container: HTMLElement): string[] {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return [];
-  const range = selection.getRangeAt(0);
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const forcedSyncedBlockIds = new Set<string>();
-  container.querySelectorAll('.bn-block-outer').forEach((outer) => {
-    if (!range.intersectsNode(outer)) return;
-    const blockEl = outer.querySelector('[data-id]');
-    const id = blockEl?.getAttribute('data-id') || '';
-    if (!id || seen.has(id)) return;
-    seen.add(id);
-    ids.push(id);
-    const syncRenderer = outer.querySelector(
-      ':scope > .bn-block > .react-renderer.node-syncedBlockSource, :scope > .bn-block > .react-renderer.node-syncedBlockMirror'
-    );
-    if (syncRenderer && range.intersectsNode(syncRenderer)) {
-      forcedSyncedBlockIds.add(id);
-    }
-  });
-  return normalizeSyncedBlockSelection(ids, container, forcedSyncedBlockIds);
+function getDirectBlockSelectionTarget(outer: Element): Element | null {
+  const blockEl = outer.querySelector(':scope > .bn-block[data-id]');
+  if (!blockEl) return null;
+  if (blockEl.querySelector(':scope > .react-renderer .column-list-inner, :scope > .react-renderer .column-block-inner')) {
+    return null;
+  }
+  return blockEl.querySelector(':scope > .bn-block-content, :scope > .react-renderer') || blockEl;
 }
 
-function isSelectionInsideSingleCodeBlock(selection: Selection | null = window.getSelection()): boolean {
+function isSelectionInsideSingleCodeLikeBlock(selection: Selection | null = window.getSelection()): boolean {
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
 
   const anchorElement = selection.anchorNode instanceof Element
@@ -594,17 +579,20 @@ function isSelectionInsideSingleCodeBlock(selection: Selection | null = window.g
     ? selection.focusNode
     : selection.focusNode?.parentElement;
 
-  const anchorCodeBlock = anchorElement?.closest('[data-content-type="codeBlock"]');
-  const focusCodeBlock = focusElement?.closest('[data-content-type="codeBlock"]');
+  const selector = '[data-content-type="codeBlock"], [data-content-type="fileContent"]';
+  const anchorCodeBlock = anchorElement?.closest(selector);
+  const focusCodeBlock = focusElement?.closest(selector);
 
   return !!anchorCodeBlock && anchorCodeBlock === focusCodeBlock;
+}
+
+function hasBrowserTextSelection(selection: Selection | null = window.getSelection()): boolean {
+  return !!selection && !selection.isCollapsed && selection.rangeCount > 0;
 }
 
 function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
   const selected = getSelectedBlockIds();
   if (selected.length > 0) return normalizeSyncedBlockSelection(selected, container);
-  const domIds = getDomSelectedBlockIds(container);
-  if (domIds.length > 0) return normalizeSyncedBlockSelection(domIds, container);
   const bnSelection = editor.getSelection?.();
   const bnIds = bnSelection?.blocks?.map((b: any) => b.id).filter(Boolean) || [];
   return normalizeSyncedBlockSelection(bnIds, container);
@@ -5580,38 +5568,46 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     });
   }, [editor, readOnly]);
 
-  // Copy handler — preserve native text copy inside code blocks.
-  // BlockNote serializes editor selections to markdown on copy, which breaks
-  // manual code selections by injecting markdown-oriented formatting.
+  // Clipboard handler — browser text selections must stay text-level copies.
+  // Block-level clipboard handling is only for explicit block selection; if a
+  // real DOM text selection exists, stop editor-level serializers from turning
+  // the selected text into whole blocks.
   useEffect(() => {
     const container = editorRef.current;
     if (!container || readOnly) return;
 
-    const handleCopy = (e: ClipboardEvent) => {
+    const handleTextSelectionClipboard = (e: ClipboardEvent) => {
       // Bail out for form fields living inside the editor wrapper but outside
       // the actual editor content (FindReplacePanel search/replace inputs,
-      // slash-menu search, link-toolbar inputs). They must handle Cmd+C via
+      // slash-menu search, link-toolbar inputs). They must handle Cmd+C/Cmd+X via
       // the browser/input default; otherwise the container-level capture
-      // handler would intercept the copy before the input sees it.
+      // handler would intercept the clipboard event before the input sees it.
       const copyTargetEl = e.target as HTMLElement | null;
       if (copyTargetEl && (copyTargetEl.tagName === 'INPUT' || copyTargetEl.tagName === 'TEXTAREA')) {
         return;
       }
 
       const selection = window.getSelection();
-      if (!selection || !isSelectionInsideSingleCodeBlock(selection)) return;
+      if (!selection || !hasBrowserTextSelection(selection)) return;
+
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      if (e.type !== 'copy' || !isSelectionInsideSingleCodeLikeBlock(selection)) return;
 
       const selectedText = selection.toString().replace(/\u200b/g, '');
       if (!selectedText) return;
 
       e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
       e.clipboardData?.setData('text/plain', selectedText);
     };
 
-    container.addEventListener('copy', handleCopy, true);
-    return () => container.removeEventListener('copy', handleCopy, true);
+    container.addEventListener('copy', handleTextSelectionClipboard, true);
+    container.addEventListener('cut', handleTextSelectionClipboard, true);
+    return () => {
+      container.removeEventListener('copy', handleTextSelectionClipboard, true);
+      container.removeEventListener('cut', handleTextSelectionClipboard, true);
+    };
   }, [readOnly]);
 
   const persistEditorNow = useCallback(async () => {
@@ -6294,7 +6290,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
       if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
-        if (isSelectionInsideSingleCodeBlock()) return;
+        if (hasBrowserTextSelection()) return;
 
         const ids = getCopyCandidateIds(container, editor);
         if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
@@ -6737,14 +6733,10 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       blockOuters.forEach(outer => {
         const blockEl = outer.querySelector(':scope > .bn-block[data-id]');
         if (!blockEl) return;
-        // Skip column_list and column blocks — they are layout containers,
-        // not selectable content blocks. Users should only select content inside them.
-        if (blockEl.querySelector('.column-list-inner') || blockEl.querySelector('.column-block-inner')) return;
+        const hitTarget = getDirectBlockSelectionTarget(outer);
+        if (!hitTarget) return;
         const id = blockEl.getAttribute('data-id')!;
         blockOuterMap.set(id, outer);
-        const hitTarget = outer.querySelector(
-          ':scope > .bn-block > .bn-block-content, :scope > .bn-block > .react-renderer'
-        ) || blockEl;
         const r = hitTarget.getBoundingClientRect();
         const bLeft = r.left + sLeft;
         const bRight = r.right + sLeft;
