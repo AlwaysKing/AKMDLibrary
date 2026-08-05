@@ -7626,37 +7626,41 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         }
       }
 
-      // Find hovered block by y coordinate
+      // Find hovered block by its direct content row. A parent toggle's
+      // .bn-block-outer contains all children, so using the outer rect makes
+      // gaps between child blocks incorrectly resolve to the toggle title.
+      const getSideMenuContentElement = (outer: Element): HTMLElement | null => {
+        const block = outer.querySelector(':scope > .bn-block') as HTMLElement | null;
+        return (
+          block?.querySelector(':scope > .bn-block-content') ||
+          block?.querySelector(':scope > .react-renderer > .bn-block-content') ||
+          block?.querySelector(':scope > .react-renderer') ||
+          null
+        ) as HTMLElement | null;
+      };
       const blockOuters = container.querySelectorAll('.bn-block-outer');
       let hoveredOuter: HTMLElement | null = null;
+      let hoveredContent: HTMLElement | null = null;
       const activePointedSyncSourceOuter = pointedSyncSourceIsActive ? pointedSyncSourceOuter : null;
       // Find the content block closest to the mouse x-position.
       // For blocks inside columns, multiple blocks may match the y-position;
       // we pick the one whose content center is nearest to the mouse.
       let bestDist = Infinity;
-      let fallbackOuter: HTMLElement | null = null;
       for (const outer of blockOuters) {
         if (outer === activePointedSyncSourceOuter || isSyncedBlockOuter(outer)) continue;
-        const r = outer.getBoundingClientRect();
-        if (e.clientY >= r.top && e.clientY <= r.bottom) {
-          fallbackOuter = outer as HTMLElement;
-          const blockContent = outer.querySelector(
-            ':scope > .bn-block > .bn-block-content, :scope > .bn-block > .react-renderer, :scope > .bn-block'
-          );
-          if (blockContent) {
-            const cr = blockContent.getBoundingClientRect();
-            if (cr.width > 0 && cr.height > 0) {
-              const centerX = cr.left + cr.width / 2;
-              const dist = Math.abs(e.clientX - centerX);
-              if (dist < bestDist) {
-                bestDist = dist;
-                hoveredOuter = outer as HTMLElement;
-              }
-            }
+        const blockContent = getSideMenuContentElement(outer);
+        if (!blockContent) continue;
+        const cr = blockContent.getBoundingClientRect();
+        if (cr.width > 0 && cr.height > 0 && e.clientY >= cr.top && e.clientY <= cr.bottom) {
+          const centerX = cr.left + cr.width / 2;
+          const dist = Math.abs(e.clientX - centerX);
+          if (dist < bestDist) {
+            bestDist = dist;
+            hoveredOuter = outer as HTMLElement;
+            hoveredContent = blockContent;
           }
         }
       }
-      if (!hoveredOuter) hoveredOuter = fallbackOuter;
 
       if (!hoveredOuter) {
         hideNativeSideMenu();
@@ -7687,10 +7691,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
 
       // Get block content boundaries
-      const blockContent = hoveredOuter.querySelector(
-        ':scope > .bn-block > .bn-block-content, :scope > .bn-block > .react-renderer, :scope > .bn-block'
-      ) || hoveredOuter;
-      const contentRect = blockContent.getBoundingClientRect();
+      const contentRect = (
+        hoveredContent ||
+        getSideMenuContentElement(hoveredOuter) ||
+        hoveredOuter
+      ).getBoundingClientRect();
 
       // Notion's hover zone: left boundary = blockLeft - 150px, right boundary = blockLeft + blockWidth * 0.7
       const leftBound = contentRect.left - 150;
