@@ -186,6 +186,10 @@ function isToggleBlock(block: any): boolean {
   return block?.type === 'toggleListItem' || (block?.type === 'heading' && block?.props?.isToggleable);
 }
 
+function isListItemBlock(block: any): boolean {
+  return block?.type === 'bulletListItem' || block?.type === 'numberedListItem';
+}
+
 function collectToggleExpandedStatesFromBlocks(blocks: any[]): Array<boolean | undefined> {
   const states: Array<boolean | undefined> = [];
   const visit = (items: any[]) => {
@@ -578,6 +582,22 @@ function getDomSelectedBlockIds(container: HTMLElement): string[] {
     }
   });
   return normalizeSyncedBlockSelection(ids, container, forcedSyncedBlockIds);
+}
+
+function isSelectionInsideSingleCodeBlock(selection: Selection | null = window.getSelection()): boolean {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+
+  const anchorElement = selection.anchorNode instanceof Element
+    ? selection.anchorNode
+    : selection.anchorNode?.parentElement;
+  const focusElement = selection.focusNode instanceof Element
+    ? selection.focusNode
+    : selection.focusNode?.parentElement;
+
+  const anchorCodeBlock = anchorElement?.closest('[data-content-type="codeBlock"]');
+  const focusCodeBlock = focusElement?.closest('[data-content-type="codeBlock"]');
+
+  return !!anchorCodeBlock && anchorCodeBlock === focusCodeBlock;
 }
 
 function getCopyCandidateIds(container: HTMLElement, editor: any): string[] {
@@ -3810,6 +3830,155 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
   }, [editor, readOnly]);
 
+  // List item child drop target: when the pointer is on the right side of a list item,
+  // treat the drop as nested content instead of a sibling reorder.
+  useEffect(() => {
+    const container = editorRef.current;
+    if (!container || readOnly) return;
+
+    let lineEl: HTMLDivElement | null = null;
+
+    const createLine = () => {
+      if (!lineEl) {
+        lineEl = document.createElement('div');
+        lineEl.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;height:5px;background:#ddeeff;border-radius:2px;display:none;';
+        document.body.appendChild(lineEl);
+      }
+    };
+
+    const clearListHighlight = () => {
+      if (lineEl) lineEl.style.display = 'none';
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = ''; });
+    };
+
+    const removeLine = () => {
+      if (lineEl) {
+        lineEl.remove();
+        lineEl = null;
+      }
+    };
+
+    const findIndentedListTarget = (clientX: number, clientY: number): {
+      blockOuter: HTMLElement;
+      blockId: string;
+      blockContent: HTMLElement;
+    } | null => {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (!el) return null;
+
+      const htmlEl = el as HTMLElement;
+      const blockContent = htmlEl.closest(
+        '.bn-block-content[data-content-type="bulletListItem"], .bn-block-content[data-content-type="numberedListItem"]'
+      ) as HTMLElement | null;
+      if (!blockContent) return null;
+
+      const blockOuter = blockContent.closest('.bn-block-outer') as HTMLElement | null;
+      if (!blockOuter) return null;
+
+      const blockId = blockOuter.querySelector('[data-id]')?.getAttribute('data-id');
+      if (!blockId) return null;
+
+      const rect = blockContent.getBoundingClientRect();
+      const inlineContent = blockContent.querySelector('.bn-inline-content') as HTMLElement | null;
+      const textLeft = inlineContent?.getBoundingClientRect().left ?? rect.left;
+      const childZone = textLeft + 24;
+      if (clientX < childZone) return null;
+
+      return { blockOuter, blockId, blockContent };
+    };
+
+    const positionLine = (blockContent: HTMLElement) => {
+      createLine();
+      const rect = blockContent.getBoundingClientRect();
+      const inlineContent = blockContent.querySelector('.bn-inline-content') as HTMLElement | null;
+      const textLeft = inlineContent?.getBoundingClientRect().left ?? rect.left;
+      const lineLeft = Math.min(textLeft + 12, rect.right - 8);
+      lineEl!.style.left = `${lineLeft}px`;
+      lineEl!.style.top = `${rect.bottom - 1}px`;
+      lineEl!.style.width = `${Math.max(rect.right - lineLeft, 0)}px`;
+      lineEl!.style.background = '#ddeeff';
+      lineEl!.style.display = 'block';
+    };
+
+    const handleListDragOver = (e: DragEvent) => {
+      const dragData = getBlockDragData();
+      if (!dragData || dragData.blocks.length === 0) return;
+
+      const target = findIndentedListTarget(e.clientX, e.clientY);
+      if (!target) {
+        clearListHighlight();
+        return;
+      }
+
+      if (dragData.blockIds.includes(target.blockId)) {
+        clearListHighlight();
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+
+      container.querySelectorAll('.prosemirror-dropcursor-block, .prosemirror-dropcursor-inline')
+        .forEach(el => { (el as HTMLElement).style.display = 'none'; });
+
+      positionLine(target.blockContent);
+    };
+
+    const handleListDrop = (e: DragEvent) => {
+      clearListHighlight();
+
+      const dragData = getBlockDragData();
+      if (!dragData || dragData.blocks.length === 0) return;
+
+      const target = findIndentedListTarget(e.clientX, e.clientY);
+      if (!target) return;
+
+      if (dragData.blockIds.includes(target.blockId)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const targetBlock = findBlockDeep(editor.document, target.blockId);
+      if (!targetBlock) return;
+
+      const insertedChildren = dragData.blocks.map((block) => ({
+        type: block.type,
+        props: block.props,
+        content: block.content,
+        children: block.children,
+      }));
+      const existingChildren = Array.isArray(targetBlock.children) ? targetBlock.children : [];
+
+      try {
+        editor.updateBlock(target.blockId as any, {
+          children: [...insertedChildren, ...existingChildren],
+        } as any);
+        markDragHandled();
+      } catch (err) {
+        console.error('[PageEditor] Failed to drop blocks into list item:', err);
+      }
+    };
+
+    const handleListDragLeave = (e: DragEvent) => {
+      if (!container.contains(e.relatedTarget as Node)) {
+        clearListHighlight();
+      }
+    };
+
+    container.addEventListener('dragover', handleListDragOver, true);
+    container.addEventListener('drop', handleListDrop, true);
+    container.addEventListener('dragleave', handleListDragLeave);
+    return () => {
+      container.removeEventListener('dragover', handleListDragOver, true);
+      container.removeEventListener('drop', handleListDrop, true);
+      container.removeEventListener('dragleave', handleListDragLeave);
+      clearListHighlight();
+      removeLine();
+    };
+  }, [editor, readOnly]);
+
   // Drag-to-create columns: drag a block to the left/right edge of another block
   useEffect(() => {
     const container = editorRef.current;
@@ -5374,19 +5543,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       }
 
       const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
-
-      const anchorElement = selection.anchorNode instanceof Element
-        ? selection.anchorNode
-        : selection.anchorNode?.parentElement;
-      const focusElement = selection.focusNode instanceof Element
-        ? selection.focusNode
-        : selection.focusNode?.parentElement;
-
-      const anchorCodeBlock = anchorElement?.closest('[data-content-type="codeBlock"]');
-      const focusCodeBlock = focusElement?.closest('[data-content-type="codeBlock"]');
-
-      if (!anchorCodeBlock || anchorCodeBlock !== focusCodeBlock) return;
+      if (!selection || !isSelectionInsideSingleCodeBlock(selection)) return;
 
       const selectedText = selection.toString().replace(/\u200b/g, '');
       if (!selectedText) return;
@@ -6081,6 +6238,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       // Cmd+C / Cmd+X: copy/cut selected blocks (block selection mode only)
       if ((e.key === 'c' || e.key === 'x') && (e.metaKey || e.ctrlKey) && !e.altKey) {
+        if (isSelectionInsideSingleCodeBlock()) return;
+
         const ids = getCopyCandidateIds(container, editor);
         if (ids.length === 0) return; // Let BlockNote handle text-level copy/cut
         e.preventDefault();
@@ -6271,9 +6430,28 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const selection = pmView?.state?.selection;
           const isAtBlockStart = selection?.empty && selection.$head?.parentOffset === 0;
           const pos = editor.getTextCursorPosition();
+          if (isAtBlockStart && isListItemBlock(currentBlock)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            editor.updateBlock(currentBlock, {
+              type: 'paragraph',
+              props: {},
+              content: Array.isArray(currentBlock.content) ? currentBlock.content : [],
+              children: Array.isArray(currentBlock.children) ? currentBlock.children : [],
+            } as any);
+            editor.focus();
+            requestAnimationFrame(() => {
+              try {
+                editor.setTextCursorPosition(currentBlock.id as any, 'start');
+              } catch {
+                // The block may have been changed by a concurrent editor transaction.
+              }
+            });
+            return;
+          }
           if (isAtBlockStart && pos?.parentBlock && !isEmptyTextBlock(currentBlock)) {
             const parentBlock = pos.parentBlock;
-            if (isToggleBlock(parentBlock) && canMergeInlineBlocks(parentBlock, currentBlock)) {
+            if (!isListItemBlock(currentBlock) && isToggleBlock(parentBlock) && canMergeInlineBlocks(parentBlock, currentBlock)) {
               const parentChildren = Array.isArray(parentBlock.children) ? parentBlock.children : [];
               const childIndex = parentChildren.findIndex((block: any) => block.id === currentBlock.id);
               if (childIndex === 0) {
@@ -6312,7 +6490,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             }
 
             const mergeTarget = getPreviousSiblingInSameParent(editor.document, currentBlock.id as string);
-            if (mergeTarget && canMergeInlineBlocks(mergeTarget.previous, currentBlock)) {
+            if (!isListItemBlock(currentBlock) && mergeTarget && canMergeInlineBlocks(mergeTarget.previous, currentBlock)) {
               const previousContent = Array.isArray(mergeTarget.previous.content) ? mergeTarget.previous.content : [];
               const currentContent = Array.isArray(currentBlock.content) ? currentBlock.content : [];
               const cursorOffset = getInlineContentLength(previousContent);
