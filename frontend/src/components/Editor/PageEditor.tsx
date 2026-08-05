@@ -3185,7 +3185,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         }
 
         if (isBroken) {
-          blockContent.setAttribute('data-media-broken', 'true');
+          if (blockContent.getAttribute('data-media-broken') !== 'true') {
+            blockContent.setAttribute('data-media-broken', 'true');
+          }
         }
 
         // Show/hide broken placeholder
@@ -3217,10 +3219,18 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const captionOpen = wrapper.dataset.captionOpen === 'true';
         const alignMenuOpen = wrapper.dataset.alignOpen === 'true';
         const isSelected = !captionFocused && !captionOpen && !alignMenuOpen && (blockContent.classList.contains('ProseMirror-selectednode') || selectedIds.has(blockId));
-        wrapper.classList.add('bn-image-shell');
-        mediaWrapper.classList.add('bn-image-media-shell');
-        imageEl?.classList.add('bn-image-media');
-        videoEl?.classList.add('bn-image-media');
+        if (!wrapper.classList.contains('bn-image-shell')) {
+          wrapper.classList.add('bn-image-shell');
+        }
+        if (!mediaWrapper.classList.contains('bn-image-media-shell')) {
+          mediaWrapper.classList.add('bn-image-media-shell');
+        }
+        if (imageEl && !imageEl.classList.contains('bn-image-media')) {
+          imageEl.classList.add('bn-image-media');
+        }
+        if (videoEl && !videoEl.classList.contains('bn-image-media')) {
+          videoEl.classList.add('bn-image-media');
+        }
         wrapper.classList.toggle('is-selected', isSelected);
 
         if (!wrapper.dataset.selectionBound) {
@@ -3281,7 +3291,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             };
             toolbar!.appendChild(button);
           }
-          button.innerHTML = `${icon ? `<span class="bn-image-toolbar-icon">${icon}</span>` : ''}${label ? `<span class="bn-image-toolbar-label">${label}</span>` : ''}`;
+          const renderKey = `${icon || ''}\n${label || ''}`;
+          if (button.dataset.renderKey !== renderKey) {
+            button.dataset.renderKey = renderKey;
+            button.innerHTML = `${icon ? `<span class="bn-image-toolbar-icon">${icon}</span>` : ''}${label ? `<span class="bn-image-toolbar-label">${label}</span>` : ''}`;
+          }
           button.onmousedown = (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -3337,28 +3351,31 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             { key: 'center', icon: IMAGE_TOOLBAR_ICONS.alignCenter },
             { key: 'right', icon: IMAGE_TOOLBAR_ICONS.alignRight },
           ] as const;
-          alignMenu.innerHTML = '';
-          items.forEach((item) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.draggable = false;
-            button.contentEditable = 'false';
-            button.className = `bn-image-align-menu-item${currentAlignment === item.key ? ' is-active' : ''}`;
-            button.innerHTML = `<span class="bn-image-align-menu-icon">${item.icon}</span>`;
-            button.onpointerdown = (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setImageAlignment(blockId, item.key);
-              wrapper.dataset.alignOpen = 'false';
-              setBlockSelection(null);
-              syncImageBlocks();
-            };
-            button.onmousedown = (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            };
-            alignMenu!.appendChild(button);
-          });
+          if (alignMenu.dataset.alignment !== currentAlignment) {
+            alignMenu.dataset.alignment = currentAlignment;
+            alignMenu.innerHTML = '';
+            items.forEach((item) => {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.draggable = false;
+              button.contentEditable = 'false';
+              button.className = `bn-image-align-menu-item${currentAlignment === item.key ? ' is-active' : ''}`;
+              button.innerHTML = `<span class="bn-image-align-menu-icon">${item.icon}</span>`;
+              button.onpointerdown = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setImageAlignment(blockId, item.key);
+                wrapper.dataset.alignOpen = 'false';
+                setBlockSelection(null);
+                syncImageBlocks();
+              };
+              button.onmousedown = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              };
+              alignMenu!.appendChild(button);
+            });
+          }
         } else {
           alignMenu?.remove();
         }
@@ -3421,7 +3438,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       fileBlocks.forEach((blockContent) => {
         const wrapper = blockContent.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
         if (!wrapper) return;
-        wrapper.style.cursor = 'pointer';
+        if (wrapper.style.cursor !== 'pointer') {
+          wrapper.style.cursor = 'pointer';
+        }
         if (wrapper.dataset.fileClickBound) return;
         wrapper.dataset.fileClickBound = 'true';
         wrapper.addEventListener('click', (event) => {
@@ -3441,8 +3460,44 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       });
     };
 
-    const scheduleSync = () => requestAnimationFrame(syncImageBlocks);
-    const observer = new MutationObserver(scheduleSync);
+    let syncFrame: number | null = null;
+    const scheduleSync = () => {
+      if (syncFrame !== null) return;
+      syncFrame = requestAnimationFrame(() => {
+        syncFrame = null;
+        syncImageBlocks();
+      });
+    };
+    const isMediaRelatedNode = (node: Node) => {
+      if (!(node instanceof Element)) return false;
+      return !!node.closest([
+        '.bn-block-content[data-content-type="image"]',
+        '.bn-block-content[data-content-type="video"]',
+        '.bn-block-content[data-content-type="file"]',
+        '.bn-file-block-content-wrapper',
+        '.bn-visual-media-wrapper',
+        '.bn-image-toolbar',
+        '.bn-image-align-menu',
+        '.bn-image-caption',
+      ].join(', ')) || !!node.querySelector?.([
+        '.bn-block-content[data-content-type="image"]',
+        '.bn-block-content[data-content-type="video"]',
+        '.bn-block-content[data-content-type="file"]',
+        '.bn-file-block-content-wrapper',
+        '.bn-visual-media-wrapper',
+        '.bn-image-toolbar',
+        '.bn-image-align-menu',
+        '.bn-image-caption',
+      ].join(', '));
+    };
+    const observer = new MutationObserver((records) => {
+      const shouldSync = records.some((record) => (
+        isMediaRelatedNode(record.target) ||
+        Array.from(record.addedNodes).some(isMediaRelatedNode) ||
+        Array.from(record.removedNodes).some(isMediaRelatedNode)
+      ));
+      if (shouldSync) scheduleSync();
+    });
 
     observer.observe(editorEl, {
       childList: true,
@@ -3489,6 +3544,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     return () => {
       observer.disconnect();
+      if (syncFrame !== null) cancelAnimationFrame(syncFrame);
       editorEl.removeEventListener('scroll', scheduleSync, true);
       window.removeEventListener('resize', scheduleSync);
       document.removeEventListener('mousedown', handleDocumentMouseDown, true);
@@ -7702,7 +7758,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       wrappers.forEach((wrapper) => {
         const sideMenu = wrapper.querySelector('.bn-side-menu[data-block-type="image"]') as HTMLElement | null;
         if (!sideMenu) {
-          wrapper.style.removeProperty('--bn-image-side-menu-left');
+          if (wrapper.style.getPropertyValue('--bn-image-side-menu-left')) {
+            wrapper.style.removeProperty('--bn-image-side-menu-left');
+          }
           return;
         }
 
@@ -7721,27 +7779,52 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         }
 
         if (!blockOuter) {
-          wrapper.style.removeProperty('--bn-image-side-menu-left');
+          if (wrapper.style.getPropertyValue('--bn-image-side-menu-left')) {
+            wrapper.style.removeProperty('--bn-image-side-menu-left');
+          }
           return;
         }
 
         const blockContent = blockOuter.querySelector('.bn-block-content[data-content-type="image"]') as HTMLElement | null;
         const imageWrapper = blockContent?.querySelector('.bn-file-block-content-wrapper') as HTMLElement | null;
         if (!blockContent || !imageWrapper) {
-          wrapper.style.removeProperty('--bn-image-side-menu-left');
+          if (wrapper.style.getPropertyValue('--bn-image-side-menu-left')) {
+            wrapper.style.removeProperty('--bn-image-side-menu-left');
+          }
           return;
         }
 
         const blockRect = blockContent.getBoundingClientRect();
         const imageRect = imageWrapper.getBoundingClientRect();
         const offset = Math.round(-14 + (imageRect.left - blockRect.left));
-        wrapper.style.setProperty('--bn-image-side-menu-left', `${offset}px`);
+        const nextValue = `${offset}px`;
+        if (wrapper.style.getPropertyValue('--bn-image-side-menu-left') !== nextValue) {
+          wrapper.style.setProperty('--bn-image-side-menu-left', nextValue);
+        }
       });
     };
 
-    const scheduleSync = () => requestAnimationFrame(syncImageSideMenuPosition);
-    const observer = new MutationObserver(scheduleSync);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+    let syncFrame: number | null = null;
+    const scheduleSync = () => {
+      if (syncFrame !== null) return;
+      syncFrame = requestAnimationFrame(() => {
+        syncFrame = null;
+        syncImageSideMenuPosition();
+      });
+    };
+    const isFloatingMenuMutation = (node: Node) => {
+      if (!(node instanceof Element)) return false;
+      return !!node.closest('[data-floating-ui-focusable], .bn-side-menu') ||
+        !!node.querySelector?.('[data-floating-ui-focusable], .bn-side-menu');
+    };
+    const observer = new MutationObserver((records) => {
+      const shouldSync = records.some((record) => (
+        Array.from(record.addedNodes).some(isFloatingMenuMutation) ||
+        Array.from(record.removedNodes).some(isFloatingMenuMutation)
+      ));
+      if (shouldSync) scheduleSync();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 
     document.addEventListener('mousemove', scheduleSync, true);
     window.addEventListener('resize', scheduleSync);
@@ -7750,11 +7833,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     return () => {
       observer.disconnect();
+      if (syncFrame !== null) cancelAnimationFrame(syncFrame);
       document.removeEventListener('mousemove', scheduleSync, true);
       window.removeEventListener('resize', scheduleSync);
       document.removeEventListener('scroll', scheduleSync, true);
     };
-  }, [readOnly]);
+  }, [readOnly, editorEl]);
 
   // Helper: check if a block outer element is input-capable (has editable text content)
   // Blocks with .bn-inline-content are input-capable (paragraph, heading, list, etc.)
@@ -8190,8 +8274,46 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     if (!editorEl) return;
 
     const sync = () => syncTableExtendButtonVisibility(editorEl);
-    const scheduleSync = () => requestAnimationFrame(sync);
-    const observer = new MutationObserver(scheduleSync);
+    let syncFrame: number | null = null;
+    const scheduleSync = () => {
+      if (syncFrame !== null) return;
+      syncFrame = requestAnimationFrame(() => {
+        syncFrame = null;
+        sync();
+      });
+    };
+    const isTableExtendRelatedNode = (node: Node) => {
+      if (!(node instanceof Element)) return false;
+      return !!node.closest([
+        '[data-content-type="table"]',
+        '.tableWrapper',
+        '.bn-extend-button-add-remove-columns',
+        'table',
+        'tr',
+        'td',
+        'th',
+        'colgroup',
+        'col',
+      ].join(', ')) || !!node.querySelector?.([
+        '[data-content-type="table"]',
+        '.tableWrapper',
+        '.bn-extend-button-add-remove-columns',
+        'table',
+        'tr',
+        'td',
+        'th',
+        'colgroup',
+        'col',
+      ].join(', '));
+    };
+    const observer = new MutationObserver((records) => {
+      const shouldSync = records.some((record) => (
+        isTableExtendRelatedNode(record.target) ||
+        Array.from(record.addedNodes).some(isTableExtendRelatedNode) ||
+        Array.from(record.removedNodes).some(isTableExtendRelatedNode)
+      ));
+      if (shouldSync) scheduleSync();
+    });
 
     observer.observe(editorEl, {
       attributes: true,
@@ -8206,6 +8328,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     return () => {
       observer.disconnect();
+      if (syncFrame !== null) cancelAnimationFrame(syncFrame);
       editorEl.removeEventListener('scroll', scheduleSync, true);
       window.removeEventListener('resize', scheduleSync);
     };
