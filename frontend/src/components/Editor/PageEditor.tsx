@@ -1181,6 +1181,49 @@ const CustomInputRules = Extension.create({
   },
 });
 
+function outdentCodeLikeSelection(view: any): boolean {
+  const { state } = view;
+  const { selection } = state;
+  if (!selection.$from.sameParent(selection.$to)) return true;
+
+  const parentStart = selection.$from.start();
+  const text = selection.$from.parent.textContent;
+  const fromOffset = selection.from - parentStart;
+  let toOffset = selection.to - parentStart;
+  if (!selection.empty && toOffset > fromOffset && text[toOffset - 1] === '\n') {
+    toOffset -= 1;
+  }
+
+  const firstLineStart = text.lastIndexOf('\n', Math.max(0, fromOffset - 1)) + 1;
+  const lineStarts: number[] = [];
+  for (let pos = firstLineStart; pos <= toOffset; ) {
+    lineStarts.push(pos);
+    const nextNewline = text.indexOf('\n', pos);
+    if (nextNewline === -1 || nextNewline >= toOffset) break;
+    pos = nextNewline + 1;
+  }
+
+  const tr = state.tr;
+  let changed = false;
+  for (let i = lineStarts.length - 1; i >= 0; i -= 1) {
+    const lineStart = lineStarts[i];
+    const first = text[lineStart];
+    if (first === '\t') {
+      tr.delete(parentStart + lineStart, parentStart + lineStart + 1);
+      changed = true;
+    } else if (first === ' ') {
+      const deleteCount = text[lineStart + 1] === ' ' ? 2 : 1;
+      tr.delete(parentStart + lineStart, parentStart + lineStart + deleteCount);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    view.dispatch(tr.scrollIntoView());
+  }
+  return true;
+}
+
 const CustomTabIndent = Extension.create({
   name: 'customTabIndent',
   addProseMirrorPlugins() {
@@ -1190,6 +1233,26 @@ const CustomTabIndent = Extension.create({
         props: {
           handleKeyDown(view, event) {
             if (event.key !== 'Tab') return false;
+
+            const editor = bnEditorRef.current;
+            const currentBlock = editor?.getTextCursorPosition?.().block;
+            const isCodeLikeBlock = currentBlock?.type === 'codeBlock' || currentBlock?.type === 'fileContent';
+            if (isCodeLikeBlock) {
+              if (event.shiftKey) {
+                event.preventDefault();
+                event.stopPropagation();
+                return outdentCodeLikeSelection(view);
+              }
+
+              if (currentBlock.type === 'fileContent') {
+                event.preventDefault();
+                event.stopPropagation();
+                view.dispatch(view.state.tr.insertText('  ').scrollIntoView());
+                return true;
+              }
+
+              return false;
+            }
 
             const $from = view.state.selection.$from;
             for (let depth = $from.depth; depth >= 0; depth--) {
@@ -1202,7 +1265,6 @@ const CustomTabIndent = Extension.create({
             event.preventDefault();
             event.stopPropagation();
 
-            const editor = bnEditorRef.current;
             if (!editor) return true;
 
             if (event.shiftKey) {

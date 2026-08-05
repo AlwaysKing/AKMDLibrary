@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createReactBlockSpec } from '@blocknote/react';
+import { createExtension } from '@blocknote/core';
 import {
   FileCode,
   FileSearch,
@@ -80,6 +81,60 @@ function inferLangFromPath(path: string): string {
   }
   return map[ext] ?? 'text';
 }
+
+const FileContentKeyboardShortcuts = createExtension({
+  key: 'file-content-keyboard-shortcuts',
+  keyboardShortcuts: {
+    Enter: ({ editor }) => {
+      return editor.transact((tr) => {
+        const { block, nextBlock } = editor.getTextCursorPosition();
+        if (block.type !== 'fileContent') {
+          return false;
+        }
+        const { $from } = tr.selection;
+
+        const isAtEnd = $from.parentOffset === $from.parent.nodeSize - 2;
+        const endsWithDoubleNewline = $from.parent.textContent.endsWith('\n\n');
+
+        if (isAtEnd && endsWithDoubleNewline) {
+          tr.delete($from.pos - 2, $from.pos);
+
+          if (nextBlock) {
+            editor.setTextCursorPosition(nextBlock, 'start');
+            return true;
+          }
+
+          const [newBlock] = editor.insertBlocks(
+            [{ type: 'paragraph' }],
+            block,
+            'after',
+          );
+          editor.setTextCursorPosition(newBlock, 'start');
+          return true;
+        }
+
+        tr.insertText('\n');
+        return true;
+      });
+    },
+    'Shift-Enter': ({ editor }) => {
+      return editor.transact(() => {
+        const { block } = editor.getTextCursorPosition();
+        if (block.type !== 'fileContent') {
+          return false;
+        }
+
+        const [newBlock] = editor.insertBlocks(
+          [{ type: 'paragraph' }],
+          block,
+          'after',
+        );
+        editor.setTextCursorPosition(newBlock, 'start');
+        return true;
+      });
+    },
+  },
+});
 
 function FileContentComponent({ block, editor, contentRef }: any) {
   const path: string = block.props.path || '';
@@ -393,5 +448,6 @@ export const FileContentBlockSpec = createReactBlockSpec(
       isolating: false,
     },
     render: FileContentComponent,
-  }
+  },
+  [FileContentKeyboardShortcuts],
 );
