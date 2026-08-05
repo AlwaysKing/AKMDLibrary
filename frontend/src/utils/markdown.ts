@@ -5,6 +5,26 @@ const BLOCK_ANCHOR_COMMENT_RE = /^<!--\s*ak-block-anchor:\s*id="?(akb_[a-zA-Z0-9
 const INDENT_MARKER = '⇥';
 const ESCAPED_INDENT_MARKER_RE = /^\\⇥/;
 const INDENT_MARKER_RE = /^(⇥+)\s?/;
+const INDENT_OPEN_TAG = '<indent>';
+const INDENT_CLOSE_TAG = '</indent>';
+
+function readIndent(rawLine: string) {
+  if (ESCAPED_INDENT_MARKER_RE.test(rawLine)) {
+    return { line: rawLine.replace(ESCAPED_INDENT_MARKER_RE, INDENT_MARKER), indent: 0 };
+  }
+
+  const match = rawLine.match(INDENT_MARKER_RE);
+  if (!match) {
+    return { line: rawLine, indent: 0 };
+  }
+
+  const line = rawLine.slice(match[0].length);
+
+  return {
+    line: line.replace(ESCAPED_INDENT_MARKER_RE, INDENT_MARKER),
+    indent: match[1].length,
+  };
+}
 
 function isBlockAnchorId(id: any): id is string {
   return typeof id === 'string' && id.startsWith(BLOCK_ANCHOR_PREFIX);
@@ -29,24 +49,6 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     }
     pendingAnchorId = null;
     parsedBlocks.push({ block, indent: currentIndentLevel });
-  };
-
-  const readIndent = (rawLine: string) => {
-    if (ESCAPED_INDENT_MARKER_RE.test(rawLine)) {
-      return { line: rawLine.replace(ESCAPED_INDENT_MARKER_RE, INDENT_MARKER), indent: 0 };
-    }
-
-    const match = rawLine.match(INDENT_MARKER_RE);
-    if (!match) {
-      return { line: rawLine, indent: 0 };
-    }
-
-    const line = rawLine.slice(match[0].length);
-
-    return {
-      line: line.replace(ESCAPED_INDENT_MARKER_RE, INDENT_MARKER),
-      indent: match[1].length,
-    };
   };
 
   while (i < lines.length) {
@@ -79,6 +81,28 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       continue;
     }
 
+    if (trimmed === INDENT_OPEN_TAG) {
+      const innerLines: string[] = [];
+      let depth = 1;
+      i++;
+      while (i < lines.length && depth > 0) {
+        const innerTrimmed = readIndent(lines[i]).line.trim();
+        if (innerTrimmed === INDENT_OPEN_TAG) depth++;
+        if (innerTrimmed === INDENT_CLOSE_TAG) depth--;
+        if (depth > 0) innerLines.push(lines[i]);
+        i++;
+      }
+
+      const innerMarkdown = innerLines.join('\n');
+      if (innerMarkdown.trim()) {
+        const childBlocks = markdownToBlocks(innerMarkdown);
+        for (const block of childBlocks) {
+          parsedBlocks.push({ block, indent: currentIndentLevel + 1 });
+        }
+      }
+      continue;
+    }
+
     // Toggle blocks: <toggle-h level="N"> ... </toggle-h> or <toggle-list> ... </toggle-list>
     const toggleOpenMatch = trimmed.match(/^<(toggle-h|toggle-list)([^>]*)>$/);
     if (toggleOpenMatch) {
@@ -92,7 +116,7 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
       let depth = 1;
       i++;
       while (i < lines.length && depth > 0) {
-        const innerTrimmed = lines[i].trim();
+        const innerTrimmed = readIndent(lines[i]).line.trim();
         if (openTagRegex.test(innerTrimmed)) depth++;
         if (innerTrimmed === closeTag) depth--;
         if (depth > 0) innerLines.push(lines[i]);
@@ -105,11 +129,17 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
 
       // Build block
       if (tagName === 'toggle-h') {
+        const attrMap = parseTagAttributes(attrs);
         const levelMatch = attrs.match(/level="(\d+)"/);
         const level = levelMatch ? parseInt(levelMatch[1]) : 1;
+        const expanded = parseToggleExpandedAttribute(attrMap.expanded);
         const block: any = {
           type: 'heading',
-          props: { level, isToggleable: true },
+          props: {
+            level,
+            isToggleable: true,
+            ...(expanded === undefined ? {} : { expanded }),
+          },
           content: parseInlineFormatting(titleText),
         };
         if (contentText.trim()) {
@@ -118,8 +148,11 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
         pushBlock(block);
       } else {
         // toggle-list
+        const attrMap = parseTagAttributes(attrs);
+        const expanded = parseToggleExpandedAttribute(attrMap.expanded);
         const block: any = {
           type: 'toggleListItem',
+          props: expanded === undefined ? {} : { expanded },
           content: parseInlineFormatting(titleText),
         };
         if (contentText.trim()) {
@@ -470,9 +503,9 @@ export function markdownToBlocks(markdown: string): PartialBlock[] {
     }
 
     // Numbered list — accepts decimal (1.), lower-alpha (a.), or lower-roman (i.)
-    // markers. List depth is encoded separately by INDENT_MARKER (⇥), so the
-    // marker type here is only used to recognize the line as a numberedListItem;
-    // the actual numbering and depth-driven format are recomputed on render.
+    // markers. List depth is encoded separately by block nesting, so the marker
+    // type here is only used to recognize the line as a numberedListItem; the
+    // actual numbering and depth-driven format are recomputed on render.
     // Note: lowercase letters and roman numerals overlap (i, v, x, l, c, d, m);
     // the ambiguity is inherent and accepted (matches Notion's behavior).
     const numberedListMatch = line.match(/^(\d+|[a-z]+|[ivxlcdm]+)\.\s+(.+)$/i);
@@ -838,6 +871,29 @@ function parseTagAttributes(attrText: string): Record<string, string> {
   return attrs;
 }
 
+function parseToggleExpandedAttribute(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === '1' || normalized === 'true' || normalized === 'expanded' || normalized === 'open') return true;
+  if (normalized === '0' || normalized === 'false' || normalized === 'collapsed' || normalized === 'closed') return false;
+  return undefined;
+}
+
+function serializeToggleExpandedAttribute(expanded: boolean | undefined): string {
+  if (expanded === undefined) return '';
+  return ` expanded="${expanded ? '1' : '0'}"`;
+}
+
+function resolveToggleExpanded(
+  block: any,
+  context: { toggleExpandedStates?: Array<boolean | undefined>; toggleIndex: number },
+): boolean | undefined {
+  const index = context.toggleIndex++;
+  const fromContext = context.toggleExpandedStates?.[index];
+  if (typeof fromContext === 'boolean') return fromContext;
+  return typeof block.props?.expanded === 'boolean' ? block.props.expanded : undefined;
+}
+
 function parseSyncedQuoted(text: string): Array<{ pageId: string; syncId: string }> {
   const quoted: Array<{ pageId: string; syncId: string }> = [];
   const qRegex = /<q\s+page-id="([^"]+)"\s+sync-id="([^"]+)"\s*\/>/g;
@@ -992,12 +1048,16 @@ function parseInlineFormatting(text: string): any[] {
 /**
  * Convert BlockNote blocks to markdown
  */
-export function blocksToMarkdown(blocks: any[]): string {
+export function blocksToMarkdown(
+  blocks: any[],
+  options: { toggleExpandedStates?: Array<boolean | undefined> } = {},
+): string {
   // 用 '\n\n' 拼接符合标准 markdown 段落分隔。
   // 之前用单 '\n' 会让外部消费者（Notion、BlockNote 默认 paste handler 等）
   // 把多个 paragraph 当成同一段内的软换行，从而塌成 1 个 block。
   // markdownToBlocks 解析时空行被跳过，对单 '\n' 和 '\n\n' 都兼容，无回环风险。
-  return blocks.map(block => serializeBlock(block)).join('\n\n');
+  const context = { toggleExpandedStates: options.toggleExpandedStates, toggleIndex: 0 };
+  return blocks.map(block => serializeBlock(block, 0, 0, context)).join('\n\n');
 }
 
 /**
@@ -1030,10 +1090,19 @@ function numberedMarkerForDepth(listDepth: number): string {
  * (toggle, heading, plain paragraph) reset it to 0 so a numbered list nested
  * inside a toggle starts back at decimal.
  */
-function serializeBlock(block: any, indentLevel = 0, listDepth = 0): string {
+function serializeBlock(
+  block: any,
+  indentLevel = 0,
+  listDepth = 0,
+  context: { toggleExpandedStates?: Array<boolean | undefined>; toggleIndex: number } = { toggleIndex: 0 },
+): string {
   const withIndent = (markdown: string) => {
     if (!markdown || indentLevel <= 0) return markdown;
-    return `${INDENT_MARKER.repeat(indentLevel)} ${markdown}`;
+    let nested = markdown;
+    for (let i = 0; i < indentLevel; i++) {
+      nested = wrapIndent(nested);
+    }
+    return nested;
   };
 
   const withBlockAnchor = (markdown: string) => {
@@ -1045,13 +1114,13 @@ function serializeBlock(block: any, indentLevel = 0, listDepth = 0): string {
 
   // Children inherit listDepth: increment only when this block is itself a list item.
   const childListDepth = isListTypeBlock(block) ? listDepth + 1 : 0;
-  const serializeChild = (c: any) => serializeBlock(c, indentLevel + 1, childListDepth);
+  const serializeContainedChild = (c: any) => serializeBlock(c, 0, childListDepth, context);
 
   if (block.type === 'syncedBlockSource') {
     const syncId = block.props?.syncId || '';
     const quoted = parseQuotedProp(block.props?.quoted);
     const childrenMd = block.children?.length
-      ? block.children.map(serializeChild).join('\n')
+      ? block.children.map(serializeContainedChild).join('\n')
       : '';
     return finalizeBlock(renderSyncedSourceMarkdown(syncId, quoted, childrenMd));
   }
@@ -1075,7 +1144,7 @@ function serializeBlock(block: any, indentLevel = 0, listDepth = 0): string {
     const childrenMd = columns.map((col: any) => {
       const ratio = col.props?.widthRatio || 50;
       // Column children are not list items; reset listDepth to 0 for them.
-      const colContent = (col.children || []).map((c: any) => serializeBlock(c, indentLevel + 1, 0)).join('\n');
+      const colContent = (col.children || []).map((c: any) => serializeBlock(c, 0, 0, context)).join('\n');
       return `<column ratio="${ratio}">\n${colContent}\n</column>`;
     }).join('\n');
     return finalizeBlock(`<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`);
@@ -1086,18 +1155,20 @@ function serializeBlock(block: any, indentLevel = 0, listDepth = 0): string {
     const level = block.props.level || 1;
     const title = getFormattedText(block.content);
     const childrenMd = block.children?.length
-      ? block.children.map(serializeChild).join('\n')
+      ? block.children.map(serializeContainedChild).join('\n')
       : '';
-    return finalizeBlock(`<toggle-h level="${level}">\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
+    const expandedAttr = serializeToggleExpandedAttribute(resolveToggleExpanded(block, context));
+    return finalizeBlock(`<toggle-h level="${level}"${expandedAttr}>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
   }
 
   // Toggle list item
   if (block.type === 'toggleListItem') {
     const title = getFormattedText(block.content);
     const childrenMd = block.children?.length
-      ? block.children.map(serializeChild).join('\n')
+      ? block.children.map(serializeContainedChild).join('\n')
       : '';
-    return finalizeBlock(`<toggle-list>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
+    const expandedAttr = serializeToggleExpandedAttribute(resolveToggleExpanded(block, context));
+    return finalizeBlock(`<toggle-list${expandedAttr}>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
   }
 
   // Regular blocks
@@ -1105,11 +1176,15 @@ function serializeBlock(block: any, indentLevel = 0, listDepth = 0): string {
 
   // If a regular block has children, append them
   if (block.children?.length) {
-    const childrenMd = block.children.map(serializeChild).join('\n');
-    return finalizeBlock(line + '\n' + childrenMd);
+    const childrenMd = block.children.map(serializeContainedChild).join('\n');
+    return finalizeBlock(`${line}\n${wrapIndent(childrenMd)}`);
   }
 
   return finalizeBlock(line);
+}
+
+function wrapIndent(markdown: string): string {
+  return `${INDENT_OPEN_TAG}\n${markdown}\n${INDENT_CLOSE_TAG}`;
 }
 
 /**
@@ -1142,7 +1217,7 @@ function serializeRegularBlock(block: any, listDepth = 0): string {
       const numberText = getFormattedText(block.content);
       // Depth-driven marker (1./a./i.) for human readability; BlockNote renumbers
       // consecutive items on load, so the literal value here is just the first
-      // marker of its format. List structure (depth) is encoded by INDENT_MARKER.
+      // marker of its format. List structure (depth) is encoded by block nesting.
       const marker = numberedMarkerForDepth(listDepth);
       return `${marker}. ${numberText}`;
     }

@@ -91,7 +91,7 @@ YAML 字段必须使用下划线命名（`full_page` 而非 `fullPage`）。空 
 
 - 有序列表保存时会**统一写为 `1. `**（Markdown 会自动递增显示），原文件里不会保留 `2. 3. 4.` 的具体数字。
 - 列表项内容支持行内格式。
-- 列表不支持嵌套缩进（用子页面 / 折叠块表达层级）。
+- 列表项和普通块都支持用 `<indent>` 表达子块缩进，见 [十五](#十五特殊语义说明)。
 
 ---
 
@@ -222,7 +222,7 @@ function hello() {
 ### 折叠标题 `<toggle-h>`
 
 ```markdown
-<toggle-h level="2">
+<toggle-h level="2" expanded="1">
 <title>标题文本</title>
 <content>
 子内容（任意块）
@@ -231,6 +231,7 @@ function hello() {
 ```
 
 - `level` 取值 1–4，对应 H1–H4 级别的折叠标题。
+- `expanded` 可选，`1` 表示展开，`0` 表示合拢；保存时会记录当前界面状态。
 - `<title>` 必填，支持行内格式。
 - `<content>` 必填（可空），内部递归嵌套任意块。
 - 支持嵌套：`<content>` 内可再放 `<toggle-h>`。
@@ -238,7 +239,7 @@ function hello() {
 ### 折叠列表项 `<toggle-list>`
 
 ```markdown
-<toggle-list>
+<toggle-list expanded="0">
 <title>列表项标题</title>
 <content>
 - 子项 1
@@ -560,7 +561,38 @@ MD 文件中**连续空行**会被解析器视为段落分隔（即"没有段落
 
 ### 标签必须按行匹配
 
-`<toggle-h>`、`<toggle-list>`、`<column-list>`、`<column>`、`<table-block>`、`<mark>` 的开始 / 结束标签**必须独占一行**（标签前后的空白允许，但不能与其他文本同行）。这是为了与下方子内容明确分隔。例外：`<mark>` 允许与文本同行（单行形式 `<mark color="blue">文本</mark>`）。
+`<toggle-h>`、`<toggle-list>`、`<column-list>`、`<column>`、`<table-block>`、`<indent>`、`<mark>` 的开始 / 结束标签**必须独占一行**（标签前后的空白允许，但不能与其他文本同行）。这是为了与下方子内容明确分隔。例外：`<mark>` 允许与文本同行（单行形式 `<mark color="blue">文本</mark>`）。
+
+### 缩进块 `<indent>`
+
+块级缩进使用 `<indent>...</indent>` 包裹。它表示内部块都是前一个同级块的子块：
+
+```markdown
+父段落
+<indent>
+子段落 1
+子段落 2
+<toggle-h level="3">
+<title>缩进里的折叠块</title>
+<content>
+折叠内容
+</content>
+</toggle-h>
+</indent>
+```
+
+连续的同级缩进块保存时必须合并到一个 `<indent>` 内：
+
+```markdown
+父段落
+<indent>
+子块 A
+子块 B
+子块 C
+</indent>
+```
+
+不要保存为多个连续的 `<indent>`。旧版 `⇥` 前缀只作为历史兼容读取，新的落盘格式不再写入 `⇥`。
 
 ### HTML 属性的转义
 
@@ -585,7 +617,7 @@ MD 文件中**连续空行**会被解析器视为段落分隔（即"没有段落
 
 - ❌ GFM pipe 表格（必须用 `<table-block>` 包裹）
 - ❌ 5/6 级标题（仅支持 1–4 级）
-- ❌ 嵌套缩进列表（用子页面 / 折叠块表达层级）
+- ✅ 嵌套缩进块（使用 `<indent>`；旧版 `⇥` 只读兼容）
 - ❌ 脚注 `[^1]`
 - ❌ 定义列表
 - ❌ 任务列表带 emoji 自定义符号（只有 `- [ ]` / `- [x]`）
@@ -601,6 +633,7 @@ MD 文件中**连续空行**会被解析器视为段落分隔（即"没有段落
 | `<table-block>` | 配对 | — | 包裹表格（pipe 或 JSON） |
 | `<toggle-h level="N">` | 配对 | `level` | 折叠标题 |
 | `<toggle-list>` | 配对 | — | 折叠列表项 |
+| `<indent>` | 配对 | — | 子块缩进容器 |
 | `<column-list ratios="...">` | 配对 | — | 多列容器 |
 | `<column ratio="N">` | 配对 | — | 单列 |
 | `<mark color="...">` | 配对 / 单行 | — | 高亮块 |

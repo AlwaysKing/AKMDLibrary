@@ -186,6 +186,47 @@ function isToggleBlock(block: any): boolean {
   return block?.type === 'toggleListItem' || (block?.type === 'heading' && block?.props?.isToggleable);
 }
 
+function collectToggleExpandedStatesFromBlocks(blocks: any[]): Array<boolean | undefined> {
+  const states: Array<boolean | undefined> = [];
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      if (isToggleBlock(block)) {
+        states.push(typeof block.props?.expanded === 'boolean' ? block.props.expanded : undefined);
+      }
+      if (Array.isArray(block.children) && block.children.length > 0) {
+        visit(block.children);
+      }
+    }
+  };
+  visit(blocks);
+  return states;
+}
+
+function collectToggleExpandedStatesFromDom(container: HTMLElement | null): boolean[] {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.bn-toggle-wrapper'))
+    .map((wrapper) => wrapper.getAttribute('data-show-children') !== 'false');
+}
+
+function getToggleWrapperBlockId(wrapper: Element): string | null {
+  const blockOuter = wrapper.closest('.bn-block-outer');
+  return blockOuter?.querySelector('[data-id]')?.getAttribute('data-id') || null;
+}
+
+function applyToggleExpandedStatesToDom(container: HTMLElement | null, states: Array<boolean | undefined>) {
+  if (!container || states.length === 0) return;
+  const wrappers = Array.from(container.querySelectorAll('.bn-toggle-wrapper'));
+  wrappers.forEach((wrapper, index) => {
+    const expanded = states[index];
+    if (typeof expanded !== 'boolean') return;
+    wrapper.setAttribute('data-show-children', expanded ? 'true' : 'false');
+    const blockId = getToggleWrapperBlockId(wrapper);
+    if (blockId) {
+      window.localStorage.setItem(`toggle-${blockId}`, expanded ? 'true' : 'false');
+    }
+  });
+}
+
 function getInlinePlainText(content: any): string {
   if (!Array.isArray(content)) return '';
   return content.map((item: any) => {
@@ -193,6 +234,119 @@ function getInlinePlainText(content: any): string {
     if (Array.isArray(item?.content)) return getInlinePlainText(item.content);
     return '';
   }).join('');
+}
+
+function getInlineContentLength(content: any): number {
+  return getInlinePlainText(content).length;
+}
+
+function isInlineItemEmpty(item: any): boolean {
+  if (!item) return true;
+  if (typeof item.text === 'string') return item.text.length === 0;
+  if (Array.isArray(item.content)) return item.content.length === 0;
+  return false;
+}
+
+function splitInlineContentAtOffset(content: any, offset: number): { before: any[]; after: any[] } {
+  if (!Array.isArray(content)) return { before: [], after: [] };
+
+  const before: any[] = [];
+  const after: any[] = [];
+  let remaining = Math.max(0, offset);
+
+  for (const item of content) {
+    const itemLength = getInlineContentLength([item]);
+    if (remaining <= 0) {
+      after.push(item);
+      continue;
+    }
+    if (remaining >= itemLength) {
+      before.push(item);
+      remaining -= itemLength;
+      continue;
+    }
+
+    if (typeof item?.text === 'string') {
+      const leftText = item.text.slice(0, remaining);
+      const rightText = item.text.slice(remaining);
+      if (leftText) before.push({ ...item, text: leftText });
+      if (rightText) after.push({ ...item, text: rightText });
+    } else if (Array.isArray(item?.content)) {
+      const split = splitInlineContentAtOffset(item.content, remaining);
+      const leftItem = { ...item, content: split.before };
+      const rightItem = { ...item, content: split.after };
+      if (!isInlineItemEmpty(leftItem)) before.push(leftItem);
+      if (!isInlineItemEmpty(rightItem)) after.push(rightItem);
+    } else {
+      before.push(item);
+    }
+    remaining = 0;
+  }
+
+  return { before, after };
+}
+
+function hasInlineContent(block: any): boolean {
+  return Array.isArray(block?.content);
+}
+
+function canMergeInlineBlocks(previous: any, current: any): boolean {
+  if (!previous || !current) return false;
+  if (!hasInlineContent(previous) || !hasInlineContent(current)) return false;
+  return true;
+}
+
+function getPreviousSiblingInSameParent(blocks: any[], blockId: string) {
+  const path = findBlockPath(blocks, blockId);
+  if (!path || path.length < 2) return null;
+  const parent = path[path.length - 2];
+  const siblings = Array.isArray(parent.children) ? parent.children : [];
+  const index = siblings.findIndex((block: any) => block.id === blockId);
+  if (index <= 0) return null;
+  return { parent, previous: siblings[index - 1], current: path[path.length - 1] };
+}
+
+function setTextCursorInsideBlock(editor: any, blockId: string, offset: number): boolean {
+  const pmView = editor?.prosemirrorView;
+  if (!pmView || pmView.isDestroyed) return false;
+
+  let targetPos: number | null = null;
+  pmView.state.doc.descendants((node: any, pos: number) => {
+    if (targetPos !== null) return false;
+    if (node?.attrs?.id !== blockId) return true;
+
+    const targetOffset = Math.max(0, Math.min(offset, node.textContent?.length || 0));
+    let seen = 0;
+    let lastTextEnd: number | null = null;
+    node.descendants((child: any, childPos: number) => {
+      if (targetPos !== null) return false;
+      if (!child.isText) return true;
+
+      const textLength = child.text?.length || 0;
+      const absoluteTextStart = pos + 1 + childPos;
+      lastTextEnd = absoluteTextStart + textLength;
+      if (targetOffset <= seen + textLength) {
+        targetPos = absoluteTextStart + (targetOffset - seen);
+        return false;
+      }
+      seen += textLength;
+      return true;
+    });
+
+    if (targetPos === null && lastTextEnd !== null) {
+      targetPos = lastTextEnd;
+    }
+    return false;
+  });
+
+  if (targetPos === null) return false;
+  try {
+    const selection = TextSelection.create(pmView.state.doc, targetPos);
+    pmView.dispatch(pmView.state.tr.setSelection(selection).scrollIntoView());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function shouldDowngradeToggleForDelete(event: KeyboardEvent, editor: any, block: any): boolean {
@@ -449,6 +603,16 @@ function getSelectedDescendantIds(containerOuter: Element): string[] {
 
 function getBlockOuterById(container: HTMLElement, blockId: string): Element | null {
   return container.querySelector(`.bn-block[data-id="${CSS.escape(blockId)}"]`)?.closest('.bn-block-outer') || null;
+}
+
+function isToggleExpandedInDom(container: HTMLElement, block: any): boolean {
+  if (!isToggleBlock(block) || !block?.id) return false;
+  const blockOuter = getBlockOuterById(container, block.id as string);
+  const toggleWrapper = blockOuter?.querySelector('.bn-toggle-wrapper');
+  const expandedAttr = toggleWrapper?.getAttribute('data-show-children');
+  if (expandedAttr === 'true') return true;
+  if (expandedAttr === 'false') return false;
+  return block.props?.expanded !== false;
 }
 
 function isSyncedBlockOuterActive(syncOuter: Element): boolean {
@@ -2470,11 +2634,17 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   const imageReplaceTargetRef = useRef<string | null>(null);
   const resolvedCodeTheme = normalizeCodeTheme(codeTheme);
   const schema = useMemo(() => createEditorSchema(resolvedCodeTheme), [resolvedCodeTheme]);
+  const initialBlocks = useMemo(() => markdownToBlocks(initialContent) as any[], [initialContent]);
+  const initialToggleExpandedStates = useMemo(
+    () => collectToggleExpandedStatesFromBlocks(initialBlocks),
+    [initialBlocks],
+  );
+  const applyingInitialToggleStateRef = useRef(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editor = useCreateBlockNote({
     schema,
-    initialContent: markdownToBlocks(initialContent) as any,
+    initialContent: initialBlocks as any,
     dictionary: customZh as any,
     trailingBlock: false,
     tabBehavior: 'prefer-indent',
@@ -2490,6 +2660,21 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   useEffect(() => {
     bnEditorRef.current = editor;
   }, [editor]);
+
+  useEffect(() => {
+    if (initialToggleExpandedStates.length === 0) return;
+    const container = editorRef.current;
+    if (!container) return;
+
+    applyingInitialToggleStateRef.current = true;
+    const restore = () => {
+      applyToggleExpandedStatesToDom(container, initialToggleExpandedStates);
+      requestAnimationFrame(() => {
+        applyingInitialToggleStateRef.current = false;
+      });
+    };
+    requestAnimationFrame(restore);
+  }, [initialToggleExpandedStates]);
 
   // Find & Replace panel state
   const [findReplace, setFindReplace] = useState<{ open: boolean; mode: 'find' | 'replace' }>({
@@ -4842,6 +5027,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     []
   );
 
+  const serializeEditorMarkdown = useCallback((blocks: any[] = editor.document) => {
+    return blocksToMarkdown(blocks, {
+      toggleExpandedStates: collectToggleExpandedStatesFromDom(editorRef.current),
+    });
+  }, [editor]);
+
   // Write mirror to IndexedDB — fast, local, no network
   const triggerMirror = useCallback(async () => {
     if (!hasChangesRef.current || readOnlyRef.current) return;
@@ -4852,12 +5043,47 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     // Push fileContent edits to the backend first so files are up to date
     // before syncModule ships the page markdown that references them.
     await persistFileContentBlocks(currentBlocks, spaceSlug);
-    const markdown = blocksToMarkdown(currentBlocks);
+    const markdown = serializeEditorMarkdown(currentBlocks);
     await createMirror(spaceSlug, pageId, markdown);
 
     hasChangesRef.current = false;
     onSyncStatusChangeRef.current?.('syncing');
-  }, [editor, persistFileContentBlocks]);
+  }, [editor, persistFileContentBlocks, serializeEditorMarkdown]);
+
+  useEffect(() => {
+    if (readOnly) return;
+    const container = editorRef.current;
+    if (!container) return;
+
+    const observer = new MutationObserver((records) => {
+      if (applyingInitialToggleStateRef.current) return;
+      const changed = records.some(
+        (record) => record.type === 'attributes' && record.attributeName === 'data-show-children',
+      );
+      if (!changed) return;
+
+      hasChangesRef.current = true;
+      onSyncStatusChangeRef.current?.('unsaved');
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => {
+        triggerMirror().catch((err) => {
+          hasChangesRef.current = true;
+          onSyncStatusChangeRef.current?.('unsaved');
+          console.error('[PageEditor] Toggle state save failed:', err);
+        });
+      }, 1000);
+    });
+
+    observer.observe(container, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-show-children'],
+    });
+
+    return () => observer.disconnect();
+  }, [readOnly, triggerMirror]);
 
   // Cmd+S / Ctrl+S: immediate mirror + flush sync
   useEffect(() => {
@@ -4874,7 +5100,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             // Persist fileContent edits before serializing markdown so files
             // and page stay consistent on the backend.
             await persistFileContentBlocks(currentBlocks, spaceSlug);
-            const markdown = blocksToMarkdown(editor.document);
+            const markdown = serializeEditorMarkdown(editor.document);
             await createMirror(spaceSlug, pageId, markdown);
             hasChangesRef.current = false;
             onSyncStatusChangeRef.current?.('syncing');
@@ -4890,7 +5116,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
     document.addEventListener('keydown', handleSaveShortcut);
     return () => document.removeEventListener('keydown', handleSaveShortcut);
-  }, [editor, readOnly, persistFileContentBlocks]);
+  }, [editor, readOnly, persistFileContentBlocks, serializeEditorMarkdown]);
 
   // Slash menu: only trigger on empty blocks; "//" cancels
   useEffect(() => {
@@ -5058,7 +5284,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         const { spaceSlug, pageId } = identityRef.current;
         await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
         await persistFileContentBlocks(currentBlocks, spaceSlug);
-        const markdown = blocksToMarkdown(currentBlocks);
+        const markdown = serializeEditorMarkdown(currentBlocks);
         await createMirror(spaceSlug, pageId, markdown);
         hasChangesRef.current = false;
         onSyncStatusChangeRef.current?.('syncing');
@@ -5073,7 +5299,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     document.addEventListener('ak-blocks-removed', handleBlocksRemoved);
     return () => document.removeEventListener('ak-blocks-removed', handleBlocksRemoved);
-  }, [editor, persistFileContentBlocks, readOnly]);
+  }, [editor, persistFileContentBlocks, readOnly, serializeEditorMarkdown]);
 
   // Undo/redo compensation for subpage blocks
   // Detects when undo/redo adds/removes subpage blocks and compensates with backend API calls
@@ -5179,12 +5405,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const { spaceSlug, pageId } = identityRef.current;
     await flushAllSyncedBlockSaves(editor.document, spaceSlug, pageId);
     await persistFileContentBlocks(editor.document, spaceSlug);
-    const markdown = blocksToMarkdown(editor.document);
+    const markdown = serializeEditorMarkdown(editor.document);
     await createMirror(spaceSlug, pageId, markdown);
     hasChangesRef.current = false;
     await flushSync();
     await useSpaceStore.getState().refreshAll();
-  }, [editor, persistFileContentBlocks]);
+  }, [editor, persistFileContentBlocks, serializeEditorMarkdown]);
 
   const requestImmediateEditorSync = useCallback((force = false) => {
     if (readOnlyRef.current) return;
@@ -5472,7 +5698,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
           // 立即保存，让 backend maintainSubpageBlocks 在 sidebar 刷新前修正 sort_order
           await persistFileContentBlocks(editor.document, currentSpaceSlug);
-          const markdown = blocksToMarkdown(editor.document);
+          const markdown = serializeEditorMarkdown(editor.document);
           await createMirror(currentSpaceSlug, currentPageId, markdown);
           hasChangesRef.current = false;
           await flushSync();
@@ -5687,6 +5913,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     let autoScrollDir: 0 | -1 | 1 = 0;
     const EDGE_THRESHOLD = 60;  // px from edge that triggers auto-scroll
     const MAX_AUTO_SPEED = 14;  // max px per frame, scaled by depth into edge
+    let suppressNextDeleteBeforeInput = false;
 
     function updateSelection(ids: string[]) {
       setBlockSelection(ids.length > 0 ? ids : null);
@@ -5741,6 +5968,40 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         !document.getElementById('bn-suggestion-menu')
       ) {
         const currentBlock = editor.getTextCursorPosition?.().block;
+        const pmView = (editor as any).prosemirrorView;
+        const selection = pmView?.state?.selection;
+        if (
+          currentBlock &&
+          selection?.empty &&
+          isToggleBlock(currentBlock) &&
+          isToggleExpandedInDom(container, currentBlock)
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+
+          const children = Array.isArray(currentBlock.children) ? currentBlock.children : [];
+          const split = splitInlineContentAtOffset(currentBlock.content, selection.$head.parentOffset);
+          const updatedBlock = editor.updateBlock(currentBlock, {
+            content: split.before,
+            children: [
+              { type: 'paragraph', content: split.after },
+              ...children,
+            ],
+          } as any);
+          const newChild = updatedBlock.children?.[0];
+          if (newChild?.id) {
+            editor.focus();
+            requestAnimationFrame(() => {
+              try {
+                editor.setTextCursorPosition(newChild.id as any, 'start');
+              } catch {
+                // The inserted child may have been changed by a concurrent editor transaction.
+              }
+            });
+          }
+          return;
+        }
+
         const syncChildTarget = currentBlock
           ? getSyncedBlockChildEnterTarget(editor.document, currentBlock.id as string)
           : null;
@@ -5999,6 +6260,88 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
           return;
         }
+        if (
+          e.key === 'Backspace' &&
+          !e.altKey &&
+          !e.shiftKey &&
+          !e.metaKey &&
+          !e.ctrlKey
+        ) {
+          const pmView = (editor as any).prosemirrorView;
+          const selection = pmView?.state?.selection;
+          const isAtBlockStart = selection?.empty && selection.$head?.parentOffset === 0;
+          const pos = editor.getTextCursorPosition();
+          if (isAtBlockStart && pos?.parentBlock && !isEmptyTextBlock(currentBlock)) {
+            const parentBlock = pos.parentBlock;
+            if (isToggleBlock(parentBlock) && canMergeInlineBlocks(parentBlock, currentBlock)) {
+              const parentChildren = Array.isArray(parentBlock.children) ? parentBlock.children : [];
+              const childIndex = parentChildren.findIndex((block: any) => block.id === currentBlock.id);
+              if (childIndex === 0) {
+                const parentContent = Array.isArray(parentBlock.content) ? parentBlock.content : [];
+                const currentContent = Array.isArray(currentBlock.content) ? currentBlock.content : [];
+                const cursorOffset = getInlineContentLength(parentContent);
+                const remainingChildren = parentChildren.slice(1);
+                const nextChildren = [
+                  ...((currentBlock.children || []) as any[]),
+                  ...remainingChildren,
+                ];
+
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                suppressNextDeleteBeforeInput = true;
+                setTimeout(() => {
+                  suppressNextDeleteBeforeInput = false;
+                }, 0);
+                editor.updateBlock(parentBlock, {
+                  content: [...parentContent, ...currentContent],
+                  children: nextChildren,
+                } as any);
+                editor.focus();
+                requestAnimationFrame(() => {
+                  if (!setTextCursorInsideBlock(editor, parentBlock.id as string, cursorOffset)) {
+                    try {
+                      editor.setTextCursorPosition(parentBlock.id as any, 'end');
+                    } catch {
+                      // The parent block may have been changed by a concurrent editor transaction.
+                    }
+                  }
+                });
+                return;
+              }
+            }
+
+            const mergeTarget = getPreviousSiblingInSameParent(editor.document, currentBlock.id as string);
+            if (mergeTarget && canMergeInlineBlocks(mergeTarget.previous, currentBlock)) {
+              const previousContent = Array.isArray(mergeTarget.previous.content) ? mergeTarget.previous.content : [];
+              const currentContent = Array.isArray(currentBlock.content) ? currentBlock.content : [];
+              const cursorOffset = getInlineContentLength(previousContent);
+              const nextChildren = [
+                ...((mergeTarget.previous.children || []) as any[]),
+                ...((currentBlock.children || []) as any[]),
+              ];
+
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              editor.updateBlock(mergeTarget.previous, {
+                content: [...previousContent, ...currentContent],
+                children: nextChildren,
+              } as any);
+              removeBlocksEnhanced(editor, [{ id: currentBlock.id } as any]);
+              editor.focus();
+              requestAnimationFrame(() => {
+                if (!setTextCursorInsideBlock(editor, mergeTarget.previous.id as string, cursorOffset)) {
+                  try {
+                    editor.setTextCursorPosition(mergeTarget.previous.id as any, 'end');
+                  } catch {
+                    // The target may have been removed by a concurrent editor transaction.
+                  }
+                }
+              });
+              return;
+            }
+          }
+        }
         // [case NEW] 空子块（任意嵌套类型：toggle / list / 嵌套段落等）+ Backspace
         // 用户预期：删除当前空子块，光标回到前一个兄弟；没有前兄弟时回到父块。
         // 必须拦截：BlockNote 0.50.0 的默认 unnest（Bt 函数）在"空子块 + 后续兄弟"
@@ -6042,6 +6385,15 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           }
         }
       }
+	    };
+
+    const handleBeforeInput = (e: InputEvent) => {
+      if (!suppressNextDeleteBeforeInput) return;
+      if (typeof e.inputType !== 'string' || !e.inputType.startsWith('delete')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      suppressNextDeleteBeforeInput = false;
     };
 
     // Shift+click on a single block: toggle that block in/out of selection.
@@ -6480,6 +6832,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
 
     document.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('beforeinput', handleBeforeInput, true);
     // Shift+click on a single block uses CAPTURE on the editor container so
     // it runs before BlockNote's mousedown handler (which would focus the
     // editor into edit mode) and before our document-level bubble handlers.
@@ -6495,6 +6848,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('beforeinput', handleBeforeInput, true);
 	      container.removeEventListener('mousedown', handleShiftClickCapture, true);
 	      document.removeEventListener('mousedown', handleMouseDown);
 	      document.removeEventListener('mousemove', handleMouseMove, true);
@@ -7528,14 +7882,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     useEditorFlushStore.getState().setFlushFn(async () => {
       if (!hasChangesRef.current || readOnlyRef.current) return;
       const { spaceSlug, pageId } = identityRef.current;
-      const markdown = blocksToMarkdown(editor.document);
+      const markdown = serializeEditorMarkdown(editor.document);
       await createMirror(spaceSlug, pageId, markdown);
       hasChangesRef.current = false;
     });
     return () => {
       useEditorFlushStore.getState().setFlushFn(null);
     };
-  }, [editor]);
+  }, [editor, serializeEditorMarkdown]);
 
   // Unmount: write final mirror if there are unsaved changes
   useEffect(() => {
@@ -7547,14 +7901,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (hasChangesRef.current && !readOnlyRef.current) {
         try {
           const currentBlocks = editor.document;
-          const markdown = blocksToMarkdown(currentBlocks);
+          const markdown = serializeEditorMarkdown(currentBlocks);
           createMirror(spaceSlug, pageId, markdown);
         } catch (error) {
           console.error('Failed to create mirror on unmount:', error);
         }
       }
     };
-  }, [editor]);
+  }, [editor, serializeEditorMarkdown]);
 
   // Browser/tab close: write final mirror
   useEffect(() => {
@@ -7562,7 +7916,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (hasChangesRef.current && !readOnlyRef.current) {
         try {
           const currentBlocks = editor.document;
-          const markdown = blocksToMarkdown(currentBlocks);
+          const markdown = serializeEditorMarkdown(currentBlocks);
           const { spaceSlug, pageId } = identityRef.current;
           createMirror(spaceSlug, pageId, markdown);
         } catch {
@@ -7575,7 +7929,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [editor]);
+  }, [editor, serializeEditorMarkdown]);
 
   // Table: highlight the cell containing the cursor
   // Note: ProseMirror re-creates td DOM elements on click, so we cannot use
