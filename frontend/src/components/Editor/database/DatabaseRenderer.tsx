@@ -49,6 +49,7 @@ interface Props {
   createRequest?: number;
   missingState?: ReactNode;
   onAvailabilityChange?: (available: boolean) => void;
+  onSchemaChange?: (columns: DatabaseColumn[]) => void;
   onOpenRow?: (rowId: string) => void;
   onViewChange?: (view: DatabaseViewConfig) => void;
   onOpenViewSettings?: (pane: 'main' | 'visibility') => void;
@@ -91,7 +92,7 @@ export function requestDatabaseImmediateSync() {
   }, 0);
 }
 
-export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange, onAddFilterColumn, onAddSortColumn }: Props) {
+export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onSchemaChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange, onAddFilterColumn, onAddSortColumn }: Props) {
   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
   const [rows, setRows] = useState<DatabaseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -158,6 +159,10 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   useEffect(() => () => {
     suppressNextCellClickRef.current?.();
   }, []);
+  const applySchema = (nextSchema: DatabaseDetail | null) => {
+    setSchema(nextSchema);
+    onSchemaChange?.(nextSchema?.columns || []);
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -166,11 +171,11 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
         databasesApi.get(spaceSlug, dbId),
         databasesApi.listRows(spaceSlug, dbId, { limit: 0 }),
       ]);
-      setSchema(detail);
+      applySchema(detail);
       setRows(rowRes.rows || []);
       onAvailabilityChange?.(true);
     } catch {
-      setSchema(null);
+      applySchema(null);
       setRows([]);
       onAvailabilityChange?.(false);
     } finally {
@@ -371,8 +376,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const createRow = async (defaults: Record<string, string> = {}) => {
     if (readonly) return;
-    await databasesApi.createRow(spaceSlug, dbId, defaults);
-    await refresh();
+    const created = await databasesApi.createRow(spaceSlug, dbId, defaults);
+    setRows((prev) => [...prev, created]);
     requestDatabaseImmediateSync();
   };
 
@@ -751,8 +756,14 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const duplicateRow = async (row: DatabaseRow) => {
     if (readonly) return;
-    await databasesApi.createRow(spaceSlug, dbId, { ...row.values });
-    await refresh();
+    const created = await databasesApi.createRow(spaceSlug, dbId, { ...row.values });
+    setRows((prev) => {
+      const index = prev.findIndex((item) => item.uuid === row.uuid);
+      if (index < 0) return [...prev, created];
+      const next = [...prev];
+      next.splice(index + 1, 0, created);
+      return next;
+    });
     requestDatabaseImmediateSync();
     closeRowContextMenu();
   };
@@ -870,7 +881,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const option = createOptionConfig(value, options);
     const nextConfig = { ...(col.config || {}), options: [...options, option] };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     requestDatabaseImmediateSync();
     return option;
   };
@@ -886,7 +897,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     nextOptions.splice(targetIndex, 0, moved);
     const nextConfig = { ...(col.config || {}), options: nextOptions };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     requestDatabaseImmediateSync();
   };
 
@@ -896,7 +907,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const nextOptions = options.map((option: any) => option.id === optionID ? { ...option, ...patch } : option);
     const nextConfig = { ...(col.config || {}), options: nextOptions };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     requestDatabaseImmediateSync();
   };
 
@@ -914,7 +925,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
     const affectedRows = rows.filter((row) => row.values?.[col.id] === optionID);
     await Promise.all(affectedRows.map((row) => databasesApi.updateRow(spaceSlug, dbId, row.uuid, { [col.id]: '' })));
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     if (affectedRows.length) {
       const affectedIDs = new Set(affectedRows.map((row) => row.uuid));
       setRows((prev) => prev.map((row) => affectedIDs.has(row.uuid) ? { ...row, values: { ...row.values, [col.id]: '' } } : row));
@@ -926,7 +937,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     if (readonly || col.readonly) return;
     const nextConfig = { ...(col.config || {}), ...patch };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     requestDatabaseImmediateSync();
   };
 
@@ -970,7 +981,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const title = name.trim() || defaultColumnName(type);
     const nextConfig = type === 'date' ? { date_format: 'chinese', time_format: 'none', timezone: 'GMT+8', date_content: 'date', include_time: false, hour12: false, ...(config || {}) } : config;
     const nextSchema = await databasesApi.addColumn(spaceSlug, dbId, { name: title, type, config: nextConfig });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     const created = [...nextSchema.columns].reverse().find((column) => column.name === title && column.type === type) || nextSchema.columns[nextSchema.columns.length - 1];
     if (created) {
       appendViewColumn({ property: created.id, width: 150 });
@@ -992,7 +1003,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const target = visibleColumns[index];
     if (!target?.column || readonly || target.column.readonly) return;
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, target.column.id, { type });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     closeColumnMenu();
     requestDatabaseImmediateSync();
   };
@@ -1001,7 +1012,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const target = visibleColumns[index];
     if (!target?.column || readonly || target.column.readonly) return;
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, target.column.id, { icon });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     requestDatabaseImmediateSync();
   };
 
@@ -1010,7 +1021,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const nextName = name.trim();
     if (!target?.column || readonly || target.column.readonly || !nextName || nextName === target.column.name) return;
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, target.column.id, { name: nextName });
-    setSchema(nextSchema);
+    applySchema(nextSchema);
     requestDatabaseImmediateSync();
   };
 
@@ -1026,7 +1037,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     setDeletingColumn(true);
     try {
       const nextSchema = await databasesApi.deleteColumn(spaceSlug, dbId, pendingDeleteColumn.id);
-      setSchema(nextSchema);
+      applySchema(nextSchema);
       onViewChange?.(removeColumnFromView(activeView, pendingDeleteColumn.id));
       setPendingDeleteColumn(null);
       requestDatabaseImmediateSync();

@@ -494,7 +494,6 @@
 .akdb-row-gutter-head { top: 0; }
 .akdb-row-checkbox-minus { display: block; width: 8px; height: 2px; border-radius: 999px; background: currentColor; }
 .akdb-row-selection-toolbar { display: inline-flex; align-items: center; flex: 0 0 auto; height: 30px; overflow: hidden; border: 1px solid var(--akdb-menu-border); border-radius: 6px; background: var(--akdb-menu-bg); color: var(--akdb-menu-text); font-size: 13px; font-weight: 400; line-height: 1.2; pointer-events: auto; }
-.akdb-block-header > .akdb-row-selection-toolbar { margin-left: auto; }
 .akdb-row-selection-count { display: inline-flex; align-items: center; height: 100%; padding: 0 10px; color: var(--c-bluTexAccPri, #2383e2); font-weight: 500; white-space: nowrap; }
 .akdb-row-selection-divider { align-self: stretch; width: 1px; background: var(--akdb-menu-divider); }
 .akdb-row-selection-toolbar button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; border-left: 1px solid var(--akdb-menu-divider); background: transparent; color: var(--akdb-menu-icon-secondary); cursor: pointer; padding: 0; }

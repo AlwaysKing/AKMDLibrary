@@ -634,7 +634,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     >
       {showBlockHeader && (
         <div className="akdb-block-header">
-          {showDatabaseTitle && (
+          {!showViewTabs && rowSelectionToolbar ? rowSelectionToolbar : showDatabaseTitle && (
             <div className="akdb-block-titlebar">
               <div className={`akdb-block-page-icon ${icon ? 'has-icon' : ''}`}>
                 <PageIcon
@@ -664,7 +664,6 @@ function DatabaseBlockComponent({ block, editor }: any) {
               {parsed.views.length <= 1 && <button className="akdb-ghost-icon" type="button" disabled={controlsDisabled} onClick={() => addView('table')} aria-label="新增表格视图"><Plus size={19} /></button>}
             </div>
           )}
-          {!showViewTabs && rowSelectionToolbar}
           {!showViewTabs && actions}
         </div>
       )}
@@ -755,6 +754,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
           createRequest={createRowRequest}
           missingState={emptyState('missing')}
           onAvailabilityChange={setSourceAvailable}
+          onSchemaChange={setSchemaColumns}
           onSelectionChange={setSelectedRowCount}
           onOpenViewSettings={openViewSettings}
           onAddFilterColumn={addFilter}
