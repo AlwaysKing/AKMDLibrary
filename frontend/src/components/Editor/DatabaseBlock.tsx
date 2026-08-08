@@ -7,7 +7,7 @@ import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../a
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
 import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, OptionTag, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
-import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
+import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
 
 function DatabaseBlockComponent({ block, editor }: any) {
@@ -33,6 +33,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [sortQuery, setSortQuery] = useState('');
   const [activeFilterId, setActiveFilterId] = useState<string | null>(null);
   const [activeSortId, setActiveSortId] = useState<string | null>(null);
+  const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
   const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout'>('main');
@@ -328,6 +329,40 @@ function DatabaseBlockComponent({ block, editor }: any) {
     updateView({ ...activeView, filters: (activeView.filters || []).filter((filter) => filter.id !== id) });
     setActiveFilterId((current) => current === id ? null : current);
   };
+  const ensureAdvancedFilter = () => {
+    if (!activeView) return;
+    const advancedFilter = activeView.advancedFilter || createAdvancedFilterGroup(schemaColumns);
+    updateView({ ...activeView, advancedFilter });
+    setFilterOpen(false);
+    setSortOpen(false);
+    setFilterBarHidden(false);
+    setActiveFilterId(null);
+    setActiveSortId(null);
+    setAdvancedFilterOpen(true);
+  };
+  const updateAdvancedFilter = (advancedFilter?: ViewAdvancedFilterGroup) => {
+    if (!activeView) return;
+    updateView({ ...activeView, advancedFilter });
+    if (!advancedFilter) setAdvancedFilterOpen(false);
+  };
+  const mergeFilterToAdvanced = (id: string) => {
+    if (!activeView) return;
+    const filter = (activeView.filters || []).find((rule) => rule.id === id);
+    if (!filter) return;
+    const advancedFilter = activeView.advancedFilter || createAdvancedFilterGroup(schemaColumns);
+    const nextAdvanced = {
+      ...advancedFilter,
+      children: [...advancedFilter.children, { type: 'rule' as const, rule: { ...filter, id: crypto.randomUUID() } }],
+    };
+    updateView({
+      ...activeView,
+      filters: (activeView.filters || []).filter((rule) => rule.id !== id),
+      advancedFilter: nextAdvanced,
+    });
+    setActiveFilterId(null);
+    setActiveSortId(null);
+    setAdvancedFilterOpen(true);
+  };
   const reorderFilters = (sourceID: string, targetID: string) => {
     if (!activeView || sourceID === targetID) return;
     const filters = activeView.filters || [];
@@ -436,9 +471,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
   }, [sortQuery, schemaColumns]);
   const hasEffectiveFilters = useMemo(() => {
     const byID = new Map(schemaColumns.map((column) => [column.id, column]));
-    return (activeView?.filters || []).some((filter) => isEffectiveFilter(filter, byID.get(filter.property)));
+    return (activeView?.filters || []).some((filter) => isEffectiveFilter(filter, byID.get(filter.property))) || !!activeView?.advancedFilter;
   }, [activeView?.filters, schemaColumns]);
-  const hasFilterRules = (activeView?.filters || []).length > 0;
+  const hasFilterRules = (activeView?.filters || []).length > 0 || !!activeView?.advancedFilter;
   const showRuleBar = !!activeView && !sourceControlsDisabled && !filterBarHidden;
   const contextView = viewContextMenu ? parsed.views.find((view) => view.id === viewContextMenu.viewId) : null;
   const sourceName = sources.find((source) => source.id === activeSource)?.name || title;
@@ -483,6 +518,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
               setFilterBarHidden((hidden) => !hidden);
               setActiveFilterId(null);
               setActiveSortId(null);
+              setAdvancedFilterOpen(false);
               return;
             }
             setFilterBarHidden(false);
@@ -499,6 +535,10 @@ function DatabaseBlockComponent({ block, editor }: any) {
             style={filterMenuRect}
             onQueryChange={setFilterQuery}
             onPick={addFilter}
+            footer={<button type="button" className="akdb-filter-advanced" onClick={ensureAdvancedFilter}>
+              <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-filter-plus"><path d="M10 3.59a.66.66 0 0 1 .66.66v5.09h5.09a.66.66 0 0 1 0 1.32h-5.09v5.09a.66.66 0 0 1-1.32 0v-5.09H4.25a.66.66 0 0 1 0-1.32h5.09V4.25a.66.66 0 0 1 .66-.66"></path></svg>
+              <span>{activeView.advancedFilter ? '编辑筛选条件' : '添加高级筛选'}</span>
+            </button>}
           />,
           document.body,
         )}
@@ -661,27 +701,42 @@ function DatabaseBlockComponent({ block, editor }: any) {
           filterColumns={filterColumns}
           activeFilterId={activeFilterId}
           activeSortId={activeSortId}
+          advancedFilterOpen={advancedFilterOpen}
           onActivateFilter={(id) => {
             setActiveFilterId((current) => current === id ? null : id);
             setActiveSortId(null);
+            setAdvancedFilterOpen(false);
           }}
           onActivateSort={(id) => {
             setActiveSortId((current) => current === id ? null : id);
             setActiveFilterId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onActivateAdvancedFilter={() => {
+            if (!activeView.advancedFilter) ensureAdvancedFilter();
+            else {
+              setAdvancedFilterOpen((open) => !open);
+              setActiveFilterId(null);
+              setActiveSortId(null);
+            }
           }}
           onAddFilter={() => {
             setFilterOpen(false);
             setSortOpen(false);
             setFilterQuery('');
+            setAdvancedFilterOpen(false);
           }}
           onFilterQueryChange={setFilterQuery}
           onPickFilter={addFilter}
           onClearActive={() => {
             setActiveFilterId(null);
             setActiveSortId(null);
+            setAdvancedFilterOpen(false);
           }}
           onUpdateFilter={updateFilter}
           onRemoveFilter={removeFilter}
+          onMergeFilterToAdvanced={mergeFilterToAdvanced}
+          onUpdateAdvancedFilter={updateAdvancedFilter}
           onReorderFilters={reorderFilters}
           onUpdateSort={updateSort}
           onRemoveSort={removeSort}
@@ -937,14 +992,18 @@ function ViewRuleBar({
   filterColumns,
   activeFilterId,
   activeSortId,
+  advancedFilterOpen,
   onActivateFilter,
   onActivateSort,
+  onActivateAdvancedFilter,
   onAddFilter,
   onFilterQueryChange,
   onPickFilter,
   onClearActive,
   onUpdateFilter,
   onRemoveFilter,
+  onMergeFilterToAdvanced,
+  onUpdateAdvancedFilter,
   onReorderFilters,
   onUpdateSort,
   onRemoveSort,
@@ -955,14 +1014,18 @@ function ViewRuleBar({
   filterColumns: DatabaseColumn[];
   activeFilterId: string | null;
   activeSortId: string | null;
+  advancedFilterOpen: boolean;
   onActivateFilter: (id: string) => void;
   onActivateSort: (id: string) => void;
+  onActivateAdvancedFilter: () => void;
   onAddFilter: () => void;
   onFilterQueryChange: (value: string) => void;
   onPickFilter: (column: DatabaseColumn) => void;
   onClearActive: () => void;
   onUpdateFilter: (id: string, patch: Partial<ViewFilterRule>) => void;
   onRemoveFilter: (id: string) => void;
+  onMergeFilterToAdvanced: (id: string) => void;
+  onUpdateAdvancedFilter: (advancedFilter?: ViewAdvancedFilterGroup) => void;
   onReorderFilters: (sourceID: string, targetID: string) => void;
   onUpdateSort: (id: string, patch: Partial<ViewSortRule>) => void;
   onRemoveSort: (id: string) => void;
@@ -970,8 +1033,10 @@ function ViewRuleBar({
   const byID = new Map(columns.map((column) => [column.id, column]));
   const activeFilter = (view.filters || []).find((filter) => filter.id === activeFilterId);
   const activeSort = (view.sorts || []).find((sort) => sort.id === activeSortId);
+  const activeFilterColumn = activeFilter ? byID.get(activeFilter.property) : undefined;
   const ruleBarRef = useRef<HTMLDivElement | null>(null);
   const activeRuleRef = useRef<HTMLButtonElement | null>(null);
+  const advancedRuleRef = useRef<HTMLButtonElement | null>(null);
   const addFilterButtonRef = useRef<HTMLButtonElement | null>(null);
   const [filterDragState, setFilterDragState] = useState<{
     sourceID: string;
@@ -990,7 +1055,8 @@ function ViewRuleBar({
   const filterDragStateRef = useRef<typeof filterDragState>(null);
   const suppressRuleClickRef = useRef(false);
   const [addFilterOpen, setAddFilterOpen] = useState(false);
-  const editorRect = useDropdownPosition(!!(activeFilter || activeSort), activeRuleRef, activeFilter ? 282 : 200, activeFilterId || activeSortId || '');
+  const editorRect = useDropdownPosition(!!(activeFilter || activeSort), activeRuleRef, activeFilter ? (isDateFilterColumn(activeFilterColumn) ? 260 : 282) : 200, activeFilterId || activeSortId || '');
+  const advancedRect = useDropdownPosition(advancedFilterOpen && !!view.advancedFilter, advancedRuleRef, 0, 'advanced-filter');
   const addFilterMenuRect = useDropdownPosition(addFilterOpen, addFilterButtonRef, 220);
   const beginFilterDrag = (filterID: string, event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || (view.filters || []).length < 2) return;
@@ -1084,20 +1150,37 @@ function ViewRuleBar({
     return () => document.removeEventListener('mousedown', close);
   }, [addFilterOpen]);
   useEffect(() => {
-    if (!activeFilter && !activeSort) return;
+    if (!activeFilter && !activeSort && !advancedFilterOpen) return;
     const close = (event: PointerEvent) => {
       const target = event.target as Element | null;
       if (!target) return;
       if (target.closest('.akdb-view-rule-editor')) return;
+      if (target.closest('.akdb-advanced-filter-editor')) return;
+      if (target.closest('.akdb-advanced-filter-add-menu')) return;
+      if (target.closest('.akdb-view-rule-dropdown-menu')) return;
+      if (target.closest('.akdb-advanced-date-picker-menu')) return;
+      if (target.closest('.akdb-date-shortcut-menu')) return;
       if (target.closest('.akdb-view-rule-pill')) return;
       onClearActive();
     };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
-  }, [activeFilter, activeSort, onClearActive]);
+  }, [activeFilter, activeSort, advancedFilterOpen, onClearActive]);
   return (
     <div className="akdb-view-rule-shell">
       <div ref={ruleBarRef} className={`akdb-view-rule-bar ${filterDragState ? 'is-filter-dragging' : ''}`}>
+        {view.advancedFilter && (
+          <button
+            ref={advancedRuleRef}
+            type="button"
+            className={`akdb-view-rule-pill is-effective ${advancedFilterOpen ? 'is-active' : ''}`}
+            onClick={onActivateAdvancedFilter}
+          >
+            <ListFilter size={14} />
+            <span>{countAdvancedFilterRules(view.advancedFilter)} 条规则</span>
+            <ChevronDown size={14} />
+          </button>
+        )}
         {(view.filters || []).map((filter) => {
           const column = byID.get(filter.property);
           const valueLabel = filterValueLabel(filter, column);
@@ -1178,6 +1261,17 @@ function ViewRuleBar({
                 onPickFilter(column);
                 setAddFilterOpen(false);
               }}
+              footer={<button
+                type="button"
+                className="akdb-filter-advanced"
+                onClick={() => {
+                  setAddFilterOpen(false);
+                  onActivateAdvancedFilter();
+                }}
+              >
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-filter-plus"><path d="M10 3.59a.66.66 0 0 1 .66.66v5.09h5.09a.66.66 0 0 1 0 1.32h-5.09v5.09a.66.66 0 0 1-1.32 0v-5.09H4.25a.66.66 0 0 1 0-1.32h5.09V4.25a.66.66 0 0 1 .66-.66"></path></svg>
+                <span>{view.advancedFilter ? '编辑筛选条件' : '添加高级筛选'}</span>
+              </button>}
             />,
             document.body,
           )}
@@ -1191,6 +1285,17 @@ function ViewRuleBar({
           onUpdate={(patch) => onUpdateFilter(activeFilter.id, patch)}
           onCommit={onClearActive}
           onRemove={() => onRemoveFilter(activeFilter.id)}
+          onMergeToAdvanced={() => onMergeFilterToAdvanced(activeFilter.id)}
+        />,
+        document.body,
+      )}
+      {view.advancedFilter && advancedFilterOpen && advancedRect && createPortal(
+        <AdvancedFilterEditor
+          group={view.advancedFilter}
+          columns={columns}
+          style={advancedRect}
+          onChange={onUpdateAdvancedFilter}
+          onRemove={() => onUpdateAdvancedFilter(undefined)}
         />,
         document.body,
       )}
@@ -1208,7 +1313,7 @@ function ViewRuleBar({
   );
 }
 
-function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove }: { filter: ViewFilterRule; column?: DatabaseColumn; style?: CSSProperties; onUpdate: (patch: Partial<ViewFilterRule>) => void; onCommit: () => void; onRemove: () => void }) {
+function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove, onMergeToAdvanced }: { filter: ViewFilterRule; column?: DatabaseColumn; style?: CSSProperties; onUpdate: (patch: Partial<ViewFilterRule>) => void; onCommit: () => void; onRemove: () => void; onMergeToAdvanced?: () => void }) {
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -1250,7 +1355,7 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove 
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
   return (
-    <div className="akdb-view-rule-editor" role="dialog" aria-label="筛选条件" style={style}>
+    <div className={`akdb-view-rule-editor ${isDateFilterColumn(column) ? 'is-date' : ''}`} role="dialog" aria-label="筛选条件" style={style}>
       <div className="akdb-view-rule-editor-head">
         <button type="button">{column?.name || '属性'}</button>
         <div className="akdb-view-rule-dropdown">
@@ -1264,7 +1369,7 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove 
                   role="menuitem"
                   className={filter.op === operator.op ? 'is-active' : ''}
                   onClick={() => {
-                    onUpdate({ op: operator.op });
+                    onUpdate(nextFilterOperatorPatch(operator.op, column, filter.value));
                     setOperatorOpen(false);
                   }}
                 >
@@ -1289,7 +1394,15 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove 
                 <Trash2 size={18} />
                 <span>删除筛选</span>
               </button>
-              <button type="button" role="menuitem" disabled>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!onMergeToAdvanced}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onMergeToAdvanced?.();
+                }}
+              >
                 <ListFilter size={18} />
                 <span>合并到高级筛选中</span>
               </button>
@@ -1400,6 +1513,581 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove 
   );
 }
 
+function AdvancedFilterEditor({ group, columns, style, onChange, onRemove }: { group: ViewAdvancedFilterGroup; columns: DatabaseColumn[]; style?: CSSProperties; onChange: (group: ViewAdvancedFilterGroup) => void; onRemove: () => void }) {
+  const filterableColumns = columns.filter((column) => !column.readonly && column.type !== 'linked');
+  const byID = new Map(columns.map((column) => [column.id, column]));
+  const updateAtPath = (path: number[], updater: (node: ViewAdvancedFilterNode) => ViewAdvancedFilterNode | null) => {
+    const next = updateAdvancedNodeAtPath(group, path, updater);
+    if (next?.type === 'group') onChange(next);
+  };
+  const updateGroupAtPath = (path: number[], updater: (target: ViewAdvancedFilterGroup) => ViewAdvancedFilterGroup) => {
+    if (!path.length) {
+      onChange(updater(group));
+      return;
+    }
+    updateAtPath(path, (node) => node.type === 'group' ? updater(node) : node);
+  };
+  const addChild = (path: number[], child: ViewAdvancedFilterNode) => {
+    updateGroupAtPath(path, (target) => ({ ...target, children: [...target.children, child] }));
+  };
+  const removeAtPath = (path: number[]) => {
+    if (!path.length) {
+      onRemove();
+      return;
+    }
+    const next = removeAdvancedNodeAtPath(group, path);
+    if (next.children.length) onChange(next);
+    else onRemove();
+  };
+  const duplicateAtPath = (path: number[]) => {
+    if (!path.length) return;
+    const next = duplicateAdvancedNodeAtPath(group, path);
+    if (next) onChange(next);
+  };
+  const convertRuleToGroupAtPath = (path: number[]) => {
+    const next = updateAdvancedNodeAtPath(group, path, (node) => node.type === 'rule'
+      ? {
+        type: 'group',
+        id: crypto.randomUUID(),
+        op: 'and',
+        children: [cloneAdvancedFilterNode(node)],
+      }
+      : node);
+    if (next?.type === 'group') onChange(next);
+  };
+  const convertGroupToRuleAtPath = (path: number[]) => {
+    const next = updateAdvancedNodeAtPath(group, path, (node) => node.type === 'group' && node.children.length === 1 ? cloneAdvancedFilterNode(node.children[0]) : node);
+    if (next?.type === 'group') onChange(next);
+  };
+  const wrapGroupAtPath = (path: number[]) => {
+    const next = updateAdvancedNodeAtPath(group, path, (node) => node.type === 'group'
+      ? {
+        type: 'group',
+        id: crypto.randomUUID(),
+        op: 'and',
+        children: [cloneAdvancedFilterNode(node)],
+      }
+      : node);
+    if (next?.type === 'group') onChange(next);
+  };
+  return (
+    <div className="akdb-advanced-filter-editor" role="dialog" aria-label="高级筛选" style={style}>
+      <AdvancedFilterGroupEditor
+        group={group}
+        path={[]}
+        level={0}
+        columns={filterableColumns}
+        byID={byID}
+        onUpdateRule={(path, patch) => updateAtPath(path, (node) => node.type === 'rule' ? { ...node, rule: { ...node.rule, ...patch } } : node)}
+        onToggleGroupOp={(path, op) => updateGroupAtPath(path, (target) => ({ ...target, op }))}
+        onAddRule={(path) => addChild(path, { type: 'rule', rule: createDefaultFilterRule(filterableColumns) })}
+        onAddGroup={(path) => addChild(path, createAdvancedFilterGroup(filterableColumns))}
+        onRemove={removeAtPath}
+        onDuplicate={duplicateAtPath}
+        onConvertRuleToGroup={convertRuleToGroupAtPath}
+        onConvertGroupToRule={convertGroupToRuleAtPath}
+        onWrapGroup={wrapGroupAtPath}
+      />
+      <button type="button" className="akdb-advanced-filter-delete" onClick={onRemove}>
+        <Trash2 size={16} />
+        <span>删除筛选</span>
+      </button>
+    </div>
+  );
+}
+
+function AdvancedFilterGroupEditor({
+  group,
+  path,
+  level,
+  columns,
+  byID,
+  onUpdateRule,
+  onToggleGroupOp,
+  onAddRule,
+  onAddGroup,
+  onRemove,
+  onDuplicate,
+  onConvertRuleToGroup,
+  onConvertGroupToRule,
+  onWrapGroup,
+}: {
+  group: ViewAdvancedFilterGroup;
+  path: number[];
+  level: number;
+  columns: DatabaseColumn[];
+  byID: Map<string, DatabaseColumn>;
+  onUpdateRule: (path: number[], patch: Partial<ViewFilterRule>) => void;
+  onToggleGroupOp: (path: number[], op: 'and' | 'or') => void;
+  onAddRule: (path: number[]) => void;
+  onAddGroup: (path: number[]) => void;
+  onRemove: (path: number[]) => void;
+  onDuplicate: (path: number[]) => void;
+  onConvertRuleToGroup: (path: number[]) => void;
+  onConvertGroupToRule: (path: number[]) => void;
+  onWrapGroup: (path: number[]) => void;
+}) {
+  const [addOpen, setAddOpen] = useState(false);
+  const [opOpen, setOpOpen] = useState(false);
+  const opButtonRef = useRef<HTMLButtonElement | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const opRect = useDropdownPosition(opOpen, opButtonRef, 170, `advanced-filter-op:${group.id}`);
+  const addRect = useDropdownPosition(addOpen, addButtonRef, 210, `advanced-filter-add:${group.id}`);
+  useDropdownOutsideClose(opOpen, opButtonRef, () => setOpOpen(false), '.akdb-view-rule-dropdown-menu');
+  useDropdownOutsideClose(addOpen, addButtonRef, () => setAddOpen(false), '.akdb-advanced-filter-add-menu');
+  return (
+    <div className={`akdb-advanced-filter-group ${level > 0 ? 'is-nested' : ''}`}>
+      {group.children.map((node, index) => {
+        const nodePath = [...path, index];
+        const prefix = index === 0 ? '当' : group.op === 'or' ? '或' : '与';
+        const prefixControl = index === 0 ? (
+          <span className="akdb-advanced-filter-prefix is-static">当</span>
+        ) : index === 1 ? (
+          <button ref={opButtonRef} type="button" className="akdb-advanced-filter-prefix" aria-haspopup="menu" aria-expanded={opOpen} onClick={() => setOpOpen((open) => !open)}>
+            {prefix} <ChevronDown size={12} />
+          </button>
+        ) : (
+          <span className="akdb-advanced-filter-prefix is-static">{prefix}</span>
+        );
+        if (node.type === 'group') {
+          return (
+            <div key={node.id} className="akdb-advanced-filter-node">
+              <div className="akdb-advanced-filter-group-row">
+                {prefixControl}
+                <AdvancedFilterGroupEditor
+                  group={node}
+                  path={nodePath}
+                  level={level + 1}
+                  columns={columns}
+                  byID={byID}
+                  onUpdateRule={onUpdateRule}
+                  onToggleGroupOp={onToggleGroupOp}
+                  onAddRule={onAddRule}
+                  onAddGroup={onAddGroup}
+                  onRemove={onRemove}
+                  onDuplicate={onDuplicate}
+                  onConvertRuleToGroup={onConvertRuleToGroup}
+                  onConvertGroupToRule={onConvertGroupToRule}
+                  onWrapGroup={onWrapGroup}
+                />
+                <AdvancedFilterMoreButton
+                  path={nodePath}
+                  nodeType="group"
+                  canConvertGroupToRule={node.children.length === 1}
+                  onRemove={onRemove}
+                  onDuplicate={onDuplicate}
+                  onConvertRuleToGroup={onConvertRuleToGroup}
+                  onConvertGroupToRule={onConvertGroupToRule}
+                  onWrapGroup={onWrapGroup}
+                />
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div key={node.rule.id} className="akdb-advanced-filter-row">
+            {prefixControl}
+            <AdvancedFilterRuleControls
+              rule={node.rule}
+              columns={columns}
+              column={byID.get(node.rule.property)}
+              onUpdate={(patch) => onUpdateRule(nodePath, patch)}
+            />
+            <AdvancedFilterMoreButton
+              path={nodePath}
+              nodeType="rule"
+              onRemove={onRemove}
+              onDuplicate={onDuplicate}
+              onConvertRuleToGroup={onConvertRuleToGroup}
+              onConvertGroupToRule={onConvertGroupToRule}
+              onWrapGroup={onWrapGroup}
+            />
+          </div>
+        );
+      })}
+      {opOpen && opRect && createPortal(
+        <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-op-menu" role="menu" style={opRect}>
+          <button type="button" role="menuitem" className={group.op === 'and' ? 'is-active' : ''} onClick={() => { onToggleGroupOp(path, 'and'); setOpOpen(false); }}>
+            <span>与</span>
+            <small>必须满足所有筛选</small>
+          </button>
+          <button type="button" role="menuitem" className={group.op === 'or' ? 'is-active' : ''} onClick={() => { onToggleGroupOp(path, 'or'); setOpOpen(false); }}>
+            <span>或</span>
+            <small>必须满足至少一个筛选</small>
+          </button>
+        </div>,
+        document.body,
+      )}
+      <div className="akdb-advanced-filter-add-wrap">
+        <button ref={addButtonRef} type="button" className="akdb-advanced-filter-add" aria-haspopup="menu" aria-expanded={addOpen} onClick={() => setAddOpen((open) => !open)}>
+          <Plus size={15} />
+          <span>添加筛选规则</span>
+          <ChevronDown size={13} />
+        </button>
+        {addOpen && addRect && createPortal(
+          <div className="akdb-advanced-filter-add-menu" role="menu" style={addRect}>
+            <button type="button" onClick={() => { setAddOpen(false); onAddRule(path); }}><Plus size={15} /><span>添加筛选规则</span></button>
+            <button type="button" onClick={() => { setAddOpen(false); onAddGroup(path); }}><Copy size={15} /><span>添加筛选分组</span></button>
+          </div>,
+          document.body,
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdvancedFilterMoreButton({
+  path,
+  nodeType,
+  canConvertGroupToRule = false,
+  onRemove,
+  onDuplicate,
+  onConvertRuleToGroup,
+  onConvertGroupToRule,
+  onWrapGroup,
+}: {
+  path: number[];
+  nodeType: 'rule' | 'group';
+  canConvertGroupToRule?: boolean;
+  onRemove: (path: number[]) => void;
+  onDuplicate: (path: number[]) => void;
+  onConvertRuleToGroup: (path: number[]) => void;
+  onConvertGroupToRule: (path: number[]) => void;
+  onWrapGroup: (path: number[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRect = useDropdownPosition(open, buttonRef, 160, `advanced-filter-more:${path.join('.')}`);
+  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-view-rule-dropdown-menu');
+  return (
+    <>
+      <button ref={buttonRef} type="button" className="akdb-advanced-filter-more" aria-label="更多操作" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <MoreHorizontal size={16} />
+      </button>
+      {open && menuRect && createPortal(
+        <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-more-menu" role="menu" style={menuRect}>
+          <button type="button" role="menuitem" className="is-danger" onClick={() => { setOpen(false); onRemove(path); }}>
+            <Trash2 size={16} />
+            <span>移除</span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); onDuplicate(path); }}>
+            <Copy size={16} />
+            <span>创建副本</span>
+          </button>
+          {nodeType === 'rule' && (
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onConvertRuleToGroup(path); }}>
+              <Workflow size={16} />
+              <span>转换成分组</span>
+            </button>
+          )}
+          {nodeType === 'group' && canConvertGroupToRule && (
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onConvertGroupToRule(path); }}>
+              <Workflow size={16} />
+              <span>转成筛选</span>
+            </button>
+          )}
+          {nodeType === 'group' && (
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onWrapGroup(path); }}>
+              <Workflow size={16} />
+              <span>包装成组</span>
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule: ViewFilterRule; columns: DatabaseColumn[]; column?: DatabaseColumn; onUpdate: (patch: Partial<ViewFilterRule>) => void }) {
+  const [propertyOpen, setPropertyOpen] = useState(false);
+  const [operatorOpen, setOperatorOpen] = useState(false);
+  const [valueOpen, setValueOpen] = useState(false);
+  const propertyRef = useRef<HTMLButtonElement | null>(null);
+  const operatorRef = useRef<HTMLButtonElement | null>(null);
+  const valueRef = useRef<HTMLButtonElement | null>(null);
+  const propertyRect = useDropdownPosition(propertyOpen, propertyRef, 220, `advanced-property:${rule.id}`);
+  const operatorRect = useDropdownPosition(operatorOpen, operatorRef, 160, `advanced-operator:${rule.id}`);
+  const valueRect = useDropdownPosition(valueOpen, valueRef, isDateFilterColumn(column) ? 260 : 240, `advanced-value:${rule.id}`);
+  const operators = filterOperatorsForColumn(column);
+  const valueDisabled = rule.op === 'is_empty' || rule.op === 'is_not_empty';
+  const options = (column?.config?.options || []) as Array<{ id: string; value: string; color?: string }>;
+  const selected = Array.isArray(rule.value) ? rule.value.map(String) : String(rule.value || '').split(',').filter(Boolean);
+  const selectedSet = new Set(selected);
+  const selectedOptions = selected.map((id) => options.find((option) => option.id === id)).filter(Boolean);
+  const isOptionColumn = column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select';
+  const optionGroups = groupedFilterOptions(column, options);
+  const dropdownSelector = '.akdb-view-rule-dropdown-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu';
+  useDropdownOutsideClose(propertyOpen, propertyRef, () => setPropertyOpen(false), '.akdb-view-rule-dropdown-menu');
+  useDropdownOutsideClose(operatorOpen, operatorRef, () => setOperatorOpen(false), '.akdb-view-rule-dropdown-menu');
+  useDropdownOutsideClose(valueOpen, valueRef, () => setValueOpen(false), dropdownSelector);
+  const updateProperty = (property: string) => {
+    const nextColumn = columns.find((item) => item.id === property);
+    if (!nextColumn) return;
+    onUpdate({ property, op: defaultFilterOperator(nextColumn), value: defaultFilterValue(nextColumn) });
+  };
+  const toggleOption = (optionID: string) => {
+    onUpdate({ value: selectedSet.has(optionID) ? selected.filter((id) => id !== optionID) : [...selected, optionID] });
+  };
+  const toggleGroup = (groupOptions: Array<{ id: string; value: string; color?: string }>) => {
+    const groupIDs = groupOptions.map((option) => option.id);
+    if (!groupIDs.length) return;
+    const allSelected = groupIDs.every((id) => selectedSet.has(id));
+    const groupIDSet = new Set(groupIDs);
+    onUpdate({ value: allSelected ? selected.filter((id) => !groupIDSet.has(id)) : Array.from(new Set([...selected, ...groupIDs])) });
+  };
+  const clearSelectedOptions = () => onUpdate({ value: [] });
+  const valueLabel = (() => {
+    if (valueDisabled) return '无需填写';
+    if (isOptionColumn) return selectedOptions.length ? selectedOptions.map((option: any) => option.value).join(', ') : '选择选项';
+    if (column?.type === 'checkbox') return rule.value === false ? '未勾选' : '已勾选';
+    if (isDateFilterColumn(column) && rule.op === 'relative_to_today') return dateRelativeLabel(String(rule.value || 'this_week'));
+    return String(rule.value || '') || '值';
+  })();
+  return (
+    <>
+      <button ref={propertyRef} type="button" className="akdb-advanced-filter-control is-property" aria-haspopup="menu" aria-expanded={propertyOpen} onClick={() => { setPropertyOpen((open) => !open); setOperatorOpen(false); setValueOpen(false); }}>
+        <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+        <span>{column?.name || '属性'}</span>
+        <ChevronDown size={13} />
+      </button>
+      {propertyOpen && propertyRect && createPortal(
+        <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown" role="menu" style={propertyRect}>
+          {columns.map((item) => (
+            <button key={item.id} type="button" role="menuitem" className={item.id === rule.property ? 'is-active' : ''} onClick={() => { updateProperty(item.id); setPropertyOpen(false); }}>
+              <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(item)} /></span>
+              <span>{item.name}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+      <button ref={operatorRef} type="button" className="akdb-advanced-filter-control is-op" aria-haspopup="menu" aria-expanded={operatorOpen} onClick={() => { setOperatorOpen((open) => !open); setPropertyOpen(false); setValueOpen(false); }}>
+        <span>{filterOperatorLabel(rule, column)}</span>
+        <ChevronDown size={13} />
+      </button>
+      {operatorOpen && operatorRect && createPortal(
+        <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown is-operator" role="menu" style={operatorRect}>
+          {operators.map((operator) => (
+            <button key={operator.op} type="button" role="menuitem" className={operator.op === rule.op ? 'is-active' : ''} onClick={() => { onUpdate(nextFilterOperatorPatch(operator.op, column, rule.value)); setOperatorOpen(false); }}>
+              <span>{operator.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+      {!valueDisabled && isOptionColumn ? (
+        <>
+          <button ref={valueRef} type="button" className={`akdb-advanced-filter-control is-value ${selectedOptions.length ? 'has-value' : ''}`} aria-haspopup="menu" aria-expanded={valueOpen} onClick={() => { setValueOpen((open) => !open); setPropertyOpen(false); setOperatorOpen(false); }}>
+            {selectedOptions.length ? (
+              <span className="akdb-advanced-filter-tags">
+                {selectedOptions.map((option: any) => (
+                  <OptionTag key={option.id} option={option} config={column?.config || {}} />
+                ))}
+              </span>
+            ) : (
+              <span>{valueLabel}</span>
+            )}
+            <ChevronDown size={13} />
+          </button>
+          {valueOpen && valueRect && createPortal(
+            <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown is-value" role="menu" style={valueRect}>
+              {isOptionColumn && (
+                <div className={`akdb-filter-value-combobox akdb-advanced-filter-value-combobox ${selectedOptions.length ? 'has-value' : ''}`}>
+                  {selectedOptions.map((option: any) => (
+                    <OptionTag
+                      key={option.id}
+                      option={option}
+                      config={column?.config || {}}
+                      removable
+                      onRemove={() => onUpdate({ value: selected.filter((id) => id !== option.id) })}
+                    />
+                  ))}
+                  {!selectedOptions.length && <span className="akdb-advanced-filter-value-placeholder">选择选项</span>}
+                  {selectedOptions.length > 0 && (
+                    <button type="button" className="akdb-filter-value-clear" aria-label="清除筛选值" onClick={clearSelectedOptions}>
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
+              {optionGroups.map((group) => (
+                <div key={group.key} className={`akdb-view-rule-option-group ${group.label ? 'has-title' : ''}`}>
+                  {group.label && (() => {
+                    const selectedCount = group.options.filter((option) => selectedSet.has(option.id)).length;
+                    const allSelected = selectedCount > 0 && selectedCount === group.options.length;
+                    const partialSelected = selectedCount > 0 && !allSelected;
+                    return (
+                      <button type="button" className={`akdb-view-rule-option-group-title ${allSelected ? 'is-active' : ''} ${partialSelected ? 'is-partial' : ''}`} onClick={() => toggleGroup(group.options)}>
+                        <span className="akdb-view-rule-check">
+                          {allSelected ? <Check size={13} strokeWidth={2.4} /> : partialSelected ? <span className="akdb-view-rule-check-mixed" /> : null}
+                        </span>
+                        <span>{group.label}</span>
+                      </button>
+                    );
+                  })()}
+                  {group.options.map((option) => {
+                    const checked = selectedSet.has(option.id);
+                    return (
+                      <button key={option.id} type="button" className={`akdb-view-rule-option ${checked ? 'is-active' : ''}`} onClick={() => toggleOption(option.id)}>
+                        <span className="akdb-view-rule-check">{checked ? <Check size={13} strokeWidth={2.4} /> : null}</span>
+                        <OptionTag option={option} config={column?.config || {}} />
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {!options.length && <div className="akdb-filter-empty">暂无选项</div>}
+            </div>,
+            document.body,
+          )}
+        </>
+      ) : !valueDisabled && isDateFilterColumn(column) ? (
+        <AdvancedDateFilterValueControls
+          rule={rule}
+          valueRef={valueRef}
+          valueOpen={valueOpen}
+          valueRect={valueRect}
+          onOpenChange={(open) => {
+            setValueOpen(open);
+            if (open) {
+              setPropertyOpen(false);
+              setOperatorOpen(false);
+            }
+          }}
+          onUpdate={onUpdate}
+        />
+      ) : !valueDisabled && column?.type === 'checkbox' ? (
+        <>
+          <button ref={valueRef} type="button" className="akdb-advanced-filter-control is-value is-checkbox-value" aria-haspopup="menu" aria-expanded={valueOpen} onClick={() => { setValueOpen((open) => !open); setPropertyOpen(false); setOperatorOpen(false); }}>
+            <span className={`akdb-advanced-filter-checkbox-preview ${rule.value === false ? 'is-unchecked' : ''}`}>
+              {rule.value === false ? null : <Check size={15} strokeWidth={2.4} />}
+            </span>
+            <ChevronDown size={13} />
+          </button>
+          {valueOpen && valueRect && createPortal(
+            <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown is-value" role="menu" style={valueRect}>
+              {[true, false].map((value) => (
+                <button key={String(value)} type="button" className={rule.value === value ? 'is-active' : ''} onClick={() => { onUpdate({ value }); setValueOpen(false); }}>
+                  <span className="akdb-view-rule-check">{rule.value === value ? <Check size={13} strokeWidth={2.4} /> : null}</span>
+                  <span>{value ? '已勾选' : '未勾选'}</span>
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )}
+        </>
+      ) : !valueDisabled ? (
+        <input className="akdb-advanced-filter-input" value={String(rule.value || '')} placeholder="值" onChange={(event) => onUpdate({ value: event.currentTarget.value })} />
+      ) : (
+        <span className="akdb-advanced-filter-value is-spacer" aria-hidden="true" />
+      )}
+    </>
+  );
+}
+
+function AdvancedDateFilterValueControls({
+  rule,
+  valueRef,
+  valueOpen,
+  valueRect,
+  onOpenChange,
+  onUpdate,
+}: {
+  rule: ViewFilterRule;
+  valueRef: RefObject<HTMLButtonElement>;
+  valueOpen: boolean;
+  valueRect: CSSProperties | null;
+  onOpenChange: (open: boolean) => void;
+  onUpdate: (patch: Partial<ViewFilterRule>) => void;
+}) {
+  if (rule.op === 'relative_to_today') {
+    return <AdvancedDateRelativeControls value={String(rule.value || 'this_week')} onChange={(value) => onUpdate({ value })} />;
+  }
+  const label = advancedDateValueLabel(rule);
+  return (
+    <>
+      <button ref={valueRef} type="button" className={`akdb-advanced-filter-control is-value ${label ? 'has-value' : ''}`} aria-haspopup="dialog" aria-expanded={valueOpen} onClick={() => onOpenChange(!valueOpen)}>
+        <span>{label || '选择日期'}</span>
+        <ChevronDown size={13} />
+      </button>
+      {valueOpen && valueRect && createPortal(
+        <div className="akdb-advanced-date-picker-menu" role="dialog" aria-label="选择日期筛选值" style={valueRect}>
+          <DateFilterEditor filter={rule} onUpdate={onUpdate} />
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+function AdvancedDateRelativeControls({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [prefixOpen, setPrefixOpen] = useState(false);
+  const [unitOpen, setUnitOpen] = useState(false);
+  const prefixRef = useRef<HTMLButtonElement | null>(null);
+  const unitRef = useRef<HTMLButtonElement | null>(null);
+  const prefixRect = useDropdownPosition(prefixOpen, prefixRef, 108, `advanced-date-prefix:${value}`);
+  const unitRect = useDropdownPosition(unitOpen, unitRef, 108, `advanced-date-unit:${value}`);
+  const relative = parseDateRelativeValue(value);
+  useDropdownOutsideClose(prefixOpen, prefixRef, () => setPrefixOpen(false), '.akdb-view-rule-dropdown-menu');
+  useDropdownOutsideClose(unitOpen, unitRef, () => setUnitOpen(false), '.akdb-view-rule-dropdown-menu');
+  const update = (patch: Partial<DateRelativeValue>) => {
+    onChange(formatDateRelativeValue({ ...relative, ...patch }));
+  };
+  return (
+    <div className={`akdb-advanced-date-relative-controls ${relative.prefix === 'past' || relative.prefix === 'future' ? 'has-count' : ''}`}>
+      <div className="akdb-view-rule-dropdown">
+        <button ref={prefixRef} type="button" className="akdb-advanced-filter-control akdb-advanced-date-relative-control" aria-haspopup="menu" aria-expanded={prefixOpen} onClick={() => { setPrefixOpen((open) => !open); setUnitOpen(false); }}>
+          <span>{dateRelativePrefixChoices.find((choice) => choice.id === relative.prefix)?.label || '本'}</span>
+          <ChevronDown size={13} />
+        </button>
+        {prefixOpen && prefixRect && createPortal(
+          <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown" role="menu" style={prefixRect}>
+            {dateRelativePrefixChoices.map((choice) => (
+              <button key={choice.id} type="button" role="menuitem" className={relative.prefix === choice.id ? 'is-active' : ''} onClick={() => { update({ prefix: choice.id }); setPrefixOpen(false); }}>
+                <span>{choice.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+      </div>
+      {(relative.prefix === 'past' || relative.prefix === 'future') && (
+        <input
+          className="akdb-advanced-date-relative-count"
+          value={String(relative.count || 1)}
+          inputMode="numeric"
+          onChange={(event) => update({ count: Math.max(1, Number(event.currentTarget.value.replace(/\D/g, '')) || 1) })}
+        />
+      )}
+      <div className="akdb-view-rule-dropdown">
+        <button ref={unitRef} type="button" className="akdb-advanced-filter-control akdb-advanced-date-relative-control" aria-haspopup="menu" aria-expanded={unitOpen} onClick={() => { setUnitOpen((open) => !open); setPrefixOpen(false); }}>
+          <span>{dateRelativeUnitChoices.find((choice) => choice.id === relative.unit)?.label || '周'}</span>
+          <ChevronDown size={13} />
+        </button>
+        {unitOpen && unitRect && createPortal(
+          <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown" role="menu" style={unitRect}>
+            {dateRelativeUnitChoices.map((choice) => (
+              <button key={choice.id} type="button" role="menuitem" className={relative.unit === choice.id ? 'is-active' : ''} onClick={() => { update({ unit: choice.id }); setUnitOpen(false); }}>
+                <span>{choice.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+      </div>
+    </div>
+  );
+}
+
+function advancedDateValueLabel(rule: ViewFilterRule) {
+  if (rule.op === 'between') {
+    const values = Array.isArray(rule.value) ? rule.value : String(rule.value || '').split(',').filter(Boolean);
+    return values.length >= 2 ? `${formatCompactDateFilterLabel(String(values[0]))} - ${formatCompactDateFilterLabel(String(values[1]))}` : '';
+  }
+  return formatDateFilterLabel(String(rule.value || ''));
+}
+
 function SortRuleEditor({ sort, column, style, onUpdate, onRemove }: { sort: ViewSortRule; column?: DatabaseColumn; style?: CSSProperties; onUpdate: (patch: Partial<ViewSortRule>) => void; onRemove: () => void }) {
   return (
     <div className="akdb-view-rule-editor is-sort" role="dialog" aria-label="排序条件" style={style}>
@@ -1414,7 +2102,8 @@ function SortRuleEditor({ sort, column, style, onUpdate, onRemove }: { sort: Vie
 
 function defaultFilterOperator(column: DatabaseColumn) {
   if (isDateFilterColumn(column)) return 'relative_to_today';
-  if (column.type === 'select' || column.type === 'status' || column.type === 'multi_select' || column.type === 'checkbox') return 'equals';
+  if (column.type === 'multi_select') return 'contains';
+  if (column.type === 'select' || column.type === 'status' || column.type === 'checkbox') return 'equals';
   return 'contains';
 }
 
@@ -1426,10 +2115,14 @@ function defaultFilterValue(column: DatabaseColumn) {
 }
 
 function filterOperatorLabel(filter: ViewFilterRule, column?: DatabaseColumn) {
-  if (column?.type === 'checkbox') return filter.value === false ? '未勾选' : '已勾选';
   if (filter.op === 'relative_to_today') return '相对于今天';
   if (filter.op === 'equals') return '是';
   if (filter.op === 'not_equals') return '不是';
+  if (filter.op === 'before') return '早于';
+  if (filter.op === 'after') return '晚于';
+  if (filter.op === 'on_or_before') return '不晚于';
+  if (filter.op === 'on_or_after') return '不早于';
+  if (filter.op === 'between') return '介于';
   if (filter.op === 'not_contains') return '不包含';
   if (filter.op === 'starts_with') return '开头是';
   if (filter.op === 'ends_with') return '结尾是';
@@ -1449,6 +2142,11 @@ function filterValueLabel(filter: ViewFilterRule, column?: DatabaseColumn) {
   if (filter.op === 'is_empty') return '为空白';
   if (filter.op === 'is_not_empty') return '不为空白';
   if (filter.op === 'relative_to_today' && isDateFilterColumn(column)) return dateRelativeLabel(String(filter.value || 'this_week'));
+  if (filter.op === 'between' && isDateFilterColumn(column)) {
+    const values = Array.isArray(filter.value) ? filter.value : String(filter.value || '').split(',').filter(Boolean);
+    return values.length >= 2 ? `${formatCompactDateFilterLabel(String(values[0]))} - ${formatCompactDateFilterLabel(String(values[1]))}` : '';
+  }
+  if (isDateFilterColumn(column)) return formatDateFilterLabel(String(filter.value || ''));
   if (column?.type === 'checkbox') return filter.value === false ? '未勾选' : '已勾选';
   const options = (column?.config?.options || []) as Array<{ id: string; value: string }>;
   const optionByID = new Map(options.map((option) => [option.id, option.value]));
@@ -1460,15 +2158,25 @@ function filterValueLabel(filter: ViewFilterRule, column?: DatabaseColumn) {
 }
 
 function filterOperatorsForColumn(column?: DatabaseColumn): Array<{ op: ViewFilterRule['op']; label: string }> {
-  if (column?.type === 'checkbox') return [{ op: 'equals', label: '是' }];
+  if (column?.type === 'checkbox') return [{ op: 'equals', label: '是' }, { op: 'not_equals', label: '不是' }];
   if (isDateFilterColumn(column)) return [
-    { op: 'relative_to_today', label: '相对于今天' },
     { op: 'equals', label: '是' },
-    { op: 'not_equals', label: '不是' },
+    { op: 'before', label: '早于' },
+    { op: 'after', label: '晚于' },
+    { op: 'on_or_before', label: '不晚于' },
+    { op: 'on_or_after', label: '不早于' },
+    { op: 'between', label: '介于' },
+    { op: 'relative_to_today', label: '相对于今天' },
     { op: 'is_empty', label: '为空白' },
     { op: 'is_not_empty', label: '不为空白' },
   ];
-  if (column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select') return [
+  if (column?.type === 'multi_select') return [
+    { op: 'contains', label: '包含' },
+    { op: 'not_contains', label: '不包含' },
+    { op: 'is_empty', label: '为空白' },
+    { op: 'is_not_empty', label: '不为空白' },
+  ];
+  if (column?.type === 'select' || column?.type === 'status') return [
     { op: 'equals', label: '是' },
     { op: 'not_equals', label: '不是' },
     { op: 'is_empty', label: '为空白' },
@@ -1486,41 +2194,77 @@ function filterOperatorsForColumn(column?: DatabaseColumn): Array<{ op: ViewFilt
   ];
 }
 
+function nextFilterOperatorPatch(op: ViewFilterRule['op'], column: DatabaseColumn | undefined, currentValue: ViewFilterRule['value']): Partial<ViewFilterRule> {
+  if (!isDateFilterColumn(column)) return { op };
+  if (op === 'is_empty' || op === 'is_not_empty') return { op, value: '' };
+  if (op === 'relative_to_today') return { op, value: formatDateRelativeValue(parseDateRelativeValue(String(currentValue || 'this_week'))) };
+  if (op === 'between') {
+    const values = Array.isArray(currentValue) ? currentValue.map(String) : String(currentValue || '').split(',').filter(Boolean);
+    const start = parseDateInputValue(String(values[0] || ''));
+    const end = parseDateInputValue(String(values[1] || ''));
+    return { op, value: [start ? formatDateInputValue(start) : '', end ? formatDateInputValue(end) : ''] };
+  }
+  const currentDate = parseDateInputValue(String(Array.isArray(currentValue) ? currentValue[0] || '' : currentValue || ''));
+  return { op, value: currentDate ? formatDateInputValue(currentDate) : '' };
+}
+
 function DateFilterEditor({ filter, onUpdate }: { filter: ViewFilterRule; onUpdate: (patch: Partial<ViewFilterRule>) => void }) {
   const [prefixOpen, setPrefixOpen] = useState(false);
   const [unitOpen, setUnitOpen] = useState(false);
+  const [activeBetweenIndex, setActiveBetweenIndex] = useState<0 | 1>(0);
   const prefixRef = useRef<HTMLButtonElement | null>(null);
   const unitRef = useRef<HTMLButtonElement | null>(null);
   const prefixRect = useDropdownPosition(prefixOpen, prefixRef, 108);
   const unitRect = useDropdownPosition(unitOpen, unitRef, 108);
   const relative = parseDateRelativeValue(String(filter.value || 'this_week'));
-  const range = dateRelativeRange(relative.prefix, relative.unit);
-  const [viewMonth, setViewMonth] = useState(() => new Date(range.start.getFullYear(), range.start.getMonth(), 1));
+  const range = dateRelativeRange(relative.prefix, relative.unit, relative.count);
+  const selectedDate = parseDateInputValue(String(Array.isArray(filter.value) ? filter.value[0] || '' : filter.value || ''));
+  const betweenValues = Array.isArray(filter.value) ? filter.value.map(String) : String(filter.value || '').split(',').filter(Boolean);
+  const betweenStart = parseDateInputValue(String(betweenValues[0] || ''));
+  const betweenEnd = parseDateInputValue(String(betweenValues[1] || ''));
+  const highlightRange = filter.op === 'relative_to_today'
+    ? range
+    : filter.op === 'between' && betweenStart && betweenEnd
+      ? { start: betweenStart, end: betweenEnd }
+      : selectedDate
+        ? { start: selectedDate, end: selectedDate }
+        : { start: startOfLocalDay(new Date()), end: startOfLocalDay(new Date()) };
+  const [viewMonth, setViewMonth] = useState(() => new Date(highlightRange.start.getFullYear(), highlightRange.start.getMonth(), 1));
   useDropdownOutsideClose(prefixOpen, prefixRef, () => setPrefixOpen(false), '.akdb-view-rule-dropdown-menu');
   useDropdownOutsideClose(unitOpen, unitRef, () => setUnitOpen(false), '.akdb-view-rule-dropdown-menu');
   useEffect(() => {
-    setViewMonth(new Date(range.start.getFullYear(), range.start.getMonth(), 1));
+    setViewMonth(new Date(highlightRange.start.getFullYear(), highlightRange.start.getMonth(), 1));
   }, [filter.value]);
+  useEffect(() => {
+    if (filter.op !== 'between') setActiveBetweenIndex(0);
+  }, [filter.op]);
   const days = calendarDaysForMonth(viewMonth);
   const today = startOfLocalDay(new Date());
   const updateRelative = (patch: Partial<DateRelativeValue>) => {
     const next = { ...relative, ...patch };
-    onUpdate({ op: 'relative_to_today', value: `${next.prefix}_${next.unit}` });
+    onUpdate({ op: 'relative_to_today', value: formatDateRelativeValue(next) });
   };
-  if (filter.op !== 'relative_to_today') {
-    return (
-      <input
-        autoFocus
-        className="akdb-view-rule-input"
-        value={String(filter.value || '')}
-        onChange={(event) => onUpdate({ value: event.currentTarget.value })}
-        placeholder="输入日期..."
-      />
-    );
-  }
+  const updateSingleDate = (value: string) => onUpdate({ value });
+  const updateBetweenDate = (index: 0 | 1, value: string) => {
+    const next = [String(betweenValues[0] || ''), String(betweenValues[1] || '')];
+    next[index] = value;
+    onUpdate({ value: next });
+  };
+  const selectCalendarDate = (date: Date) => {
+    const value = formatDateInputValue(date);
+    if (filter.op === 'between') {
+      const next = [String(betweenValues[0] || ''), String(betweenValues[1] || '')];
+      next[activeBetweenIndex] = value;
+      onUpdate({ value: next });
+      setActiveBetweenIndex(activeBetweenIndex === 0 ? 1 : 0);
+      return;
+    }
+    if (filter.op !== 'relative_to_today') updateSingleDate(value);
+  };
+  const showCalendar = filter.op !== 'is_empty' && filter.op !== 'is_not_empty';
   return (
     <div className="akdb-date-filter-panel">
-      <div className="akdb-date-filter-controls">
+      {filter.op === 'relative_to_today' ? <div className={`akdb-date-filter-controls ${relative.prefix === 'past' || relative.prefix === 'future' ? 'has-count' : ''}`}>
         <div className="akdb-view-rule-dropdown">
           <button ref={prefixRef} type="button" aria-haspopup="menu" aria-expanded={prefixOpen} onClick={() => { setPrefixOpen((open) => !open); setUnitOpen(false); }}>
             {dateRelativePrefixChoices.find((choice) => choice.id === relative.prefix)?.label || '本'} <ChevronDown size={14} />
@@ -1536,6 +2280,14 @@ function DateFilterEditor({ filter, onUpdate }: { filter: ViewFilterRule; onUpda
             document.body,
           )}
         </div>
+        {(relative.prefix === 'past' || relative.prefix === 'future') && (
+          <input
+            className="akdb-date-filter-count"
+            value={String(relative.count || 1)}
+            inputMode="numeric"
+            onChange={(event) => updateRelative({ count: Math.max(1, Number(event.currentTarget.value.replace(/\D/g, '')) || 1) })}
+          />
+        )}
         <div className="akdb-view-rule-dropdown">
           <button ref={unitRef} type="button" aria-haspopup="menu" aria-expanded={unitOpen} onClick={() => { setUnitOpen((open) => !open); setPrefixOpen(false); }}>
             {dateRelativeUnitChoices.find((choice) => choice.id === relative.unit)?.label || '周'} <ChevronDown size={14} />
@@ -1551,8 +2303,15 @@ function DateFilterEditor({ filter, onUpdate }: { filter: ViewFilterRule; onUpda
             document.body,
           )}
         </div>
-      </div>
-      <div className="akdb-date-filter-calendar">
+      </div> : filter.op === 'between' ? (
+        <div className="akdb-date-filter-range-inputs">
+          <DateFilterInput value={String(betweenValues[0] || '')} placeholder="开始日期" shortcuts={false} compact active={activeBetweenIndex === 0} onActivate={() => setActiveBetweenIndex(0)} onChange={(value) => updateBetweenDate(0, value)} />
+          <DateFilterInput value={String(betweenValues[1] || '')} placeholder="结束日期" shortcuts={false} compact active={activeBetweenIndex === 1} onActivate={() => setActiveBetweenIndex(1)} onChange={(value) => updateBetweenDate(1, value)} />
+        </div>
+      ) : showCalendar ? (
+        <DateFilterInput value={String(filter.value || '')} placeholder="选择或输入日期" onChange={updateSingleDate} />
+      ) : null}
+      {showCalendar && <div className="akdb-date-filter-calendar">
         <div className="akdb-date-filter-calendar-head">
           <strong>{viewMonth.getFullYear()}年{viewMonth.getMonth() + 1}月</strong>
           <button type="button" aria-label="上个月" onClick={() => setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}><ChevronLeft size={18} /></button>
@@ -1564,31 +2323,77 @@ function DateFilterEditor({ filter, onUpdate }: { filter: ViewFilterRule; onUpda
         <div className="akdb-date-filter-grid">
           {days.map((day) => {
             const currentMonth = day.date.getMonth() === viewMonth.getMonth();
-            const inRange = day.date >= range.start && day.date <= range.end;
-            const isStart = isSameLocalDate(day.date, range.start);
-            const isEnd = isSameLocalDate(day.date, range.end);
+            const rangeStart = highlightRange.start <= highlightRange.end ? highlightRange.start : highlightRange.end;
+            const rangeEnd = highlightRange.start <= highlightRange.end ? highlightRange.end : highlightRange.start;
+            const inRange = day.date >= rangeStart && day.date <= rangeEnd;
+            const isStart = isSameLocalDate(day.date, rangeStart);
+            const isEnd = isSameLocalDate(day.date, rangeEnd);
             const isToday = isSameLocalDate(day.date, today);
             return (
-              <span key={day.key} className={[!currentMonth ? 'is-muted' : '', inRange ? 'is-in-range' : '', isStart ? 'is-range-start' : '', isEnd ? 'is-range-end' : '', isToday ? 'is-today' : ''].filter(Boolean).join(' ')}>
+              <button type="button" key={day.key} className={[!currentMonth ? 'is-muted' : '', inRange ? 'is-in-range' : '', isStart ? 'is-range-start' : '', isEnd ? 'is-range-end' : '', isToday ? 'is-today' : ''].filter(Boolean).join(' ')} onClick={() => selectCalendarDate(day.date)}>
                 {day.date.getDate()}
-              </span>
+              </button>
             );
           })}
         </div>
-      </div>
-      <div className="akdb-date-filter-help">筛选将根据当前日期更新</div>
+      </div>}
+      {filter.op === 'relative_to_today' && <div className="akdb-date-filter-help">筛选将根据当前日期更新</div>}
     </div>
   );
 }
 
-type DateRelativePrefix = 'this' | 'last' | 'next';
+function DateFilterInput({ value, placeholder, shortcuts: shortcutsEnabled = true, compact = false, active = false, onActivate, onChange }: { value: string; placeholder: string; shortcuts?: boolean; compact?: boolean; active?: boolean; onActivate?: () => void; onChange: (value: string) => void }) {
+  const [shortcutOpen, setShortcutOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const shortcutRect = useDropdownPosition(shortcutOpen, wrapRef, 0, value);
+  useDropdownOutsideClose(shortcutOpen, wrapRef, () => setShortcutOpen(false), '.akdb-date-shortcut-menu');
+  const shortcuts = [
+    { value: 'date_shortcut:today', label: '今天' },
+    { value: 'date_shortcut:tomorrow', label: '明天' },
+    { value: 'date_shortcut:yesterday', label: '昨天' },
+    { value: 'date_shortcut:last_week', label: '一周前' },
+    { value: 'date_shortcut:next_week', label: '一周后' },
+    { value: 'date_shortcut:last_month', label: '一个月前' },
+    { value: 'date_shortcut:next_month', label: '一个月后' },
+  ];
+  const activeShortcut = shortcuts.find((shortcut) => shortcut.value === value);
+  return (
+    <div ref={wrapRef} className={`akdb-date-filter-input-wrap ${shortcutsEnabled ? '' : 'no-shortcuts'} ${active ? 'is-active' : ''}`}>
+      <input value={compact ? formatCompactDateFilterLabel(value) : formatDateFilterLabel(value)} placeholder={placeholder} onFocus={onActivate} onPointerDown={onActivate} onChange={(event) => onChange(event.currentTarget.value)} />
+      {value && <button type="button" className="akdb-date-filter-clear" aria-label="清除日期" onClick={() => onChange('')}><X size={14} /></button>}
+      {shortcutsEnabled && <button type="button" className="akdb-date-filter-shortcut-trigger" aria-label="选择相对日期" aria-haspopup="menu" aria-expanded={shortcutOpen} onClick={() => setShortcutOpen((open) => !open)}>
+        <ChevronDown size={14} />
+      </button>}
+      {shortcutsEnabled && shortcutOpen && shortcutRect && createPortal(
+        <div className="akdb-date-shortcut-menu" role="menu" style={shortcutRect}>
+          {shortcuts.map((shortcut) => {
+            const active = value === shortcut.value;
+            return (
+              <button key={shortcut.value} type="button" role="menuitem" className={active ? 'is-active' : ''} onClick={() => { onChange(shortcut.value); setShortcutOpen(false); }}>
+                <span>{shortcut.label}</span>
+                {active ? <Check size={13} strokeWidth={2.4} /> : null}
+              </button>
+            );
+          })}
+          <button type="button" role="menuitem" className={!activeShortcut ? 'is-active' : ''} onClick={() => setShortcutOpen(false)}>
+            <span>自定义日期</span>
+            {!activeShortcut ? <Check size={13} strokeWidth={2.4} /> : null}
+          </button>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+type DateRelativePrefix = 'this' | 'last' | 'next' | 'past' | 'future';
 type DateRelativeUnit = 'day' | 'week' | 'month' | 'year';
-type DateRelativeValue = { prefix: DateRelativePrefix; unit: DateRelativeUnit };
+type DateRelativeValue = { prefix: DateRelativePrefix; unit: DateRelativeUnit; count: number };
 
 const dateRelativePrefixChoices: Array<{ id: DateRelativePrefix; label: string }> = [
+  { id: 'past', label: '过去' },
+  { id: 'future', label: '未来' },
   { id: 'this', label: '本' },
-  { id: 'last', label: '上' },
-  { id: 'next', label: '下' },
 ];
 const dateRelativeUnitChoices: Array<{ id: DateRelativeUnit; label: string }> = [
   { id: 'day', label: '天' },
@@ -1602,24 +2407,37 @@ function isDateFilterColumn(column?: DatabaseColumn) {
 }
 
 function parseDateRelativeValue(value: string): DateRelativeValue {
-  const [prefix, unit] = value.split('_');
+  const parts = value.split('_');
+  const prefix = parts[0];
+  const hasCount = /^\d+$/.test(parts[1] || '');
+  const count = hasCount ? Number(parts[1]) : 1;
+  const unit = hasCount ? parts[2] : parts[1];
   return {
-    prefix: prefix === 'last' || prefix === 'next' ? prefix : 'this',
+    prefix: prefix === 'last' || prefix === 'next' || prefix === 'past' || prefix === 'future' ? prefix : 'this',
     unit: unit === 'day' || unit === 'month' || unit === 'year' ? unit : 'week',
+    count: Math.max(1, count || 1),
   };
+}
+
+function formatDateRelativeValue(value: DateRelativeValue) {
+  return value.prefix === 'past' || value.prefix === 'future'
+    ? `${value.prefix}_${Math.max(1, value.count || 1)}_${value.unit}`
+    : `${value.prefix}_${value.unit}`;
 }
 
 function dateRelativeLabel(value: string) {
   const parsed = parseDateRelativeValue(value);
   const prefix = dateRelativePrefixChoices.find((choice) => choice.id === parsed.prefix)?.label || '本';
   const unit = dateRelativeUnitChoices.find((choice) => choice.id === parsed.unit)?.label || '周';
-  return `${prefix}${unit}`;
+  return parsed.prefix === 'past' || parsed.prefix === 'future' ? `${prefix} ${parsed.count} ${unit}` : `${prefix}${unit}`;
 }
 
-function dateRelativeRange(prefix: DateRelativePrefix, unit: DateRelativeUnit) {
+function dateRelativeRange(prefix: DateRelativePrefix, unit: DateRelativeUnit, count = 1) {
   const today = startOfLocalDay(new Date());
   let start = today;
   let end = today;
+  if (prefix === 'past') return { start: addLocalDays(today, -relativeDateUnitDays(unit, count)), end: today };
+  if (prefix === 'future') return { start: today, end: addLocalDays(today, relativeDateUnitDays(unit, count)) };
   if (unit === 'week') {
     const offset = (today.getDay() + 6) % 7;
     start = addLocalDays(today, -offset);
@@ -1648,12 +2466,82 @@ function dateRelativeRange(prefix: DateRelativePrefix, unit: DateRelativeUnit) {
   return { start, end };
 }
 
+function relativeDateUnitDays(unit: DateRelativeUnit, count: number) {
+  if (unit === 'day') return count;
+  if (unit === 'month') return 31 * count;
+  if (unit === 'year') return 366 * count;
+  return 7 * count;
+}
+
+function parseDateInputValue(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const shortcut = resolveDateShortcutValue(raw);
+  if (shortcut) return shortcut;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  const zh = raw.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (zh) return new Date(Number(zh[1]), Number(zh[2]) - 1, Number(zh[3]));
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? null : new Date(parsed);
+}
+
+function formatDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateFilterLabel(value: string) {
+  const shortcut = dateShortcutLabel(value);
+  if (shortcut) return shortcut;
+  const date = parseDateInputValue(value);
+  return date ? `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日` : value;
+}
+
+function formatCompactDateFilterLabel(value: string) {
+  const date = parseDateInputValue(value);
+  return date ? `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}` : value;
+}
+
+function dateShortcutLabel(value: string) {
+  if (value === 'date_shortcut:today') return '今天';
+  if (value === 'date_shortcut:tomorrow') return '明天';
+  if (value === 'date_shortcut:yesterday') return '昨天';
+  if (value === 'date_shortcut:last_week') return '一周前';
+  if (value === 'date_shortcut:next_week') return '一周后';
+  if (value === 'date_shortcut:last_month') return '一个月前';
+  if (value === 'date_shortcut:next_month') return '一个月后';
+  return '';
+}
+
+function resolveDateShortcutValue(value: string) {
+  const today = startOfLocalDay(new Date());
+  if (value === 'date_shortcut:today') return today;
+  if (value === 'date_shortcut:tomorrow') return addLocalDays(today, 1);
+  if (value === 'date_shortcut:yesterday') return addLocalDays(today, -1);
+  if (value === 'date_shortcut:last_week') return addLocalDays(today, -7);
+  if (value === 'date_shortcut:next_week') return addLocalDays(today, 7);
+  if (value === 'date_shortcut:last_month') return addLocalMonths(today, -1);
+  if (value === 'date_shortcut:next_month') return addLocalMonths(today, 1);
+  return null;
+}
+
 function startOfLocalDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function addLocalDays(date: Date, days: number) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function addLocalMonths(date: Date, months: number) {
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1);
+  const maxDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  return new Date(target.getFullYear(), target.getMonth(), Math.min(date.getDate(), maxDay));
 }
 
 function calendarDaysForMonth(monthDate: Date) {
@@ -1690,6 +2578,93 @@ function groupedFilterOptions(column: DatabaseColumn | undefined, options: Array
   const rest = options.filter((option) => !used.has(option.id));
   if (rest.length) out.push({ key: 'ungrouped', label: '未分组', options: rest });
   return out.length ? out : [{ key: 'all', label: '', options }];
+}
+
+function createAdvancedFilterGroup(columns: DatabaseColumn[] = []): ViewAdvancedFilterGroup {
+  return {
+    type: 'group',
+    id: crypto.randomUUID(),
+    op: 'and',
+    children: [{ type: 'rule', rule: createDefaultFilterRule(columns) }],
+  };
+}
+
+function createDefaultFilterRule(columns: DatabaseColumn[] = []): ViewFilterRule {
+  const column = columns.find((item) => !item.readonly && item.type !== 'linked') || columns[0];
+  return {
+    id: crypto.randomUUID(),
+    property: column?.id || '',
+    op: column ? defaultFilterOperator(column) : 'contains',
+    value: column ? defaultFilterValue(column) : '',
+  };
+}
+
+function countAdvancedFilterRules(group: ViewAdvancedFilterGroup): number {
+  return group.children.reduce((count, node) => count + (node.type === 'group' ? countAdvancedFilterRules(node) : 1), 0);
+}
+
+function updateAdvancedNodeAtPath(group: ViewAdvancedFilterGroup, path: number[], updater: (node: ViewAdvancedFilterNode) => ViewAdvancedFilterNode | null): ViewAdvancedFilterGroup | null {
+  if (!path.length) {
+    const next = updater(group);
+    return next?.type === 'group' ? next : null;
+  }
+  const [index, ...rest] = path;
+  return {
+    ...group,
+    children: group.children.map((child, childIndex) => {
+      if (childIndex !== index) return child;
+      if (!rest.length) return updater(child);
+      return child.type === 'group' ? updateAdvancedNodeAtPath(child, rest, updater) : child;
+    }).filter(Boolean) as ViewAdvancedFilterNode[],
+  };
+}
+
+function duplicateAdvancedNodeAtPath(group: ViewAdvancedFilterGroup, path: number[]): ViewAdvancedFilterGroup | null {
+  if (!path.length) return null;
+  const [index, ...rest] = path;
+  if (!rest.length) {
+    const source = group.children[index];
+    if (!source) return group;
+    const children = [...group.children];
+    children.splice(index + 1, 0, cloneAdvancedFilterNode(source));
+    return { ...group, children };
+  }
+  return {
+    ...group,
+    children: group.children.map((child, childIndex) => childIndex === index && child.type === 'group'
+      ? duplicateAdvancedNodeAtPath(child, rest) || child
+      : child),
+  };
+}
+
+function cloneAdvancedFilterNode(node: ViewAdvancedFilterNode): ViewAdvancedFilterNode {
+  if (node.type === 'rule') {
+    return {
+      type: 'rule',
+      rule: {
+        ...node.rule,
+        id: crypto.randomUUID(),
+        value: Array.isArray(node.rule.value) ? [...node.rule.value] : node.rule.value,
+      },
+    };
+  }
+  return {
+    ...node,
+    id: crypto.randomUUID(),
+    children: node.children.map(cloneAdvancedFilterNode),
+  };
+}
+
+function removeAdvancedNodeAtPath(group: ViewAdvancedFilterGroup, path: number[]): ViewAdvancedFilterGroup {
+  if (!path.length) return group;
+  const [index, ...rest] = path;
+  if (!rest.length) return { ...group, children: group.children.filter((_, childIndex) => childIndex !== index) };
+  return {
+    ...group,
+    children: group.children.map((child, childIndex) => childIndex === index && child.type === 'group'
+      ? removeAdvancedNodeAtPath(child, rest)
+      : child).filter((child) => child.type !== 'group' || child.children.length > 0),
+  };
 }
 
 function columnTypeIcon(column: DatabaseColumn) {

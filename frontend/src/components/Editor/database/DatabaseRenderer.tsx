@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseColumnType, type DatabaseDetail, type DatabaseRow, type DatabaseSummary } from '../../../api/databases';
 import { evalFormula } from '../../../formula/evaluator';
-import { defaultView, type DatabaseViewConfig, type ViewColumnRule } from './viewConfig';
+import { defaultView, type DatabaseViewConfig, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule } from './viewConfig';
 import { notionColumnIconOptions, type ColumnIconOption } from './columnIcons';
 import { showToast } from '../../Toast';
 import './database.css';
@@ -139,7 +139,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const suppressNextHeaderClickRef = useRef(false);
   const activeView = useMemo(() => view || defaultView(schema?.columns || []), [view, schema?.columns]);
   const addColumnMenuRect = useDropdownPosition(addColumnOpen, addColumnButtonRef, 360);
-  const columnMenuRect = useDropdownPosition(columnMenuIndex !== null, columnMenuAnchorRef, 220);
+  const columnMenuRect = useDropdownPosition(columnMenuIndex !== null, columnMenuAnchorRef, 220, 'below', 0, false);
   const showColumnControls = !readonly && columnControls;
   const showFillColumn = !readonly;
   useDropdownOutsideClose(addColumnOpen, addColumnButtonRef, () => setAddColumnOpen(false), '.akdb-add-column-menu');
@@ -1760,13 +1760,28 @@ function buildFormulaProps(columns: DatabaseColumn[], row: DatabaseRow) {
 
 function applyViewFilters<T extends { row: DatabaseRow; props: Record<string, any> }>(items: T[], columns: DatabaseColumn[], view: DatabaseViewConfig): T[] {
   const filters = (view.filters || []).filter((rule) => rule.property);
-  if (!filters.length) return items;
+  const advancedFilter = view.advancedFilter;
+  if (!filters.length && !advancedFilter) return items;
   const byID = new Map(columns.map((column) => [column.id, column]));
-  return items.filter((item) => filters.every((filter) => {
-    const column = byID.get(filter.property);
-    const raw = item.props[filter.property] ?? item.row.values[filter.property] ?? '';
-    return matchesViewFilter(raw, column, filter.op, filter.value);
-  }));
+  return items.filter((item) => {
+    const matchesFlat = filters.every((filter) => matchesFilterRule(item, byID, filter));
+    return matchesFlat && (!advancedFilter || matchesAdvancedFilterGroup(item, byID, advancedFilter));
+  });
+}
+
+function matchesFilterRule(item: { row: DatabaseRow; props: Record<string, any> }, byID: Map<string, DatabaseColumn>, filter: { property: string; op: string; value?: unknown }) {
+  const column = byID.get(filter.property);
+  const raw = item.props[filter.property] ?? item.row.values[filter.property] ?? '';
+  return matchesViewFilter(raw, column, filter.op, filter.value);
+}
+
+function matchesAdvancedFilterGroup(item: { row: DatabaseRow; props: Record<string, any> }, byID: Map<string, DatabaseColumn>, group: ViewAdvancedFilterGroup): boolean {
+  const children = group.children.filter((node) => node.type === 'group' || node.rule.property);
+  if (!children.length) return true;
+  const matches = (node: ViewAdvancedFilterNode) => node.type === 'group'
+    ? matchesAdvancedFilterGroup(item, byID, node)
+    : matchesFilterRule(item, byID, node.rule);
+  return group.op === 'or' ? children.some(matches) : children.every(matches);
 }
 
 function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op: string, value: unknown) {
@@ -1774,11 +1789,13 @@ function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op:
   const empty = isEmptyDatabaseFilterValue(text, column);
   if (op === 'is_empty') return empty;
   if (op === 'is_not_empty') return !empty;
-  if ((column?.type === 'date' || column?.type === 'created_time' || column?.type === 'last_edited_time') && op === 'relative_to_today') {
-    return matchesRelativeDateFilter(text, String(value || 'this_week'));
+  if (column?.type === 'date' || column?.type === 'created_time' || column?.type === 'last_edited_time') {
+    if (op === 'relative_to_today') return matchesRelativeDateFilter(text, String(value || 'this_week'));
+    return matchesDateFilter(text, op, value);
   }
   if (column?.type === 'checkbox') {
-    return String(value) === 'true' ? text === 'true' : text !== 'true';
+    const matched = String(value) === 'false' ? text !== 'true' : text === 'true';
+    return op === 'not_equals' ? !matched : matched;
   }
   if (column?.type === 'select' || column?.type === 'status') {
     const selected = Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean);
@@ -1791,7 +1808,7 @@ function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op:
     if (!selected.length) return true;
     const values = parseMultiSelectValue(text);
     const matched = selected.some((id) => values.includes(id));
-    return op === 'not_equals' ? !matched : matched;
+    return op === 'not_contains' || op === 'not_equals' ? !matched : matched;
   }
   const needle = String(value ?? '').trim().toLowerCase();
   if (!needle) return true;
@@ -1801,6 +1818,30 @@ function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op:
   if (op === 'starts_with') return text.toLowerCase().startsWith(needle);
   if (op === 'ends_with') return text.toLowerCase().endsWith(needle);
   return text.toLowerCase().includes(needle);
+}
+
+function matchesDateFilter(text: string, op: string, value: unknown) {
+  const date = parseDatabaseFilterDate(text);
+  if (!date) return false;
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  if (op === 'between') {
+    const values = Array.isArray(value) ? value : String(value || '').split(',').filter(Boolean);
+    const start = parseDatabaseFilterDate(String(values[0] || ''));
+    const end = parseDatabaseFilterDate(String(values[1] || ''));
+    if (!start || !end) return true;
+    const startTime = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+    const endTime = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
+    return day >= Math.min(startTime, endTime) && day <= Math.max(startTime, endTime);
+  }
+  const target = parseDatabaseFilterDate(String(value || ''));
+  if (!target) return true;
+  const targetDay = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
+  if (op === 'before') return day < targetDay;
+  if (op === 'after') return day > targetDay;
+  if (op === 'on_or_before') return day <= targetDay;
+  if (op === 'on_or_after') return day >= targetDay;
+  if (op === 'not_equals') return day !== targetDay;
+  return day === targetDay;
 }
 
 function matchesRelativeDateFilter(text: string, value: string) {
@@ -1814,6 +1855,8 @@ function matchesRelativeDateFilter(text: string, value: string) {
 function parseDatabaseFilterDate(value: string) {
   const raw = String(value || '').trim();
   if (!raw) return null;
+  const shortcut = resolveDatabaseDateShortcut(raw);
+  if (shortcut) return shortcut;
   if (/^-?\d+(\.\d+)?$/.test(raw)) {
     const n = Number(raw);
     if (!Number.isFinite(n)) return null;
@@ -1827,13 +1870,38 @@ function parseDatabaseFilterDate(value: string) {
   return Number.isNaN(parsed) ? null : new Date(parsed);
 }
 
+function resolveDatabaseDateShortcut(value: string) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (value === 'date_shortcut:today') return start;
+  if (value === 'date_shortcut:tomorrow') return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+  if (value === 'date_shortcut:yesterday') return new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
+  if (value === 'date_shortcut:last_week') return new Date(start.getFullYear(), start.getMonth(), start.getDate() - 7);
+  if (value === 'date_shortcut:next_week') return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  if (value === 'date_shortcut:last_month') return addDatabaseFilterMonths(start, -1);
+  if (value === 'date_shortcut:next_month') return addDatabaseFilterMonths(start, 1);
+  return null;
+}
+
+function addDatabaseFilterMonths(date: Date, months: number) {
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1);
+  const maxDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  return new Date(target.getFullYear(), target.getMonth(), Math.min(date.getDate(), maxDay));
+}
+
 function relativeDateFilterRange(value: string) {
-  const [rawPrefix, rawUnit] = value.split('_');
-  const prefix = rawPrefix === 'last' || rawPrefix === 'next' ? rawPrefix : 'this';
+  const parts = value.split('_');
+  const rawPrefix = parts[0];
+  const rawCount = /^\d+$/.test(parts[1] || '') ? Number(parts[1]) : 1;
+  const rawUnit = /^\d+$/.test(parts[1] || '') ? parts[2] : parts[1];
+  const prefix = rawPrefix === 'last' || rawPrefix === 'next' || rawPrefix === 'past' || rawPrefix === 'future' ? rawPrefix : 'this';
   const unit = rawUnit === 'day' || rawUnit === 'month' || rawUnit === 'year' ? rawUnit : 'week';
+  const count = Math.max(1, rawCount || 1);
   const today = new Date();
   let start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   let end = start;
+  if (prefix === 'past') return { start: new Date(start.getFullYear(), start.getMonth(), start.getDate() - relativeDateUnitDays(unit, count)), end: start };
+  if (prefix === 'future') return { start, end: new Date(start.getFullYear(), start.getMonth(), start.getDate() + relativeDateUnitDays(unit, count)) };
   if (unit === 'week') {
     const offset = (start.getDay() + 6) % 7;
     start = new Date(start.getFullYear(), start.getMonth(), start.getDate() - offset);
@@ -1860,6 +1928,13 @@ function relativeDateFilterRange(value: string) {
     end = new Date(start.getFullYear(), 11, 31);
   }
   return { start, end };
+}
+
+function relativeDateUnitDays(unit: string, count: number) {
+  if (unit === 'day') return count;
+  if (unit === 'month') return 31 * count;
+  if (unit === 'year') return 366 * count;
+  return 7 * count;
 }
 
 function isEmptyDatabaseFilterValue(text: string, column?: DatabaseColumn) {

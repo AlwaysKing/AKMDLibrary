@@ -8,13 +8,24 @@ export interface ViewColumnRule {
   align?: 'left' | 'center' | 'right';
 }
 
-export type ViewFilterOperator = 'contains' | 'not_contains' | 'equals' | 'not_equals' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'relative_to_today';
+export type ViewFilterOperator = 'contains' | 'not_contains' | 'equals' | 'not_equals' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'relative_to_today' | 'before' | 'after' | 'on_or_before' | 'on_or_after' | 'between';
 
 export interface ViewFilterRule {
   id: string;
   property: string;
   op: ViewFilterOperator;
   value?: string | string[] | boolean;
+}
+
+export type ViewAdvancedFilterNode =
+  | { type: 'rule'; rule: ViewFilterRule }
+  | ViewAdvancedFilterGroup;
+
+export interface ViewAdvancedFilterGroup {
+  type: 'group';
+  id: string;
+  op: 'and' | 'or';
+  children: ViewAdvancedFilterNode[];
 }
 
 export interface ViewSortRule {
@@ -37,6 +48,7 @@ export interface DatabaseViewConfig {
   openMode?: 'peek' | 'full' | 'center';
   columns: ViewColumnRule[];
   filters?: ViewFilterRule[];
+  advancedFilter?: ViewAdvancedFilterGroup;
   sorts?: ViewSortRule[];
   groupBy?: string;
   cover?: string;
@@ -84,6 +96,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
     }
     const filters = parseFilterRules(body);
     const sorts = parseSortRules(body);
+    const advancedFilter = parseAdvancedFilter(body);
     views.push({
       id: attrs.id,
       type: attrs.type as DatabaseViewType,
@@ -98,6 +111,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
       openMode: normalizeOpenMode(attrs['open-mode']),
       columns,
       filters,
+      advancedFilter,
       sorts,
       groupBy: tagAttr(body, 'group-by', 'property'),
       cover: tagAttr(body, 'cover', 'property'),
@@ -132,6 +146,7 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
       ].filter(Boolean).join(' ');
       return `      <rule ${attrs}/>`;
     }).join('\n');
+    const advancedFilter = normalizeAdvancedFilter(v.advancedFilter);
     const sorts = (v.sorts || []).filter((s) => s.property).map((s) => {
       const attrs = [
         `id="${esc(s.id)}"`,
@@ -142,6 +157,7 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
     }).join('\n');
     const extra = [
       filters ? `    <source-filter op="and">\n${filters}\n    </source-filter>` : '',
+      advancedFilter ? `    <advanced-filter value="${esc(encodeAdvancedFilter(advancedFilter))}"/>` : '',
       sorts ? `    <sort>\n${sorts}\n    </sort>` : '',
       v.groupBy ? `    <group-by property="${esc(v.groupBy)}"/>` : '',
       v.cover ? `    <cover property="${esc(v.cover)}"/>` : '',
@@ -200,6 +216,18 @@ function parseFilterRules(body: string): ViewFilterRule[] {
   }
   return rules;
 }
+function parseAdvancedFilter(body: string): ViewAdvancedFilterGroup | undefined {
+  const attrs = body.match(/<advanced-filter\s+([^>]*?)\/>/)?.[1];
+  if (!attrs) return undefined;
+  const value = attrsOf(attrs).value;
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return normalizeAdvancedFilter(parsed);
+  } catch {
+    return undefined;
+  }
+}
 function parseSortRules(body: string): ViewSortRule[] {
   const sortBody = body.match(/<sort>([\s\S]*?)<\/sort>/)?.[1] || '';
   const rules: ViewSortRule[] = [];
@@ -227,6 +255,11 @@ function normalizeFilterOperator(op = ''): ViewFilterOperator {
     || op === 'is_empty'
     || op === 'is_not_empty'
     || op === 'relative_to_today'
+    || op === 'before'
+    || op === 'after'
+    || op === 'on_or_before'
+    || op === 'on_or_after'
+    || op === 'between'
   ) return op;
   return 'contains';
 }
@@ -259,6 +292,39 @@ function decodeRuleValue(value?: string): string | string[] | boolean | undefine
     }
   }
   return value;
+}
+function encodeAdvancedFilter(group: ViewAdvancedFilterGroup) {
+  return JSON.stringify(group);
+}
+function normalizeAdvancedFilter(value: any): ViewAdvancedFilterGroup | undefined {
+  if (!value || value.type !== 'group') return undefined;
+  const op = value.op === 'or' ? 'or' : 'and';
+  const children = Array.isArray(value.children)
+    ? value.children.map(normalizeAdvancedFilterNode).filter(Boolean) as ViewAdvancedFilterNode[]
+    : [];
+  if (!children.length) return undefined;
+  return {
+    type: 'group',
+    id: String(value.id || `advanced:${crypto.randomUUID()}`),
+    op,
+    children,
+  };
+}
+function normalizeAdvancedFilterNode(value: any): ViewAdvancedFilterNode | undefined {
+  if (!value) return undefined;
+  if (value.type === 'group') return normalizeAdvancedFilter(value);
+  if (value.type === 'rule' && value.rule?.property) {
+    return {
+      type: 'rule',
+      rule: {
+        id: String(value.rule.id || `filter:${value.rule.property}:${crypto.randomUUID()}`),
+        property: String(value.rule.property),
+        op: normalizeFilterOperator(value.rule.op),
+        value: value.rule.value,
+      },
+    };
+  }
+  return undefined;
 }
 function esc(v: string) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function unesc(v: string) { return String(v).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'); }
