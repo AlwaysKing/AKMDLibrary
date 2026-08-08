@@ -36,7 +36,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
-  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout'>('main');
+  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
@@ -131,7 +131,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   useDropdownOutsideClose(viewSettingsOpen, viewSettingsButtonRef, () => {
     setViewSettingsOpen(false);
     setViewSettingsPane('main');
-  }, '.akdb-view-settings-menu');
+  }, '.akdb-view-settings-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu');
 
   useEffect(() => {
     if (!viewContextMenu) return;
@@ -314,6 +314,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     setFilterBarHidden(false);
     setActiveFilterId(nextFilter.id);
     setActiveSortId(null);
+    return nextFilter.id;
   };
 
   const updateFilter = (id: string, patch: Partial<ViewFilterRule>) => {
@@ -500,6 +501,29 @@ function DatabaseBlockComponent({ block, editor }: any) {
       onClosePicker={() => setPickerOpen(false)}
     />
   );
+  useEffect(() => {
+    const preventDatabaseChromeContextMenu = (event: globalThis.MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!target.closest([
+        '.akdb-block-header',
+        '.akdb-view-row',
+        '.akdb-view-rule-shell',
+        '.akdb-filter-menu',
+        '.akdb-view-settings-menu',
+        '.akdb-view-rule-editor',
+        '.akdb-view-rule-dropdown-menu',
+        '.akdb-view-rule-action-menu',
+        '.akdb-advanced-filter-editor',
+        '.akdb-advanced-filter-add-menu',
+        '.akdb-advanced-date-picker-menu',
+        '.akdb-date-shortcut-menu',
+      ].join(','))) return;
+      event.preventDefault();
+    };
+    document.addEventListener('contextmenu', preventDatabaseChromeContextMenu, true);
+    return () => document.removeEventListener('contextmenu', preventDatabaseChromeContextMenu, true);
+  }, []);
   const actions = (
     <div className="akdb-block-actions">
       <div className="akdb-filter-anchor" ref={filterRef}>
@@ -604,7 +628,20 @@ function DatabaseBlockComponent({ block, editor }: any) {
           focusNameRequest={viewNameFocusRequest}
           onOpenLayout={() => setViewSettingsPane('layout')}
           onOpenVisibility={() => setViewSettingsPane('visibility')}
+          onOpenFilter={() => {
+            setViewSettingsPane('filter');
+            setFilterOpen(false);
+            setSortOpen(false);
+            setFilterQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
           onBack={() => setViewSettingsPane('main')}
+          onClose={() => {
+            setViewSettingsOpen(false);
+            setViewSettingsPane('main');
+          }}
           onRename={(name) => updateView({ ...activeView, name })}
           onChangeIcon={(icon) => updateView({ ...activeView, icon: icon || undefined })}
           onChangeType={(type) => updateView({ ...activeView, type })}
@@ -612,6 +649,26 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onToggle={toggleSourceColumnVisibility}
           onHideAll={hideAllSourceColumns}
           onReorder={reorderSourceColumns}
+          filterQuery={filterQuery}
+          filterColumns={filterColumns}
+          onAddFilter={() => {
+            setFilterQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onFilterQueryChange={setFilterQuery}
+          onPickFilter={addFilter}
+          onClearActive={() => {
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onUpdateFilter={updateFilter}
+          onRemoveFilter={removeFilter}
+          onMergeFilterToAdvanced={mergeFilterToAdvanced}
+          onUpdateAdvancedFilter={updateAdvancedFilter}
+          onReorderFilters={reorderFilters}
           style={viewSettingsRect}
         />,
         document.body,
@@ -2690,7 +2747,9 @@ function ViewSettingsMenu({
   focusNameRequest,
   onOpenLayout,
   onOpenVisibility,
+  onOpenFilter,
   onBack,
+  onClose,
   onRename,
   onChangeIcon,
   onChangeType,
@@ -2698,16 +2757,29 @@ function ViewSettingsMenu({
   onToggle,
   onHideAll,
   onReorder,
+  filterQuery,
+  filterColumns,
+  onAddFilter,
+  onFilterQueryChange,
+  onPickFilter,
+  onClearActive,
+  onUpdateFilter,
+  onRemoveFilter,
+  onMergeFilterToAdvanced,
+  onUpdateAdvancedFilter,
+  onReorderFilters,
   style,
 }: {
   schemaName: string;
   columns: DatabaseColumn[];
   activeView: DatabaseViewConfig;
-  pane: 'main' | 'visibility' | 'layout';
+  pane: 'main' | 'visibility' | 'layout' | 'filter';
   focusNameRequest: number;
   onOpenLayout: () => void;
   onOpenVisibility: () => void;
+  onOpenFilter: () => void;
   onBack: () => void;
+  onClose: () => void;
   onRename: (name: string) => void;
   onChangeIcon: (icon: string) => void;
   onChangeType: (type: DatabaseViewType) => void;
@@ -2715,11 +2787,38 @@ function ViewSettingsMenu({
   onToggle: (column: DatabaseColumn) => void;
   onHideAll: () => void;
   onReorder: (orderedColumnIDs: string[]) => void;
+  filterQuery: string;
+  filterColumns: DatabaseColumn[];
+  onAddFilter: () => void;
+  onFilterQueryChange: (value: string) => void;
+  onPickFilter: (column: DatabaseColumn) => string | void;
+  onClearActive: () => void;
+  onUpdateFilter: (id: string, patch: Partial<ViewFilterRule>) => void;
+  onRemoveFilter: (id: string) => void;
+  onMergeFilterToAdvanced: (id: string) => void;
+  onUpdateAdvancedFilter: (advancedFilter?: ViewAdvancedFilterGroup) => void;
+  onReorderFilters: (sourceID: string, targetID: string) => void;
   style: CSSProperties;
 }) {
   const [query, setQuery] = useState('');
   const [nameDraft, setNameDraft] = useState(activeView.name || '视图名称');
   const [iconOpen, setIconOpen] = useState(false);
+  const [settingsActiveFilterID, setSettingsActiveFilterID] = useState<string | null>(null);
+  const [settingsAdvancedOpen, setSettingsAdvancedOpen] = useState(false);
+  const [settingsAddFilterOpen, setSettingsAddFilterOpen] = useState(false);
+  const [filterSettingsDragState, setFilterSettingsDragState] = useState<{
+    sourceID: string;
+    targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    initialTop: number;
+    currentTop: number;
+    itemHeight: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    centers: number[];
+  } | null>(null);
   const [dragState, setDragState] = useState<{
     sourceIndex: number;
     targetIndex: number;
@@ -2733,9 +2832,20 @@ function ViewSettingsMenu({
   } | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const iconButtonRef = useRef<HTMLButtonElement | null>(null);
+  const settingsActiveFilterRef = useRef<HTMLButtonElement | null>(null);
+  const settingsAdvancedFilterRef = useRef<HTMLButtonElement | null>(null);
+  const settingsAddFilterRef = useRef<HTMLButtonElement | null>(null);
+  const filterSettingsDragStateRef = useRef<typeof filterSettingsDragState>(null);
   const dragStateRef = useRef<typeof dragState>(null);
+  const suppressSettingsFilterClickRef = useRef(false);
   const suppressVisibilityClickRef = useRef(false);
   const iconPickerRect = useDropdownPosition(iconOpen, iconButtonRef, 408);
+  const columnByID = useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
+  const settingsActiveFilter = (activeView.filters || []).find((filter) => filter.id === settingsActiveFilterID);
+  const settingsActiveFilterColumn = settingsActiveFilter ? columnByID.get(settingsActiveFilter.property) : undefined;
+  const settingsFilterEditorRect = useDropdownPosition(!!settingsActiveFilter, settingsActiveFilterRef, settingsActiveFilter ? (isDateFilterColumn(settingsActiveFilterColumn) ? 260 : 282) : 282, settingsActiveFilterID || '');
+  const settingsAdvancedRect = useDropdownPosition(settingsAdvancedOpen && !!activeView.advancedFilter, settingsAdvancedFilterRef, 0, 'view-settings-advanced-filter');
+  const settingsAddFilterRect = useDropdownPosition(settingsAddFilterOpen, settingsAddFilterRef, 260);
   useDropdownOutsideClose(iconOpen, iconButtonRef, () => setIconOpen(false), '.akdb-column-icon-popover');
   const search = query.trim().toLowerCase();
   const visibleSourceIDs = new Set(
@@ -2758,6 +2868,7 @@ function ViewSettingsMenu({
   }, [activeView.columns, columns]);
   const filteredColumns = orderedColumns.filter((column) => !search || column.name.toLowerCase().includes(search) || column.type.toLowerCase().includes(search));
   const visibleCount = columns.filter((column) => visibleSourceIDs.has(column.id)).length;
+  const filterRuleCount = (activeView.filters || []).length + (activeView.advancedFilter ? countAdvancedFilterRules(activeView.advancedFilter) : 0);
   const showDatabaseTitle = activeView.showSourceTitle !== false;
   const showVerticalLines = activeView.showVerticalLines !== false;
   const wrapContent = !!activeView.wrapContent;
@@ -2773,6 +2884,14 @@ function ViewSettingsMenu({
       nameInputRef.current?.select();
     }, 0);
   }, [focusNameRequest, pane]);
+
+  useEffect(() => {
+    if (pane !== 'filter') {
+      setSettingsActiveFilterID(null);
+      setSettingsAdvancedOpen(false);
+      setSettingsAddFilterOpen(false);
+    }
+  }, [pane]);
 
   const commitName = () => {
     const nextName = nameDraft.trim() || viewName(activeView.type);
@@ -2852,10 +2971,93 @@ function ViewSettingsMenu({
     return undefined;
   };
 
+  const beginSettingsFilterDrag = (filterID: string, event: ReactPointerEvent<HTMLSpanElement>) => {
+    const filters = activeView.filters || [];
+    if (event.button !== 0 || filters.length < 2) return;
+    const row = event.currentTarget.closest('.akdb-view-settings-filter-row') as HTMLButtonElement | null;
+    const list = event.currentTarget.closest('.akdb-view-settings-filter-list') as HTMLDivElement | null;
+    if (!row || !list) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressSettingsFilterClickRef.current = true;
+    setSettingsActiveFilterID(null);
+    setSettingsAdvancedOpen(false);
+    setSettingsAddFilterOpen(false);
+    const rows = Array.from(list.querySelectorAll<HTMLButtonElement>('[data-settings-filter-id]'));
+    const sourceIndex = rows.findIndex((item) => item.dataset.settingsFilterId === filterID);
+    if (sourceIndex < 0) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const rowRect = row.getBoundingClientRect();
+    const itemHeight = rowRect.height;
+    const firstRect = rowRects[0];
+    const lastRect = rowRects[rowRects.length - 1];
+    const baseState = {
+      sourceID: filterID,
+      targetID: filterID,
+      sourceIndex,
+      targetIndex: sourceIndex,
+      initialTop: rowRect.top - listRect.top,
+      currentTop: rowRect.top - listRect.top,
+      itemHeight,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: firstRect.top - listRect.top,
+      maxTop: lastRect.bottom - listRect.top - itemHeight,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    filterSettingsDragStateRef.current = baseState;
+    setFilterSettingsDragState(baseState);
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setFilterSettingsDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, moveEvent.clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.itemHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const targetID = rows[nextTargetIndex]?.dataset.settingsFilterId || current.targetID;
+        const next = {
+          ...current,
+          currentTop,
+          targetIndex: nextTargetIndex,
+          targetID,
+        };
+        filterSettingsDragStateRef.current = next;
+        return next;
+      });
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const finalState = filterSettingsDragStateRef.current;
+      filterSettingsDragStateRef.current = null;
+      setFilterSettingsDragState(null);
+      window.setTimeout(() => {
+        suppressSettingsFilterClickRef.current = false;
+      }, 0);
+      if (!finalState || finalState.sourceID === finalState.targetID) return;
+      onReorderFilters(finalState.sourceID, finalState.targetID);
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const settingsFilterDragTransform = (filterID: string, index: number) => {
+    const state = filterSettingsDragState;
+    if (!state) return undefined;
+    if (filterID === state.sourceID) return `translateY(${state.currentTop - state.initialTop}px)`;
+    if (state.sourceIndex < state.targetIndex && index > state.sourceIndex && index <= state.targetIndex) return `translateY(${-state.itemHeight}px)`;
+    if (state.targetIndex < state.sourceIndex && index >= state.targetIndex && index < state.sourceIndex) return `translateY(${state.itemHeight}px)`;
+    return undefined;
+  };
+
   if (pane === 'main') {
     return (
       <div className="akdb-view-settings-menu" role="dialog" aria-label="查看设置" style={style}>
-        <div className="akdb-view-settings-title">查看设置</div>
+        <div className="akdb-view-settings-title">
+          <span>查看设置</span>
+          <button type="button" aria-label="关闭查看设置" onClick={onClose}><X size={15} /></button>
+        </div>
         <div className="akdb-view-settings-name">
           <button
             ref={iconButtonRef}
@@ -2905,7 +3107,7 @@ function ViewSettingsMenu({
           <ViewLayoutSwitch label="显示数据库标题" checked={showDatabaseTitle} onChange={() => onChangeLayout({ showSourceTitle: !showDatabaseTitle })} />
           <SettingsMenuItem icon={<ViewTypeIcon type={activeView.type} />} label="布局" detail={viewName(activeView.type)} onClick={onOpenLayout} />
           <SettingsMenuItem icon={<Eye size={17} />} label="属性是否可见" detail={String(visibleCount)} onClick={onOpenVisibility} />
-          <SettingsMenuItem icon={<Filter size={17} />} label="筛选" />
+          <SettingsMenuItem icon={<Filter size={17} />} label="筛选" detail={filterRuleCount ? String(filterRuleCount) : undefined} onClick={onOpenFilter} />
           <SettingsMenuItem icon={<ArrowUpDown size={17} />} label="排序" />
           <SettingsMenuItem icon={<Columns3 size={17} />} label="分组" />
           <SettingsMenuItem icon={<Palette size={17} />} label="条件颜色" />
@@ -2955,6 +3157,174 @@ function ViewSettingsMenu({
           <ViewLayoutItem label="打开页面方式" detail="侧边预览" disabled />
           <ViewLayoutNumber label="加载限制" value={activeView.limit || 50} onChange={(limit) => onChangeLayout({ limit })} />
         </div>
+      </div>
+    );
+  }
+
+  if (pane === 'filter') {
+    const filters = activeView.filters || [];
+    const activeAdvanced = !!activeView.advancedFilter && settingsAdvancedOpen;
+    return (
+      <div className="akdb-view-settings-menu akdb-view-settings-filter-menu" role="dialog" aria-label="筛选" style={style}>
+        <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+          <button type="button" aria-label="返回查看设置" onClick={onBack}><ArrowLeft size={17} /></button>
+          <span>筛选</span>
+          <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭筛选菜单" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className={`akdb-view-settings-filter-list ${filterSettingsDragState ? 'is-filter-dragging' : ''}`}>
+          {activeView.advancedFilter && (
+            <button
+              ref={activeAdvanced ? settingsAdvancedFilterRef : undefined}
+              type="button"
+              className={`akdb-view-settings-filter-row ${activeAdvanced ? 'is-active' : ''}`}
+              aria-haspopup="dialog"
+              aria-expanded={activeAdvanced}
+              onClick={() => {
+                setSettingsAdvancedOpen((open) => !open);
+                setSettingsActiveFilterID(null);
+                setSettingsAddFilterOpen(false);
+                onClearActive();
+              }}
+            >
+              <span className="akdb-view-settings-filter-handle"><GripVertical size={15} /></span>
+              <span className="akdb-view-rule-icon"><ListFilter size={14} /></span>
+              <span className="akdb-view-settings-filter-label akdb-view-settings-filter-pill is-effective">
+                <span>{countAdvancedFilterRules(activeView.advancedFilter)} 条规则</span>
+                <ChevronDown size={14} />
+              </span>
+            </button>
+          )}
+          {filters.map((filter, index) => {
+            const column = columnByID.get(filter.property);
+            const valueLabel = filterValueLabel(filter, column);
+            const effective = isEffectiveFilter(filter, column);
+            const active = settingsActiveFilterID === filter.id;
+            return (
+              <button
+                key={filter.id}
+                ref={active ? settingsActiveFilterRef : undefined}
+                type="button"
+                data-settings-filter-id={filter.id}
+                className={`akdb-view-settings-filter-row ${active ? 'is-active' : ''}`}
+                style={{
+                  transform: settingsFilterDragTransform(filter.id, index),
+                  transition: filterSettingsDragState?.sourceID === filter.id ? 'none' : undefined,
+                }}
+                aria-haspopup="dialog"
+                aria-expanded={active}
+                onClick={() => {
+                  if (suppressSettingsFilterClickRef.current) return;
+                  setSettingsActiveFilterID((current) => current === filter.id ? null : filter.id);
+                  setSettingsAdvancedOpen(false);
+                  setSettingsAddFilterOpen(false);
+                  onClearActive();
+                }}
+              >
+                <span
+                  className="akdb-view-settings-filter-handle"
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => beginSettingsFilterDrag(filter.id, event)}
+                >
+                  <GripVertical size={15} />
+                </span>
+                {!effective && <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>}
+                <span className={`akdb-view-settings-filter-label ${effective ? 'akdb-view-settings-filter-pill is-effective' : ''}`}>
+                  {effective ? (
+                    <>
+                      <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+                      <span className="akdb-view-rule-field">{column?.name || '属性'}</span>: <span>{valueLabel}</span>
+                      <ChevronDown size={14} />
+                    </>
+                  ) : (
+                    column?.name || '属性'
+                  )}
+                </span>
+                {!effective && <ChevronDown size={14} />}
+              </button>
+            );
+          })}
+          <button
+            ref={settingsAddFilterRef}
+            type="button"
+            className={`akdb-view-settings-filter-row akdb-view-settings-filter-add ${settingsAddFilterOpen ? 'is-active' : ''}`}
+            aria-haspopup="dialog"
+            aria-expanded={settingsAddFilterOpen}
+            onClick={() => {
+              onAddFilter();
+              onClearActive();
+              setSettingsActiveFilterID(null);
+              setSettingsAdvancedOpen(false);
+              setSettingsAddFilterOpen((open) => !open);
+            }}
+          >
+            <span className="akdb-view-settings-filter-add-icon"><Plus size={15} /></span>
+            <span className="akdb-view-settings-filter-label">添加筛选</span>
+          </button>
+        </div>
+        {settingsAddFilterOpen && settingsAddFilterRect && createPortal(
+          <FilterPropertyMenu
+            query={filterQuery}
+            columns={filterColumns}
+            style={{ ...settingsAddFilterRect, zIndex: 100 }}
+            compact
+            onQueryChange={onFilterQueryChange}
+            onPick={(column) => {
+              const pickedID = onPickFilter(column);
+              if (pickedID) setSettingsActiveFilterID(pickedID);
+              setSettingsAddFilterOpen(false);
+              setSettingsAdvancedOpen(false);
+              onClearActive();
+            }}
+            footer={<button
+              type="button"
+              className="akdb-filter-advanced"
+              onClick={() => {
+                const advancedFilter = activeView.advancedFilter || createAdvancedFilterGroup(columns);
+                onUpdateAdvancedFilter(advancedFilter);
+                setSettingsAddFilterOpen(false);
+                setSettingsActiveFilterID(null);
+                setSettingsAdvancedOpen(true);
+                onClearActive();
+              }}
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-filter-plus"><path d="M10 3.59a.66.66 0 0 1 .66.66v5.09h5.09a.66.66 0 0 1 0 1.32h-5.09v5.09a.66.66 0 0 1-1.32 0v-5.09H4.25a.66.66 0 0 1 0-1.32h5.09V4.25a.66.66 0 0 1 .66-.66"></path></svg>
+              <span>{activeView.advancedFilter ? '编辑筛选条件' : '添加高级筛选'}</span>
+            </button>}
+          />,
+          document.body,
+        )}
+        {settingsActiveFilter && settingsFilterEditorRect && createPortal(
+          <FilterRuleEditor
+            filter={settingsActiveFilter}
+            column={settingsActiveFilterColumn}
+            style={{ ...settingsFilterEditorRect, zIndex: 100 }}
+            onUpdate={(patch) => onUpdateFilter(settingsActiveFilter.id, patch)}
+            onCommit={() => setSettingsActiveFilterID(null)}
+            onRemove={() => {
+              onRemoveFilter(settingsActiveFilter.id);
+              setSettingsActiveFilterID(null);
+            }}
+            onMergeToAdvanced={() => {
+              onMergeFilterToAdvanced(settingsActiveFilter.id);
+              setSettingsActiveFilterID(null);
+              setSettingsAdvancedOpen(true);
+            }}
+          />,
+          document.body,
+        )}
+        {activeView.advancedFilter && settingsAdvancedOpen && settingsAdvancedRect && createPortal(
+          <AdvancedFilterEditor
+            group={activeView.advancedFilter}
+            columns={columns}
+            style={{ ...settingsAdvancedRect, zIndex: 100 }}
+            onChange={onUpdateAdvancedFilter}
+            onRemove={() => {
+              onUpdateAdvancedFilter(undefined);
+              setSettingsAdvancedOpen(false);
+            }}
+          />,
+          document.body,
+        )}
       </div>
     );
   }
