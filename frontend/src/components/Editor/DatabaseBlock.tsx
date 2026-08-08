@@ -32,11 +32,11 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [filterQuery, setFilterQuery] = useState('');
   const [sortQuery, setSortQuery] = useState('');
   const [activeFilterId, setActiveFilterId] = useState<string | null>(null);
-  const [activeSortId, setActiveSortId] = useState<string | null>(null);
+  const [, setActiveSortId] = useState<string | null>(null);
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
-  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter'>('main');
+  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
@@ -50,8 +50,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const viewSettingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const viewContextMenuRef = useRef<HTMLDivElement | null>(null);
   const filterMenuRect = useDropdownPosition(filterOpen, filterButtonRef, 290);
-  const sortMenuRect = useDropdownPosition(sortOpen, sortButtonRef, 290);
-  const viewSettingsRect = useDropdownPosition(viewSettingsOpen, viewSettingsButtonRef, 292);
+  const sortMenuRect = useDropdownPosition(sortOpen, sortButtonRef, 292, '', { edge: 'right' });
+  const viewSettingsRect = useDropdownPosition(viewSettingsOpen, viewSettingsButtonRef, 292, viewSettingsPane, viewSettingsPane === 'sort' ? { edge: 'right' } : undefined);
 
   const parsed = useMemo(() => parseDatabaseMarkdown(viewsText), [viewsText]);
   const activeView = parsed.views.find((v) => v.id === viewId) || parsed.views[0];
@@ -122,6 +122,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
       if (!target) return;
       if (sortRef.current?.contains(target)) return;
       if (target.closest('.akdb-filter-menu')) return;
+      if (target.closest('.akdb-sort-rules-menu')) return;
+      if (target.closest('.akdb-view-rule-dropdown-menu')) return;
       setSortOpen(false);
     };
     document.addEventListener('mousedown', close);
@@ -131,7 +133,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   useDropdownOutsideClose(viewSettingsOpen, viewSettingsButtonRef, () => {
     setViewSettingsOpen(false);
     setViewSettingsPane('main');
-  }, '.akdb-view-settings-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu');
+  }, '.akdb-view-settings-menu, .akdb-sort-rules-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu');
 
   useEffect(() => {
     if (!viewContextMenu) return;
@@ -278,7 +280,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     requestDatabaseImmediateSync();
   };
 
-  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' = 'main') => {
+  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' = 'main') => {
     setFilterOpen(false);
     setSortOpen(false);
     setViewContextMenu(null);
@@ -380,10 +382,10 @@ function DatabaseBlockComponent({ block, editor }: any) {
     if (!activeView) return;
     const nextSort: ViewSortRule = { id: crypto.randomUUID(), property: column.id, dir: 'asc' };
     updateView({ ...activeView, sorts: [...(activeView.sorts || []), nextSort] });
-    setSortOpen(false);
     setSortQuery('');
     setActiveSortId(nextSort.id);
     setActiveFilterId(null);
+    return nextSort.id;
   };
 
   const updateSort = (id: string, patch: Partial<ViewSortRule>) => {
@@ -398,6 +400,24 @@ function DatabaseBlockComponent({ block, editor }: any) {
     if (!activeView) return;
     updateView({ ...activeView, sorts: (activeView.sorts || []).filter((sort) => sort.id !== id) });
     setActiveSortId((current) => current === id ? null : current);
+  };
+
+  const reorderSorts = (sourceID: string, targetID: string) => {
+    if (!activeView || sourceID === targetID) return;
+    const sorts = activeView.sorts || [];
+    const sourceIndex = sorts.findIndex((sort) => sort.id === sourceID);
+    const targetIndex = sorts.findIndex((sort) => sort.id === targetID);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const nextSorts = [...sorts];
+    const [moved] = nextSorts.splice(sourceIndex, 1);
+    nextSorts.splice(targetIndex, 0, moved);
+    updateView({ ...activeView, sorts: nextSorts });
+  };
+
+  const clearSorts = () => {
+    if (!activeView || !(activeView.sorts || []).length) return;
+    updateView({ ...activeView, sorts: [] });
+    setActiveSortId(null);
   };
 
   const toggleSourceColumnVisibility = (column: DatabaseColumn) => {
@@ -511,6 +531,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
         '.akdb-view-rule-shell',
         '.akdb-filter-menu',
         '.akdb-view-settings-menu',
+        '.akdb-sort-rules-menu',
         '.akdb-view-rule-editor',
         '.akdb-view-rule-dropdown-menu',
         '.akdb-view-rule-action-menu',
@@ -582,20 +603,34 @@ function DatabaseBlockComponent({ block, editor }: any) {
             setViewSettingsOpen(false);
             setSortOpen((open) => !open);
             setSortQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
           }}
         >
           <ArrowUpDown size={18} />
         </button>
-        {sortOpen && sortMenuRect && createPortal(
-          <FilterPropertyMenu
-            label="排序属性"
-            placeholder="排序方式..."
+        {sortOpen && sortMenuRect && activeView && createPortal(
+          <SortRulesMenu
+            view={activeView}
+            columns={schemaColumns}
             query={sortQuery}
-            columns={sortColumns}
+            sortColumns={sortColumns}
             style={sortMenuRect}
+            showHeader
+            onClose={() => setSortOpen(false)}
+            onAddSort={() => {
+              setSortQuery('');
+              setActiveFilterId(null);
+              setActiveSortId(null);
+              setAdvancedFilterOpen(false);
+            }}
             onQueryChange={setSortQuery}
-            onPick={addSort}
-            footer={null}
+            onPickSort={addSort}
+            onUpdateSort={updateSort}
+            onRemoveSort={removeSort}
+            onReorderSorts={reorderSorts}
+            onClearSorts={clearSorts}
           />,
           document.body,
         )}
@@ -637,6 +672,15 @@ function DatabaseBlockComponent({ block, editor }: any) {
             setActiveSortId(null);
             setAdvancedFilterOpen(false);
           }}
+          onOpenSort={() => {
+            setViewSettingsPane('sort');
+            setFilterOpen(false);
+            setSortOpen(false);
+            setSortQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
           onBack={() => setViewSettingsPane('main')}
           onClose={() => {
             setViewSettingsOpen(false);
@@ -669,6 +713,20 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onMergeFilterToAdvanced={mergeFilterToAdvanced}
           onUpdateAdvancedFilter={updateAdvancedFilter}
           onReorderFilters={reorderFilters}
+          sortQuery={sortQuery}
+          sortColumns={sortColumns}
+          onAddSort={() => {
+            setSortQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onSortQueryChange={setSortQuery}
+          onPickSort={addSort}
+          onUpdateSort={updateSort}
+          onRemoveSort={removeSort}
+          onReorderSorts={reorderSorts}
+          onClearSorts={clearSorts}
           style={viewSettingsRect}
         />,
         document.body,
@@ -757,16 +815,10 @@ function DatabaseBlockComponent({ block, editor }: any) {
           filterQuery={filterQuery}
           filterColumns={filterColumns}
           activeFilterId={activeFilterId}
-          activeSortId={activeSortId}
           advancedFilterOpen={advancedFilterOpen}
           onActivateFilter={(id) => {
             setActiveFilterId((current) => current === id ? null : id);
             setActiveSortId(null);
-            setAdvancedFilterOpen(false);
-          }}
-          onActivateSort={(id) => {
-            setActiveSortId((current) => current === id ? null : id);
-            setActiveFilterId(null);
             setAdvancedFilterOpen(false);
           }}
           onActivateAdvancedFilter={() => {
@@ -795,8 +847,22 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onMergeFilterToAdvanced={mergeFilterToAdvanced}
           onUpdateAdvancedFilter={updateAdvancedFilter}
           onReorderFilters={reorderFilters}
+          sortQuery={sortQuery}
+          sortColumns={sortColumns}
+          onAddSort={() => {
+            setFilterOpen(false);
+            setSortOpen(false);
+            setSortQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onSortQueryChange={setSortQuery}
+          onPickSort={addSort}
           onUpdateSort={updateSort}
           onRemoveSort={removeSort}
+          onReorderSorts={reorderSorts}
+          onClearSorts={clearSorts}
         />
       )}
 
@@ -1049,10 +1115,8 @@ function ViewRuleBar({
   filterQuery,
   filterColumns,
   activeFilterId,
-  activeSortId,
   advancedFilterOpen,
   onActivateFilter,
-  onActivateSort,
   onActivateAdvancedFilter,
   onAddFilter,
   onFilterQueryChange,
@@ -1063,18 +1127,23 @@ function ViewRuleBar({
   onMergeFilterToAdvanced,
   onUpdateAdvancedFilter,
   onReorderFilters,
+  sortQuery,
+  sortColumns,
+  onAddSort,
+  onSortQueryChange,
+  onPickSort,
   onUpdateSort,
   onRemoveSort,
+  onReorderSorts,
+  onClearSorts,
 }: {
   view: DatabaseViewConfig;
   columns: DatabaseColumn[];
   filterQuery: string;
   filterColumns: DatabaseColumn[];
   activeFilterId: string | null;
-  activeSortId: string | null;
   advancedFilterOpen: boolean;
   onActivateFilter: (id: string) => void;
-  onActivateSort: (id: string) => void;
   onActivateAdvancedFilter: () => void;
   onAddFilter: () => void;
   onFilterQueryChange: (value: string) => void;
@@ -1085,16 +1154,23 @@ function ViewRuleBar({
   onMergeFilterToAdvanced: (id: string) => void;
   onUpdateAdvancedFilter: (advancedFilter?: ViewAdvancedFilterGroup) => void;
   onReorderFilters: (sourceID: string, targetID: string) => void;
+  sortQuery: string;
+  sortColumns: DatabaseColumn[];
+  onAddSort: () => void;
+  onSortQueryChange: (value: string) => void;
+  onPickSort: (column: DatabaseColumn) => string | void;
   onUpdateSort: (id: string, patch: Partial<ViewSortRule>) => void;
   onRemoveSort: (id: string) => void;
+  onReorderSorts: (sourceID: string, targetID: string) => void;
+  onClearSorts: () => void;
 }) {
   const byID = new Map(columns.map((column) => [column.id, column]));
   const activeFilter = (view.filters || []).find((filter) => filter.id === activeFilterId);
-  const activeSort = (view.sorts || []).find((sort) => sort.id === activeSortId);
   const activeFilterColumn = activeFilter ? byID.get(activeFilter.property) : undefined;
   const ruleBarRef = useRef<HTMLDivElement | null>(null);
   const activeRuleRef = useRef<HTMLButtonElement | null>(null);
   const advancedRuleRef = useRef<HTMLButtonElement | null>(null);
+  const sortRuleRef = useRef<HTMLButtonElement | null>(null);
   const addFilterButtonRef = useRef<HTMLButtonElement | null>(null);
   const [filterDragState, setFilterDragState] = useState<{
     sourceID: string;
@@ -1112,8 +1188,10 @@ function ViewRuleBar({
   } | null>(null);
   const filterDragStateRef = useRef<typeof filterDragState>(null);
   const suppressRuleClickRef = useRef(false);
+  const [sortRulesOpen, setSortRulesOpen] = useState(false);
   const [addFilterOpen, setAddFilterOpen] = useState(false);
-  const editorRect = useDropdownPosition(!!(activeFilter || activeSort), activeRuleRef, activeFilter ? (isDateFilterColumn(activeFilterColumn) ? 260 : 282) : 200, activeFilterId || activeSortId || '');
+  const editorRect = useDropdownPosition(!!activeFilter, activeRuleRef, isDateFilterColumn(activeFilterColumn) ? 260 : 282, activeFilterId || '');
+  const sortRulesRect = useDropdownPosition(sortRulesOpen, sortRuleRef, 292, 'sort-rules');
   const advancedRect = useDropdownPosition(advancedFilterOpen && !!view.advancedFilter, advancedRuleRef, 0, 'advanced-filter');
   const addFilterMenuRect = useDropdownPosition(addFilterOpen, addFilterButtonRef, 220);
   const beginFilterDrag = (filterID: string, event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -1208,7 +1286,21 @@ function ViewRuleBar({
     return () => document.removeEventListener('mousedown', close);
   }, [addFilterOpen]);
   useEffect(() => {
-    if (!activeFilter && !activeSort && !advancedFilterOpen) return;
+    if (!sortRulesOpen) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target) return;
+      if (sortRuleRef.current?.contains(target)) return;
+      if (target.closest('.akdb-sort-rules-menu')) return;
+      if (target.closest('.akdb-filter-menu')) return;
+      if (target.closest('.akdb-view-rule-dropdown-menu')) return;
+      setSortRulesOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [sortRulesOpen]);
+  useEffect(() => {
+    if (!activeFilter && !advancedFilterOpen) return;
     const close = (event: PointerEvent) => {
       const target = event.target as Element | null;
       if (!target) return;
@@ -1223,10 +1315,31 @@ function ViewRuleBar({
     };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
-  }, [activeFilter, activeSort, advancedFilterOpen, onClearActive]);
+  }, [activeFilter, advancedFilterOpen, onClearActive]);
+  const sortCount = (view.sorts || []).length;
+  const showSortPill = sortCount > 0 || sortRulesOpen;
   return (
     <div className="akdb-view-rule-shell">
       <div ref={ruleBarRef} className={`akdb-view-rule-bar ${filterDragState ? 'is-filter-dragging' : ''}`}>
+        {showSortPill && (
+          <button
+            ref={sortRuleRef}
+            type="button"
+            className={`akdb-view-rule-pill is-effective ${sortRulesOpen ? 'is-active' : ''}`}
+            aria-haspopup="dialog"
+            aria-expanded={sortRulesOpen}
+            onClick={() => {
+              setSortRulesOpen((open) => !open);
+              onClearActive();
+              setAddFilterOpen(false);
+            }}
+          >
+            <ArrowUpDown size={14} />
+            <span>{sortCount > 0 ? `${sortCount} 个排序` : '排序'}</span>
+            <ChevronDown size={14} />
+          </button>
+        )}
+        {showSortPill && (!!view.advancedFilter || (view.filters || []).length > 0) && <span className="akdb-view-rule-separator" aria-hidden="true" />}
         {view.advancedFilter && (
           <button
             ref={advancedRuleRef}
@@ -1276,18 +1389,6 @@ function ViewRuleBar({
                   column?.name || '属性'
                 )}
               </span>
-              <ChevronDown size={14} />
-            </button>
-          );
-        })}
-        {(view.sorts || []).map((sort) => {
-          const column = byID.get(sort.property);
-          const active = activeSortId === sort.id;
-          return (
-            <button key={sort.id} ref={active ? activeRuleRef : undefined} type="button" className={`akdb-view-rule-pill ${active ? 'is-active' : ''}`} onClick={() => onActivateSort(sort.id)}>
-              <ArrowUpDown size={14} />
-              <span>{column?.name || '属性'}</span>
-              <span>{sort.dir === 'asc' ? '升序' : '降序'}</span>
               <ChevronDown size={14} />
             </button>
           );
@@ -1357,18 +1458,303 @@ function ViewRuleBar({
         />,
         document.body,
       )}
-      {activeSort && editorRect && createPortal(
-        <SortRuleEditor
-          sort={activeSort}
-          column={byID.get(activeSort.property)}
-          style={editorRect}
-          onUpdate={(patch) => onUpdateSort(activeSort.id, patch)}
-          onRemove={() => onRemoveSort(activeSort.id)}
+      {sortRulesOpen && sortRulesRect && createPortal(
+        <SortRulesMenu
+          view={view}
+          columns={columns}
+          query={sortQuery}
+          sortColumns={sortColumns}
+          style={sortRulesRect}
+          onAddSort={onAddSort}
+          onQueryChange={onSortQueryChange}
+          onPickSort={onPickSort}
+          onUpdateSort={onUpdateSort}
+          onRemoveSort={onRemoveSort}
+          onReorderSorts={onReorderSorts}
+          onClearSorts={onClearSorts}
         />,
         document.body,
       )}
     </div>
   );
+}
+
+function SortRulesMenu({
+  view,
+  columns,
+  query,
+  sortColumns,
+  style,
+  showHeader = false,
+  onClose,
+  onAddSort,
+  onQueryChange,
+  onPickSort,
+  onUpdateSort,
+  onRemoveSort,
+  onReorderSorts,
+  onClearSorts,
+}: {
+  view: DatabaseViewConfig;
+  columns: DatabaseColumn[];
+  query: string;
+  sortColumns: DatabaseColumn[];
+  style: CSSProperties;
+  showHeader?: boolean;
+  onClose?: () => void;
+  onAddSort: () => void;
+  onQueryChange: (value: string) => void;
+  onPickSort: (column: DatabaseColumn) => string | void;
+  onUpdateSort: (id: string, patch: Partial<ViewSortRule>) => void;
+  onRemoveSort: (id: string) => void;
+  onReorderSorts: (sourceID: string, targetID: string) => void;
+  onClearSorts: () => void;
+}) {
+  const byID = useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
+  const addSortRef = useRef<HTMLButtonElement | null>(null);
+  const dragStateRef = useRef<{
+    sourceID: string;
+    targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    initialTop: number;
+    currentTop: number;
+    itemHeight: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    centers: number[];
+  } | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [propertyPicker, setPropertyPicker] = useState<{ sortID: string; rect: CSSProperties } | null>(null);
+  const [directionPicker, setDirectionPicker] = useState<{ sortID: string; rect: CSSProperties } | null>(null);
+  const [dragState, setDragState] = useState<typeof dragStateRef.current>(null);
+  const addRect = useDropdownPosition(addOpen, addSortRef, 260, 'sort-menu-add');
+  const sorts = view.sorts || [];
+
+  const openInlineMenu = (sortID: string, target: HTMLElement, setter: (value: { sortID: string; rect: CSSProperties } | null) => void, width = 220) => {
+    const rect = target.getBoundingClientRect();
+    const viewportPadding = 12;
+    const dropdownWidth = Math.max(width, rect.width);
+    const left = Math.min(Math.max(rect.left, viewportPadding), Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding));
+    setter({
+      sortID,
+      rect: {
+        position: 'fixed',
+        left,
+        top: rect.bottom + 4,
+        minWidth: dropdownWidth,
+        zIndex: 110,
+      },
+    });
+  };
+
+  const beginDrag = (sortID: string, event: ReactPointerEvent<HTMLSpanElement>) => {
+    if (event.button !== 0 || sorts.length < 2) return;
+    const row = event.currentTarget.closest('.akdb-sort-rule-row') as HTMLDivElement | null;
+    const list = event.currentTarget.closest('.akdb-sort-rule-list') as HTMLDivElement | null;
+    if (!row || !list) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setPropertyPicker(null);
+    setDirectionPicker(null);
+    setAddOpen(false);
+    const rows = Array.from(list.querySelectorAll<HTMLDivElement>('[data-sort-rule-id]'));
+    const sourceIndex = rows.findIndex((item) => item.dataset.sortRuleId === sortID);
+    if (sourceIndex < 0) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const rowRect = row.getBoundingClientRect();
+    const itemHeight = rowRect.height;
+    const firstRect = rowRects[0];
+    const lastRect = rowRects[rowRects.length - 1];
+    const baseState = {
+      sourceID: sortID,
+      targetID: sortID,
+      sourceIndex,
+      targetIndex: sourceIndex,
+      initialTop: rowRect.top - listRect.top,
+      currentTop: rowRect.top - listRect.top,
+      itemHeight,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: firstRect.top - listRect.top,
+      maxTop: lastRect.bottom - listRect.top - itemHeight,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    dragStateRef.current = baseState;
+    setDragState(baseState);
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, moveEvent.clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.itemHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const targetID = rows[nextTargetIndex]?.dataset.sortRuleId || current.targetID;
+        const next = { ...current, currentTop, targetIndex: nextTargetIndex, targetID };
+        dragStateRef.current = next;
+        return next;
+      });
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const finalState = dragStateRef.current;
+      dragStateRef.current = null;
+      setDragState(null);
+      if (!finalState || finalState.sourceID === finalState.targetID) return;
+      onReorderSorts(finalState.sourceID, finalState.targetID);
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const dragTransform = (sortID: string, index: number) => {
+    const state = dragState;
+    if (!state) return undefined;
+    if (sortID === state.sourceID) return `translateY(${state.currentTop - state.initialTop}px)`;
+    if (state.sourceIndex < state.targetIndex && index > state.sourceIndex && index <= state.targetIndex) return `translateY(${-state.itemHeight}px)`;
+    if (state.targetIndex < state.sourceIndex && index >= state.targetIndex && index < state.sourceIndex) return `translateY(${state.itemHeight}px)`;
+    return undefined;
+  };
+
+  return (
+    <div className={`akdb-sort-rules-menu ${sorts.length === 0 && !showHeader ? 'is-empty' : ''}`} role="dialog" aria-label="排序规则" style={style}>
+      {showHeader && (
+        <div className="akdb-sort-rule-head">
+          <button type="button" aria-label="关闭排序菜单" onClick={onClose}><ArrowLeft size={17} /></button>
+          <span>排序</span>
+          <button type="button" aria-label="关闭排序菜单" onClick={onClose}><X size={15} /></button>
+        </div>
+      )}
+      <div className={`akdb-sort-rule-list ${dragState ? 'is-dragging' : ''}`}>
+        {sorts.map((sort, index) => {
+          const column = byID.get(sort.property);
+          const directionLabel = sortDirectionLabel(sort, column);
+          return (
+            <div
+              key={sort.id}
+              className="akdb-sort-rule-row"
+              data-sort-rule-id={sort.id}
+              style={{
+                transform: dragTransform(sort.id, index),
+                transition: dragState?.sourceID === sort.id ? 'none' : undefined,
+              }}
+            >
+              <span className="akdb-sort-rule-handle" onPointerDown={(event) => beginDrag(sort.id, event)}>
+                <GripVertical size={15} />
+              </span>
+              <button type="button" className="akdb-sort-rule-control is-property" aria-haspopup="dialog" aria-expanded={propertyPicker?.sortID === sort.id} onClick={(event) => {
+                setDirectionPicker(null);
+                openInlineMenu(sort.id, event.currentTarget, setPropertyPicker, 220);
+              }}>
+                <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+                <span>{column?.name || '属性'}</span>
+                <ChevronDown size={14} />
+              </button>
+              <button type="button" className="akdb-sort-rule-control is-direction" aria-haspopup="menu" aria-expanded={directionPicker?.sortID === sort.id} onClick={(event) => {
+                setPropertyPicker(null);
+                openInlineMenu(sort.id, event.currentTarget, setDirectionPicker, 190);
+              }}>
+                <span>{directionLabel}</span>
+                <ChevronDown size={14} />
+              </button>
+              <button type="button" className="akdb-sort-rule-remove" aria-label="删除排序规则" onClick={() => onRemoveSort(sort.id)}>
+                <X size={16} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        ref={addSortRef}
+        type="button"
+        className="akdb-sort-rule-action"
+        aria-haspopup="dialog"
+        aria-expanded={addOpen}
+        onClick={() => {
+          onAddSort();
+          setPropertyPicker(null);
+          setDirectionPicker(null);
+          setAddOpen((open) => !open);
+        }}
+      >
+        <Plus size={18} />
+        <span>添加排序</span>
+      </button>
+      {sorts.length > 0 && (
+        <button type="button" className="akdb-sort-rule-action" onClick={onClearSorts}>
+          <Trash2 size={18} />
+          <span>删除排序</span>
+        </button>
+      )}
+      {addOpen && addRect && createPortal(
+        <FilterPropertyMenu
+          label="排序属性"
+          placeholder="排序方式..."
+          query={query}
+          columns={sortColumns}
+          style={{ ...addRect, zIndex: 110 }}
+          compact
+          onQueryChange={onQueryChange}
+          onPick={(column) => {
+            onPickSort(column);
+            setAddOpen(false);
+          }}
+          footer={null}
+        />,
+        document.body,
+      )}
+      {propertyPicker && createPortal(
+        <FilterPropertyMenu
+          label="排序属性"
+          placeholder="排序方式..."
+          query={query}
+          columns={sortColumns}
+          style={propertyPicker.rect}
+          compact
+          onQueryChange={onQueryChange}
+          onPick={(column) => {
+            onUpdateSort(propertyPicker.sortID, { property: column.id });
+            setPropertyPicker(null);
+          }}
+          footer={null}
+        />,
+        document.body,
+      )}
+      {directionPicker && createPortal(
+        <div className="akdb-view-rule-dropdown-menu akdb-sort-direction-menu" role="menu" style={directionPicker.rect}>
+          {(['asc', 'desc'] as const).map((dir) => {
+            const sort = sorts.find((item) => item.id === directionPicker.sortID);
+            const column = sort ? byID.get(sort.property) : undefined;
+            return (
+              <button
+                key={dir}
+                type="button"
+                role="menuitem"
+                className={sort?.dir === dir ? 'is-active' : ''}
+                onClick={() => {
+                  onUpdateSort(directionPicker.sortID, { dir });
+                  setDirectionPicker(null);
+                }}
+              >
+                <span>{sortDirectionLabel({ id: directionPicker.sortID, property: sort?.property || '', dir }, column)}</span>
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function sortDirectionLabel(sort: ViewSortRule, column?: DatabaseColumn) {
+  if (column?.type === 'text' || column?.type === 'url' || column?.type === 'relation') return sort.dir === 'asc' ? '按“A → Z”排序' : '按“Z → A”排序';
+  if (column?.type === 'checkbox') return sort.dir === 'asc' ? '按“未勾选 → 已勾选”排序' : '按“已勾选 → 未勾选”排序';
+  if (isDateFilterColumn(column)) return sort.dir === 'asc' ? '按“旧 → 新”排序' : '按“新 → 旧”排序';
+  return sort.dir === 'asc' ? '升序排列' : '降序排列';
 }
 
 function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove, onMergeToAdvanced }: { filter: ViewFilterRule; column?: DatabaseColumn; style?: CSSProperties; onUpdate: (patch: Partial<ViewFilterRule>) => void; onCommit: () => void; onRemove: () => void; onMergeToAdvanced?: () => void }) {
@@ -1417,7 +1803,7 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove,
       <div className="akdb-view-rule-editor-head">
         <button type="button">{column?.name || '属性'}</button>
         <div className="akdb-view-rule-dropdown">
-          <button type="button" aria-haspopup="menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((open) => !open)}>{filterOperatorLabel(filter, column)} <ChevronDown size={14} /></button>
+          <button type="button" aria-haspopup="menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((open) => !open)}>{filterOperatorLabel(filter)} <ChevronDown size={14} /></button>
           {operatorOpen && (
             <div className="akdb-view-rule-dropdown-menu" role="menu">
               {operators.map((operator) => (
@@ -1921,7 +2307,7 @@ function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule:
         document.body,
       )}
       <button ref={operatorRef} type="button" className="akdb-advanced-filter-control is-op" aria-haspopup="menu" aria-expanded={operatorOpen} onClick={() => { setOperatorOpen((open) => !open); setPropertyOpen(false); setValueOpen(false); }}>
-        <span>{filterOperatorLabel(rule, column)}</span>
+        <span>{filterOperatorLabel(rule)}</span>
         <ChevronDown size={13} />
       </button>
       {operatorOpen && operatorRect && createPortal(
@@ -2146,18 +2532,6 @@ function advancedDateValueLabel(rule: ViewFilterRule) {
   return formatDateFilterLabel(String(rule.value || ''));
 }
 
-function SortRuleEditor({ sort, column, style, onUpdate, onRemove }: { sort: ViewSortRule; column?: DatabaseColumn; style?: CSSProperties; onUpdate: (patch: Partial<ViewSortRule>) => void; onRemove: () => void }) {
-  return (
-    <div className="akdb-view-rule-editor is-sort" role="dialog" aria-label="排序条件" style={style}>
-      <div className="akdb-view-rule-editor-head">
-        <button type="button">{column?.name || '属性'}</button>
-        <button type="button" onClick={() => onUpdate({ dir: sort.dir === 'asc' ? 'desc' : 'asc' })}>{sort.dir === 'asc' ? '升序' : '降序'} <ChevronDown size={14} /></button>
-        <button type="button" className="akdb-view-rule-more" aria-label="移除排序" onClick={onRemove}><MoreHorizontal size={16} /></button>
-      </div>
-    </div>
-  );
-}
-
 function defaultFilterOperator(column: DatabaseColumn) {
   if (isDateFilterColumn(column)) return 'relative_to_today';
   if (column.type === 'multi_select') return 'contains';
@@ -2172,7 +2546,7 @@ function defaultFilterValue(column: DatabaseColumn) {
   return '';
 }
 
-function filterOperatorLabel(filter: ViewFilterRule, column?: DatabaseColumn) {
+function filterOperatorLabel(filter: ViewFilterRule) {
   if (filter.op === 'relative_to_today') return '相对于今天';
   if (filter.op === 'equals') return '是';
   if (filter.op === 'not_equals') return '不是';
@@ -2748,6 +3122,7 @@ function ViewSettingsMenu({
   onOpenLayout,
   onOpenVisibility,
   onOpenFilter,
+  onOpenSort,
   onBack,
   onClose,
   onRename,
@@ -2768,16 +3143,26 @@ function ViewSettingsMenu({
   onMergeFilterToAdvanced,
   onUpdateAdvancedFilter,
   onReorderFilters,
+  sortQuery,
+  sortColumns,
+  onAddSort,
+  onSortQueryChange,
+  onPickSort,
+  onUpdateSort,
+  onRemoveSort,
+  onReorderSorts,
+  onClearSorts,
   style,
 }: {
   schemaName: string;
   columns: DatabaseColumn[];
   activeView: DatabaseViewConfig;
-  pane: 'main' | 'visibility' | 'layout' | 'filter';
+  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort';
   focusNameRequest: number;
   onOpenLayout: () => void;
   onOpenVisibility: () => void;
   onOpenFilter: () => void;
+  onOpenSort: () => void;
   onBack: () => void;
   onClose: () => void;
   onRename: (name: string) => void;
@@ -2798,6 +3183,15 @@ function ViewSettingsMenu({
   onMergeFilterToAdvanced: (id: string) => void;
   onUpdateAdvancedFilter: (advancedFilter?: ViewAdvancedFilterGroup) => void;
   onReorderFilters: (sourceID: string, targetID: string) => void;
+  sortQuery: string;
+  sortColumns: DatabaseColumn[];
+  onAddSort: () => void;
+  onSortQueryChange: (value: string) => void;
+  onPickSort: (column: DatabaseColumn) => string | void;
+  onUpdateSort: (id: string, patch: Partial<ViewSortRule>) => void;
+  onRemoveSort: (id: string) => void;
+  onReorderSorts: (sourceID: string, targetID: string) => void;
+  onClearSorts: () => void;
   style: CSSProperties;
 }) {
   const [query, setQuery] = useState('');
@@ -2869,6 +3263,7 @@ function ViewSettingsMenu({
   const filteredColumns = orderedColumns.filter((column) => !search || column.name.toLowerCase().includes(search) || column.type.toLowerCase().includes(search));
   const visibleCount = columns.filter((column) => visibleSourceIDs.has(column.id)).length;
   const filterRuleCount = (activeView.filters || []).length + (activeView.advancedFilter ? countAdvancedFilterRules(activeView.advancedFilter) : 0);
+  const sortRuleCount = (activeView.sorts || []).length;
   const showDatabaseTitle = activeView.showSourceTitle !== false;
   const showVerticalLines = activeView.showVerticalLines !== false;
   const wrapContent = !!activeView.wrapContent;
@@ -3108,7 +3503,12 @@ function ViewSettingsMenu({
           <SettingsMenuItem icon={<ViewTypeIcon type={activeView.type} />} label="布局" detail={viewName(activeView.type)} onClick={onOpenLayout} />
           <SettingsMenuItem icon={<Eye size={17} />} label="属性是否可见" detail={String(visibleCount)} onClick={onOpenVisibility} />
           <SettingsMenuItem icon={<Filter size={17} />} label="筛选" detail={filterRuleCount ? String(filterRuleCount) : undefined} onClick={onOpenFilter} />
-          <SettingsMenuItem icon={<ArrowUpDown size={17} />} label="排序" />
+          <SettingsMenuItem
+            icon={<ArrowUpDown size={17} />}
+            label="排序"
+            detail={sortRuleCount ? String(sortRuleCount) : undefined}
+            onClick={onOpenSort}
+          />
           <SettingsMenuItem icon={<Columns3 size={17} />} label="分组" />
           <SettingsMenuItem icon={<Palette size={17} />} label="条件颜色" />
           <SettingsMenuItem icon={<Link size={17} />} label="拷贝视图链接" trailing={false} />
@@ -3329,6 +3729,32 @@ function ViewSettingsMenu({
     );
   }
 
+  if (pane === 'sort') {
+    return (
+      <div className="akdb-view-settings-menu akdb-view-settings-sort-menu" role="dialog" aria-label="排序" style={{ ...style, width: 'max-content' }}>
+        <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+          <button type="button" aria-label="返回查看设置" onClick={onBack}><ArrowLeft size={17} /></button>
+          <span>排序</span>
+          <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭排序菜单" onClick={onClose}><X size={15} /></button>
+        </div>
+        <SortRulesMenu
+          view={activeView}
+          columns={columns}
+          query={sortQuery}
+          sortColumns={sortColumns}
+          style={{ position: 'static', width: 'auto', minWidth: 'auto', maxWidth: 'none', boxShadow: 'none', border: 0, padding: '0 0 5px' }}
+          onAddSort={onAddSort}
+          onQueryChange={onSortQueryChange}
+          onPickSort={onPickSort}
+          onUpdateSort={onUpdateSort}
+          onRemoveSort={onRemoveSort}
+          onReorderSorts={onReorderSorts}
+          onClearSorts={onClearSorts}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="akdb-view-settings-menu akdb-column-visibility-menu" role="dialog" aria-label="属性可见性" style={style}>
       <div className="akdb-column-visibility-head">
@@ -3451,7 +3877,7 @@ function ViewLayoutNumber({ label, value, onChange }: { label: string; value: nu
   );
 }
 
-function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, positionKey: unknown = '') {
+function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, positionKey: unknown = '', options: { edge?: 'left' | 'right' } = {}) {
   const [rect, setRect] = useState<CSSProperties | null>(null);
   useEffect(() => {
     if (!open || !buttonRef.current) return;
@@ -3460,13 +3886,28 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       if (!buttonRect) return;
       const viewportPadding = 16;
       const dropdownWidth = Math.max(minWidth, buttonRect.width);
+      if (options.edge === 'right') {
+        const right = viewportPadding;
+        const availableWidth = Math.max(0, window.innerWidth - right - viewportPadding);
+        setRect({
+          position: 'fixed',
+          left: 'auto',
+          right,
+          top: buttonRect.bottom + 6,
+          minWidth: Math.min(dropdownWidth, availableWidth),
+          maxWidth: availableWidth,
+        });
+        return;
+      }
       const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding);
       const left = Math.min(Math.max(buttonRect.left, viewportPadding), maxLeft);
+      const availableWidth = Math.max(0, window.innerWidth - left - viewportPadding);
       setRect({
         position: 'fixed',
         left,
         top: buttonRect.bottom + 6,
-        minWidth: dropdownWidth,
+        minWidth: Math.min(dropdownWidth, availableWidth),
+        maxWidth: availableWidth,
       });
     };
     update();
@@ -3476,7 +3917,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, buttonRef, minWidth, positionKey]);
+  }, [open, buttonRef, minWidth, positionKey, options.edge]);
   return rect;
 }
 

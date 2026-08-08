@@ -118,6 +118,7 @@
 .akdb-view-rule-field { font-weight: 500; }
 .akdb-view-rule-pill > svg { flex: 0 0 auto; width: 12px; height: 12px; stroke-width: 2.2; }
 .akdb-view-rule-add > svg { flex: 0 0 auto; width: 13px; height: 13px; }
+.akdb-view-rule-separator { flex: 0 0 1px; width: 1px; height: 22px; margin: 0 8px; background: rgba(55,53,47,.10); }
 .akdb-plus-small { display: block; fill: currentColor; stroke: none; }
 .akdb-view-rule-editor { position: absolute; left: 8px; top: 44px; z-index: 95; width: min(282px, calc(100vw - 32px)); border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: var(--akdb-menu-padding); color: var(--akdb-menu-text); }
 .akdb-view-rule-editor.is-sort { width: 220px; }
@@ -140,6 +141,37 @@
 .akdb-view-rule-action-menu button:disabled:hover { background: transparent; }
 .akdb-view-rule-action-menu svg { flex: 0 0 var(--akdb-menu-icon-size); width: var(--akdb-menu-icon-size); height: var(--akdb-menu-icon-size); color: var(--akdb-menu-icon); }
 .akdb-view-rule-action-menu button:disabled svg { color: var(--akdb-menu-icon-secondary); }
+.akdb-sort-rules-menu { position: absolute; left: 8px; top: 44px; z-index: 95; width: max-content; min-width: 292px; max-width: calc(100vw - 32px); border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: 10px 12px 12px; color: var(--akdb-menu-text); }
+.akdb-sort-rules-menu.is-empty { padding: 6px 8px; }
+.akdb-sort-rule-head { display: flex; align-items: center; gap: 12px; height: 34px; padding: 0 4px 7px; color: var(--akdb-menu-text); font-size: 14px; font-weight: 600; }
+.akdb-sort-rule-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.akdb-sort-rule-head > button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; border: 0; border-radius: 5px; background: transparent; color: var(--akdb-menu-icon-secondary); cursor: pointer; padding: 0; }
+.akdb-sort-rule-head > button:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-text); }
+.akdb-sort-rule-head > button:last-child { margin-left: auto; border-radius: 999px; background: rgba(55,53,47,.08); }
+.akdb-sort-rule-head > button:last-child:hover { background: rgba(55,53,47,.14); }
+.akdb-sort-rule-list { display: grid; gap: 0; padding: 0 0 8px; }
+.akdb-sort-rules-menu.is-empty .akdb-sort-rule-list { padding-bottom: 0; }
+.akdb-sort-rule-list.is-dragging .akdb-sort-rule-row { transition: transform 140ms ease; }
+.akdb-sort-rule-row { display: grid; grid-template-columns: 20px minmax(120px, max-content) minmax(120px, max-content) 28px; align-items: center; gap: 8px; min-height: 40px; padding: 3px 0; }
+.akdb-sort-rule-handle { display: inline-flex; align-items: center; justify-content: center; width: 20px; color: var(--akdb-menu-icon-secondary); cursor: grab; touch-action: none; }
+.akdb-sort-rule-handle:active { cursor: grabbing; }
+.akdb-sort-rule-control { display: inline-flex; align-items: center; min-width: 0; max-width: 180px; height: 32px; border: 1px solid var(--akdb-menu-border); border-radius: 6px; background: #fff; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; font-family: inherit; font-size: 13px; font-weight: 500; line-height: 20px; text-align: left; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.akdb-sort-rule-control:hover,
+.akdb-sort-rule-control[aria-expanded="true"] { background: var(--akdb-menu-hover-bg); }
+.akdb-sort-rule-control > span:not(.akdb-view-rule-icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.akdb-sort-rule-control > svg { flex: 0 0 auto; width: 12px; height: 12px; margin-left: 6px; color: var(--akdb-menu-icon-secondary); }
+.akdb-sort-rule-control .akdb-view-rule-icon { margin-right: 6px; color: var(--akdb-menu-icon); transform: none; }
+.akdb-sort-rule-remove { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 999px; background: transparent; color: var(--akdb-menu-icon-secondary); cursor: pointer; padding: 0; }
+.akdb-sort-rule-remove:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-text); }
+.akdb-sort-rule-action { display: flex; align-items: center; gap: 10px; width: 100%; height: 30px; border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text-secondary); cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: 13px; font-weight: 400; line-height: 1.2; }
+.akdb-sort-rule-action:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-text); }
+.akdb-sort-rule-action svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--akdb-menu-icon-secondary); }
+.akdb-sort-direction-menu { width: 190px; max-width: min(190px, calc(100vw - 24px)); }
+.akdb-view-settings-sort-menu { width: max-content; min-width: 292px; max-width: calc(100vw - 16px); }
+.akdb-view-settings-sort-menu .akdb-sort-rule-row { grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 6px; min-height: 36px; }
+.akdb-view-settings-sort-menu .akdb-sort-rule-control { max-width: none; height: 30px; padding: 0 7px; }
+.akdb-view-settings-sort-menu .akdb-sort-rule-remove { width: 24px; height: 24px; }
+.akdb-view-settings-sort-menu .akdb-sort-rules-menu { width: auto; }
 .akdb-view-rule-input { width: calc(100% - 8px); height: 30px; margin: 0 4px 6px; border: 2px solid #2383e2; border-radius: var(--akdb-menu-control-radius); background: var(--akdb-menu-input-bg); color: var(--akdb-menu-text); font-size: var(--akdb-menu-font-size); font-weight: 400; line-height: 20px; outline: none; padding: 0 10px; box-shadow: 0 0 0 1px rgba(35,131,226,.14); user-select: text; -webkit-user-select: text; }
 .akdb-view-rule-input::placeholder { color: #b9b8b5; }
 .akdb-view-rule-options { display: flex; flex-direction: column; gap: 0; padding: 0 4px 4px; }
