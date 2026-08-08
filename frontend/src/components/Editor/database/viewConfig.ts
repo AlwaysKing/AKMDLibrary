@@ -8,7 +8,7 @@ export interface ViewColumnRule {
   align?: 'left' | 'center' | 'right';
 }
 
-export type ViewFilterOperator = 'contains' | 'not_contains' | 'equals' | 'not_equals' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty';
+export type ViewFilterOperator = 'contains' | 'not_contains' | 'equals' | 'not_equals' | 'starts_with' | 'ends_with' | 'is_empty' | 'is_not_empty' | 'relative_to_today';
 
 export interface ViewFilterRule {
   id: string;
@@ -226,6 +226,7 @@ function normalizeFilterOperator(op = ''): ViewFilterOperator {
     || op === 'ends_with'
     || op === 'is_empty'
     || op === 'is_not_empty'
+    || op === 'relative_to_today'
   ) return op;
   return 'contains';
 }

@@ -53,6 +53,8 @@ interface Props {
   onViewChange?: (view: DatabaseViewConfig) => void;
   onOpenViewSettings?: (pane: 'main' | 'visibility') => void;
   onSelectionChange?: (count: number) => void;
+  onAddFilterColumn?: (column: DatabaseColumn) => void;
+  onAddSortColumn?: (column: DatabaseColumn) => void;
 }
 
 type CellCoord = { rowIndex: number; colIndex: number };
@@ -89,7 +91,7 @@ export function requestDatabaseImmediateSync() {
   }, 0);
 }
 
-export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange }: Props) {
+export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange, onAddFilterColumn, onAddSortColumn }: Props) {
   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
   const [rows, setRows] = useState<DatabaseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1585,8 +1587,14 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             onUpdateConfig={(patch) => {
               if (columnMenuColumn.column) void updateColumnConfig(columnMenuColumn.column, patch);
             }}
-            onFilter={() => closeColumnMenu()}
-            onSort={() => closeColumnMenu()}
+            onFilter={() => {
+              if (columnMenuColumn.column) onAddFilterColumn?.(columnMenuColumn.column);
+              closeColumnMenu();
+            }}
+            onSort={() => {
+              if (columnMenuColumn.column) onAddSortColumn?.(columnMenuColumn.column);
+              closeColumnMenu();
+            }}
             onToggleReadonly={() => updateViewColumn(columnMenuIndex!, { readonly: !columnMenuColumn.rule.readonly })}
             onChangeAlign={(align) => updateViewColumn(columnMenuIndex!, { align })}
             onHide={() => {
@@ -1763,21 +1771,27 @@ function applyViewFilters<T extends { row: DatabaseRow; props: Record<string, an
 
 function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op: string, value: unknown) {
   const text = String(raw ?? '').trim();
-  if (op === 'is_empty') return !text;
-  if (op === 'is_not_empty') return !!text;
+  const empty = isEmptyDatabaseFilterValue(text, column);
+  if (op === 'is_empty') return empty;
+  if (op === 'is_not_empty') return !empty;
+  if ((column?.type === 'date' || column?.type === 'created_time' || column?.type === 'last_edited_time') && op === 'relative_to_today') {
+    return matchesRelativeDateFilter(text, String(value || 'this_week'));
+  }
   if (column?.type === 'checkbox') {
     return String(value) === 'true' ? text === 'true' : text !== 'true';
   }
   if (column?.type === 'select' || column?.type === 'status') {
     const selected = Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean);
     if (!selected.length) return true;
-    return selected.includes(text);
+    const matched = selected.includes(text);
+    return op === 'not_equals' ? !matched : matched;
   }
   if (column?.type === 'multi_select') {
     const selected = Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean);
     if (!selected.length) return true;
     const values = parseMultiSelectValue(text);
-    return selected.some((id) => values.includes(id));
+    const matched = selected.some((id) => values.includes(id));
+    return op === 'not_equals' ? !matched : matched;
   }
   const needle = String(value ?? '').trim().toLowerCase();
   if (!needle) return true;
@@ -1787,6 +1801,73 @@ function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op:
   if (op === 'starts_with') return text.toLowerCase().startsWith(needle);
   if (op === 'ends_with') return text.toLowerCase().endsWith(needle);
   return text.toLowerCase().includes(needle);
+}
+
+function matchesRelativeDateFilter(text: string, value: string) {
+  const date = parseDatabaseFilterDate(text);
+  if (!date) return false;
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const range = relativeDateFilterRange(value);
+  return day >= range.start && day <= range.end;
+}
+
+function parseDatabaseFilterDate(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (/^-?\d+(\.\d+)?$/.test(raw)) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    return new Date(n * 1000);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? null : new Date(parsed);
+}
+
+function relativeDateFilterRange(value: string) {
+  const [rawPrefix, rawUnit] = value.split('_');
+  const prefix = rawPrefix === 'last' || rawPrefix === 'next' ? rawPrefix : 'this';
+  const unit = rawUnit === 'day' || rawUnit === 'month' || rawUnit === 'year' ? rawUnit : 'week';
+  const today = new Date();
+  let start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let end = start;
+  if (unit === 'week') {
+    const offset = (start.getDay() + 6) % 7;
+    start = new Date(start.getFullYear(), start.getMonth(), start.getDate() - offset);
+    end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  } else if (unit === 'month') {
+    start = new Date(start.getFullYear(), start.getMonth(), 1);
+    end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  } else if (unit === 'year') {
+    start = new Date(start.getFullYear(), 0, 1);
+    end = new Date(start.getFullYear(), 11, 31);
+  }
+  const shift = prefix === 'last' ? -1 : prefix === 'next' ? 1 : 0;
+  if (shift && unit === 'day') {
+    start = new Date(start.getFullYear(), start.getMonth(), start.getDate() + shift);
+    end = start;
+  } else if (shift && unit === 'week') {
+    start = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7 * shift);
+    end = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 7 * shift);
+  } else if (shift && unit === 'month') {
+    start = new Date(start.getFullYear(), start.getMonth() + shift, 1);
+    end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  } else if (shift && unit === 'year') {
+    start = new Date(start.getFullYear() + shift, 0, 1);
+    end = new Date(start.getFullYear(), 11, 31);
+  }
+  return { start, end };
+}
+
+function isEmptyDatabaseFilterValue(text: string, column?: DatabaseColumn) {
+  if (!text) return true;
+  if (column?.type === 'multi_select' || column?.type === 'linked') {
+    return parseMultiSelectValue(text).length === 0;
+  }
+  return false;
 }
 
 function applyViewSorts<T extends { row: DatabaseRow; props: Record<string, any> }>(items: T[], columns: DatabaseColumn[], view: DatabaseViewConfig): T[] {
@@ -5701,7 +5782,7 @@ function slugOptionID(value: string) {
   return hash ? `option-${hash.toString(36)}` : '';
 }
 
-function OptionTag({ option, config, removable, onRemove }: { option: any; config: Record<string, any>; removable?: boolean; onRemove?: () => void }) {
+export function OptionTag({ option, config, removable, onRemove }: { option: any; config: Record<string, any>; removable?: boolean; onRemove?: () => void }) {
   const color = optionColorMap[option.color || 'gray'] || optionColorMap.gray;
   const outline = (option.color_mode || config.color_mode) === 'outline';
   const shape = option.shape || config.option_shape || 'pill';
