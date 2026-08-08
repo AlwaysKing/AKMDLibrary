@@ -900,9 +900,12 @@
 .akdb-option-color-choice { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: var(--akdb-menu-font-size); font-weight: 400; line-height: 1.2; }
 .akdb-option-color-choice:hover, .akdb-option-color-choice.is-active { background: var(--akdb-menu-hover-bg); }
 .akdb-option-color-choice > svg { margin-left: auto; color: var(--akdb-menu-text); }
-.akdb-option-edit-delete { display: flex; align-items: center; gap: 10px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: var(--akdb-menu-font-size); font-weight: 400; line-height: 1.2; }
-.akdb-option-edit-delete:hover { background: var(--akdb-menu-hover-bg); }
-.akdb-option-edit-delete svg { color: var(--akdb-menu-icon); }
+.akdb-option-edit-action, .akdb-option-edit-delete { display: flex; align-items: center; gap: 10px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: var(--akdb-menu-font-size); font-weight: 400; line-height: 1.2; }
+.akdb-option-edit-action:hover, .akdb-option-edit-delete:hover { background: var(--akdb-menu-hover-bg); }
+.akdb-option-edit-action:disabled { cursor: default; color: var(--akdb-menu-text-tertiary); }
+.akdb-option-edit-action:disabled:hover { background: transparent; }
+.akdb-option-edit-action svg, .akdb-option-edit-delete svg { color: var(--akdb-menu-icon); }
+.akdb-option-edit-action:disabled svg { color: var(--akdb-menu-icon-tertiary); }
 .akdb-option-edit-divider { height: 1px; margin: 8px 0; background: var(--akdb-menu-divider); }
 .akdb-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 10px; overflow: auto; padding: 10px; }
 .akdb-board-col { background: #f7f7f5; border-radius: 6px; padding: 8px; min-height: 180px; }

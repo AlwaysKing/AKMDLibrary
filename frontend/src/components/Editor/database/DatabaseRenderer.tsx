@@ -376,14 +376,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const createRow = async (defaults: Record<string, string> = {}) => {
     if (readonly) return;
-    const created = await databasesApi.createRow(spaceSlug, dbId, defaults);
+    const filterDefaults = schema ? createRowDefaultsForViewFilters(schema.columns, activeView) : {};
+    const created = await databasesApi.createRow(spaceSlug, dbId, { ...filterDefaults, ...defaults });
     setRows((prev) => [...prev, created]);
     requestDatabaseImmediateSync();
   };
 
   const createRowBelow = async (rowID: string) => {
     if (readonly) return;
-    const created = await databasesApi.createRow(spaceSlug, dbId, {});
+    const created = await databasesApi.createRow(spaceSlug, dbId, schema ? createRowDefaultsForViewFilters(schema.columns, activeView) : {});
     const ordered = rows.map((row) => row.uuid);
     const next = ordered.filter((id) => id !== created.uuid);
     const index = next.indexOf(rowID);
@@ -937,6 +938,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     if (readonly || col.readonly) return;
     const nextConfig = { ...(col.config || {}), ...patch };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
+    applySchema(nextSchema);
+    requestDatabaseImmediateSync();
+  };
+
+  const updateColumnDefault = async (col: DatabaseColumn, value: any) => {
+    if (readonly || col.readonly) return;
+    const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { default: value });
     applySchema(nextSchema);
     requestDatabaseImmediateSync();
   };
@@ -1598,6 +1606,9 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             onUpdateConfig={(patch) => {
               if (columnMenuColumn.column) void updateColumnConfig(columnMenuColumn.column, patch);
             }}
+            onUpdateDefault={(value) => {
+              if (columnMenuColumn.column) void updateColumnDefault(columnMenuColumn.column, value);
+            }}
             onFilter={() => {
               if (columnMenuColumn.column) onAddFilterColumn?.(columnMenuColumn.column);
               closeColumnMenu();
@@ -1793,6 +1804,163 @@ function matchesAdvancedFilterGroup(item: { row: DatabaseRow; props: Record<stri
     ? matchesAdvancedFilterGroup(item, byID, node)
     : matchesFilterRule(item, byID, node.rule);
   return group.op === 'or' ? children.some(matches) : children.every(matches);
+}
+
+function createRowDefaultsForViewFilters(columns: DatabaseColumn[], view: DatabaseViewConfig): Record<string, string> {
+  const byID = new Map(columns.map((column) => [column.id, column]));
+  const defaults: Record<string, string> = {};
+  const merge = (patch: Record<string, string> | null) => mergeCreateRowDefaults(defaults, patch, byID);
+  for (const filter of view.filters || []) {
+    if (filter.property && !merge(createRowDefaultsForFilterRule(byID, filter))) break;
+  }
+  if (view.advancedFilter) merge(createRowDefaultsForAdvancedFilter(columns, byID, view.advancedFilter));
+  return defaults;
+}
+
+function createRowDefaultsForAdvancedFilter(columns: DatabaseColumn[], byID: Map<string, DatabaseColumn>, group: ViewAdvancedFilterGroup): Record<string, string> | null {
+  const children = group.children.filter((node) => node.type === 'group' || node.rule.property);
+  if (!children.length) return {};
+  if (group.op === 'or') {
+    for (const child of children) {
+      const patch = createRowDefaultsForAdvancedNode(columns, byID, child);
+      if (patch && advancedNodeMatchesDefaults(columns, byID, child, patch)) return patch;
+    }
+    return null;
+  }
+  const defaults: Record<string, string> = {};
+  for (const child of children) {
+    if (!mergeCreateRowDefaults(defaults, createRowDefaultsForAdvancedNode(columns, byID, child), byID)) return null;
+  }
+  return advancedGroupMatchesDefaults(columns, byID, group, defaults) ? defaults : null;
+}
+
+function createRowDefaultsForAdvancedNode(columns: DatabaseColumn[], byID: Map<string, DatabaseColumn>, node: ViewAdvancedFilterNode): Record<string, string> | null {
+  if (node.type === 'group') return createRowDefaultsForAdvancedFilter(columns, byID, node);
+  const patch = createRowDefaultsForFilterRule(byID, node.rule) || {};
+  return advancedNodeMatchesDefaults(columns, byID, node, patch) ? patch : null;
+}
+
+function advancedNodeMatchesDefaults(columns: DatabaseColumn[], byID: Map<string, DatabaseColumn>, node: ViewAdvancedFilterNode, defaults: Record<string, string>) {
+  const row = { uuid: '__new__', values: defaults };
+  const item = { row, props: buildFormulaProps(columns, row) };
+  return node.type === 'group' ? matchesAdvancedFilterGroup(item, byID, node) : matchesFilterRule(item, byID, node.rule);
+}
+
+function advancedGroupMatchesDefaults(columns: DatabaseColumn[], byID: Map<string, DatabaseColumn>, group: ViewAdvancedFilterGroup, defaults: Record<string, string>) {
+  const row = { uuid: '__new__', values: defaults };
+  return matchesAdvancedFilterGroup({ row, props: buildFormulaProps(columns, row) }, byID, group);
+}
+
+function createRowDefaultsForFilterRule(byID: Map<string, DatabaseColumn>, filter: { property: string; op: string; value?: unknown }): Record<string, string> | null {
+  const column = byID.get(filter.property);
+  if (!column || column.readonly || column.type === 'formula' || column.type === 'linked') return null;
+  const value = createRowValueForFilter(column, filter.op, filter.value);
+  return value === undefined ? {} : { [column.id]: value };
+}
+
+function createRowValueForFilter(column: DatabaseColumn, op: string, value: unknown): string | undefined {
+  if (op === 'is_empty') return '';
+  if (op === 'is_not_empty') return nonEmptyCreateRowValue(column);
+  if (column.type === 'date') return createDateValueForFilter(op, value);
+  if (column.type === 'checkbox') {
+    if (op === 'equals') return String(value) === 'false' ? 'false' : 'true';
+    if (op === 'not_equals') return String(value) === 'false' ? 'true' : 'false';
+    return undefined;
+  }
+  if (column.type === 'select' || column.type === 'status') {
+    if (op !== 'equals') return undefined;
+    return firstFilterOptionValue(value);
+  }
+  if (column.type === 'multi_select') {
+    if (op !== 'contains') return undefined;
+    const values = filterOptionValues(value);
+    return values.length ? JSON.stringify(values) : undefined;
+  }
+  const text = String(value ?? '').trim();
+  if (!text) return undefined;
+  if (op === 'equals' || op === 'contains' || op === 'starts_with' || op === 'ends_with') return text;
+  return undefined;
+}
+
+function createDateValueForFilter(op: string, value: unknown): string | undefined {
+  if (op === 'relative_to_today') {
+    const range = relativeDateFilterRange(String(value || 'this_week'));
+    const today = startOfCreateRowDay(new Date());
+    return formatCreateRowDate(today >= range.start && today <= range.end ? today : range.start);
+  }
+  if (op === 'between') {
+    const values = Array.isArray(value) ? value : String(value || '').split(',').filter(Boolean);
+    const start = parseDatabaseFilterDate(String(values[0] || ''));
+    const end = parseDatabaseFilterDate(String(values[1] || ''));
+    if (!start && !end) return undefined;
+    if (!start) return formatCreateRowDate(startOfCreateRowDay(end!));
+    if (!end) return formatCreateRowDate(startOfCreateRowDay(start));
+    return formatCreateRowDate(startOfCreateRowDay(start <= end ? start : end));
+  }
+  const date = parseDatabaseFilterDate(String(value || ''));
+  if (!date) return undefined;
+  const day = startOfCreateRowDay(date);
+  if (op === 'before') day.setDate(day.getDate() - 1);
+  if (op === 'after') day.setDate(day.getDate() + 1);
+  if (op === 'equals' || op === 'before' || op === 'after' || op === 'on_or_before' || op === 'on_or_after') return formatCreateRowDate(day);
+  return undefined;
+}
+
+function nonEmptyCreateRowValue(column: DatabaseColumn): string | undefined {
+  if (column.type === 'checkbox') return 'true';
+  if (column.type === 'multi_select') {
+    const option = firstColumnOption(column);
+    return option ? JSON.stringify([option]) : undefined;
+  }
+  if (column.type === 'select' || column.type === 'status') return firstColumnOption(column);
+  if (column.type === 'date') return formatCreateRowDate(new Date());
+  return '1';
+}
+
+function firstColumnOption(column: DatabaseColumn) {
+  const options = Array.isArray(column.config?.options) ? column.config.options : [];
+  return options[0]?.id ? String(options[0].id) : undefined;
+}
+
+function firstFilterOptionValue(value: unknown): string | undefined {
+  return filterOptionValues(value)[0];
+}
+
+function filterOptionValues(value: unknown): string[] {
+  return (Array.isArray(value) ? value : String(value || '').split(',')).map(String).map((item) => item.trim()).filter(Boolean);
+}
+
+function mergeCreateRowDefaults(target: Record<string, string>, patch: Record<string, string> | null, byID: Map<string, DatabaseColumn>): boolean {
+  if (!patch) return true;
+  for (const [key, value] of Object.entries(patch)) {
+    if (target[key] === undefined || target[key] === value) {
+      target[key] = value;
+      continue;
+    }
+    if (byID.get(key)?.type !== 'multi_select') return false;
+    const mergedMultiSelect = mergeCreateRowMultiSelectValues(target[key], value);
+    if (!mergedMultiSelect) return false;
+    target[key] = mergedMultiSelect;
+  }
+  return true;
+}
+
+function mergeCreateRowMultiSelectValues(current: string, next: string): string | null {
+  const currentValues = parseMultiSelectValue(current);
+  const nextValues = parseMultiSelectValue(next);
+  if (!currentValues.length || !nextValues.length) return null;
+  return JSON.stringify(Array.from(new Set([...currentValues, ...nextValues])));
+}
+
+function startOfCreateRowDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function formatCreateRowDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op: string, value: unknown) {
@@ -2220,6 +2388,7 @@ function ColumnHeaderMenu({
   onReorderOption,
   onDeleteOption,
   onUpdateConfig,
+  onUpdateDefault,
   onChangeAlign,
   onFilter,
   onSort,
@@ -2244,6 +2413,7 @@ function ColumnHeaderMenu({
   onReorderOption: (sourceID: string, targetID: string) => void;
   onDeleteOption: (optionID: string) => void;
   onUpdateConfig: (patch: Record<string, any>) => void;
+  onUpdateDefault: (value: any) => void;
   onChangeAlign: (align: ViewColumnRule['align']) => void;
   onFilter: () => void;
   onSort: () => void;
@@ -2386,6 +2556,7 @@ function ColumnHeaderMenu({
             onReorderOption={onReorderOption}
             onDeleteOption={onDeleteOption}
             onUpdateConfig={onUpdateConfig}
+            onUpdateDefault={onUpdateDefault}
           />,
           document.body,
         )}
@@ -2429,7 +2600,7 @@ function checkboxDisplayStyleLabel(value: unknown) {
   return '复选框';
 }
 
-function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOption, onUpdateOption, onReorderOption, onDeleteOption, onUpdateConfig, onChangeAlign }: { column: DatabaseColumn; align: ViewColumnRule['align']; style: CSSProperties; onMouseEnter: () => void; onCreateOption: (label: string) => Promise<any | null>; onUpdateOption: (optionID: string, patch: Record<string, any>) => void; onReorderOption: (sourceID: string, targetID: string) => void; onDeleteOption: (optionID: string) => void; onUpdateConfig: (patch: Record<string, any>) => void; onChangeAlign: (align: ViewColumnRule['align']) => void }) {
+function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOption, onUpdateOption, onReorderOption, onDeleteOption, onUpdateConfig, onUpdateDefault, onChangeAlign }: { column: DatabaseColumn; align: ViewColumnRule['align']; style: CSSProperties; onMouseEnter: () => void; onCreateOption: (label: string) => Promise<any | null>; onUpdateOption: (optionID: string, patch: Record<string, any>) => void; onReorderOption: (sourceID: string, targetID: string) => void; onDeleteOption: (optionID: string) => void; onUpdateConfig: (patch: Record<string, any>) => void; onUpdateDefault: (value: any) => void; onChangeAlign: (align: ViewColumnRule['align']) => void }) {
   const config = column.config || {};
   const options = Array.isArray(config.options) ? config.options : [];
   const textMaxLength = Math.max(0, Number(config.max_length) || 0);
@@ -3294,6 +3465,8 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
                 option={editingOption}
                 config={config}
                 style={optionEditRect}
+                isDefault={editingOption.id === defaultStatusOptionID}
+                onSetDefault={() => onUpdateDefault(editingOption.id)}
                 onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
                 onDelete={() => {
                   onDeleteOption(editingOption.id);
@@ -4813,7 +4986,7 @@ function CellPopupMask({ onClose }: { onClose: () => void }) {
   );
 }
 
-function OptionEditMenu({ option, config, style, onUpdate, onDelete }: { option: any; config: Record<string, any>; style: CSSProperties; onUpdate?: (patch: Record<string, any>) => void | Promise<void>; onDelete?: () => void | Promise<void> }) {
+function OptionEditMenu({ option, config, style, isDefault, onUpdate, onSetDefault, onDelete }: { option: any; config: Record<string, any>; style: CSSProperties; isDefault?: boolean; onUpdate?: (patch: Record<string, any>) => void | Promise<void>; onSetDefault?: () => void | Promise<void>; onDelete?: () => void | Promise<void> }) {
   const [name, setName] = useState(String(option.value || option.id || ''));
   const [colorOpen, setColorOpen] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
@@ -4951,6 +5124,12 @@ function OptionEditMenu({ option, config, style, onUpdate, onDelete }: { option:
       </div>
 
       <div className="akdb-option-edit-divider" />
+      {onSetDefault && (
+        <button type="button" className="akdb-option-edit-action" disabled={isDefault} onClick={() => void onSetDefault()}>
+          <Check size={17} />
+          <span>{isDefault ? '默认' : '设为默认'}</span>
+        </button>
+      )}
       <button type="button" className="akdb-option-edit-delete" onClick={() => void onDelete?.()}>
         <Trash2 size={17} />
         <span>删除</span>

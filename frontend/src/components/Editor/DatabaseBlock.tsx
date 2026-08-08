@@ -474,7 +474,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
     return (activeView?.filters || []).some((filter) => isEffectiveFilter(filter, byID.get(filter.property))) || !!activeView?.advancedFilter;
   }, [activeView?.filters, schemaColumns]);
   const hasFilterRules = (activeView?.filters || []).length > 0 || !!activeView?.advancedFilter;
-  const showRuleBar = !!activeView && !sourceControlsDisabled && !filterBarHidden;
+  const hasViewRules = hasFilterRules || (activeView?.sorts || []).length > 0;
+  const showRuleBar = !!activeView && hasViewRules && !sourceControlsDisabled && !filterBarHidden;
   const contextView = viewContextMenu ? parsed.views.find((view) => view.id === viewContextMenu.viewId) : null;
   const sourceName = sources.find((source) => source.id === activeSource)?.name || title;
   const stopEditorTableHandles = (event: MouseEvent<HTMLDivElement>) => {
