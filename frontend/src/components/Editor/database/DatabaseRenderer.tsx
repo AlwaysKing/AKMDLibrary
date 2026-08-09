@@ -4,6 +4,7 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ArrowLeft,
   ArrowUpDown,
   CalendarDays,
   Check,
@@ -59,7 +60,7 @@ interface Props {
   onGroupOptionsChange?: (groups: Array<{ key: string; label: string }>) => void;
 }
 
-type CellCoord = { rowIndex: number; colIndex: number };
+type CellCoord = { rowIndex: number; colIndex: number; groupKey?: string; instanceKey?: string };
 type CellRange = { anchor: CellCoord; focus: CellCoord };
 
 const DATABASE_POPUP_SELECTOR = [
@@ -291,6 +292,16 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
         setFillRange(null);
         return;
       }
+      if (event.key === 'Enter' && activeCell && !editingCell && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const column = editableColumnAt(activeCell.colIndex);
+        if (!column) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setCellRange({ anchor: activeCell, focus: activeCell });
+        setFillRange(null);
+        setEditingCell(activeCell);
+        return;
+      }
       if (event.key !== 'Backspace' && event.key !== 'Delete') return;
       const range = cellRange || (activeCell ? { anchor: activeCell, focus: activeCell } : null);
       if (!range || readonly) return;
@@ -321,7 +332,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       document.removeEventListener('copy', handleCopy);
       document.removeEventListener('paste', handlePaste);
     };
-  }, [activeCell, cellRange, readonly, displayRows, visibleColumns]);
+  }, [activeCell, editingCell, cellRange, readonly, displayRows, visibleColumns]);
 
   useEffect(() => {
     if (!selectedRowIDs.size) return;
@@ -503,11 +514,27 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const cellInRange = (coord: CellCoord, range: CellRange | null) => {
     if (!range) return false;
+    if (sameCell(range.anchor, range.focus)) return sameCell(coord, range.anchor);
+    const rangeGroupKey = range.anchor.groupKey && range.anchor.groupKey === range.focus.groupKey ? range.anchor.groupKey : null;
+    if ((range.anchor.groupKey || range.focus.groupKey) && (!rangeGroupKey || coord.groupKey !== rangeGroupKey)) return false;
     const bounds = cellRangeBounds(range);
     return coord.rowIndex >= bounds.rowStart && coord.rowIndex <= bounds.rowEnd && coord.colIndex >= bounds.colStart && coord.colIndex <= bounds.colEnd;
   };
 
-  const sameCell = (a: CellCoord | null, b: CellCoord) => !!a && a.rowIndex === b.rowIndex && a.colIndex === b.colIndex;
+  const sameCell = (a: CellCoord | null, b: CellCoord) => {
+    if (!a || a.rowIndex !== b.rowIndex || a.colIndex !== b.colIndex) return false;
+    return (a.instanceKey || '') === (b.instanceKey || '');
+  };
+
+  const cellCoordFromElement = (el: HTMLTableCellElement | null, colIndexOverride?: number): CellCoord | null => {
+    if (!el) return null;
+    const rowIndex = Number(el.dataset.akdbRowIndex);
+    const colIndex = colIndexOverride ?? Number(el.dataset.akdbColIndex);
+    if (!Number.isFinite(rowIndex) || !Number.isFinite(colIndex)) return null;
+    const groupKey = el.dataset.akdbGroupKey || undefined;
+    const instanceKey = el.dataset.akdbInstanceKey || undefined;
+    return { rowIndex, colIndex, groupKey, instanceKey };
+  };
 
   const displayedCellValue = (rowIndex: number, colIndex: number) => {
     const row = displayRows[rowIndex];
@@ -661,12 +688,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     cellSelectionDragRef.current = { anchor, dragged: false };
 
     const coordFromPoint = (clientX: number, clientY: number): CellCoord | null => {
-      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
-      if (!el) return null;
-      const rowIndex = Number(el.dataset.akdbRowIndex);
-      const colIndex = Number(el.dataset.akdbColIndex);
-      if (!Number.isFinite(rowIndex) || !Number.isFinite(colIndex)) return null;
-      return { rowIndex, colIndex };
+      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]') ?? null;
+      return cellCoordFromElement(el);
     };
 
     const handleMove = (moveEvent: PointerEvent) => {
@@ -712,12 +735,10 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const beginCellPointerFromTable = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
-    const cell = target?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
-    if (!cell) return;
-    const rowIndex = Number(cell.dataset.akdbRowIndex);
-    const colIndex = Number(cell.dataset.akdbColIndex);
-    if (!Number.isFinite(rowIndex) || !Number.isFinite(colIndex)) return;
-    beginCellPointer({ rowIndex, colIndex }, event);
+    const cell = target?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]') ?? null;
+    const coord = cellCoordFromElement(cell);
+    if (!coord) return;
+    beginCellPointer(coord, event);
   };
 
   const beginFillDrag = (coord: CellCoord, event: ReactPointerEvent<HTMLElement>) => {
@@ -728,11 +749,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     fillDragRef.current = { source, target: source };
     setFillRange({ anchor: source, focus: source });
     const targetFromPoint = (clientX: number, clientY: number) => {
-      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]');
-      if (!el) return null;
-      const rowIndex = Number(el.dataset.akdbRowIndex);
-      if (!Number.isFinite(rowIndex)) return null;
-      return { rowIndex, colIndex: source.colIndex };
+      const el = document.elementFromPoint(clientX, clientY)?.closest<HTMLTableCellElement>('td[data-akdb-row-index][data-akdb-col-index]') ?? null;
+      return cellCoordFromElement(el, source.colIndex);
     };
     const handleMove = (moveEvent: PointerEvent) => {
       moveEvent.preventDefault();
@@ -984,7 +1002,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   };
 
   const updateColumnConfig = async (col: DatabaseColumn, patch: Record<string, any>) => {
-    if (readonly || col.readonly) return;
+    if (readonly || (col.readonly && !isSystemDateColumn(col))) return;
     const nextConfig = { ...(col.config || {}), ...patch };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
     applySchema(nextSchema);
@@ -1582,6 +1600,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                       </tr>
                       {group.rows.map((item) => {
                         const { row, display, sourceIndex: rowIndex } = item;
+                        const instanceKey = `${group.key}:${row.uuid}:${rowIndex}`;
                         const rowColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, undefined, 'row');
                         return (
                         <tr
@@ -1594,7 +1613,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                           onContextMenu={(event) => openRowContextMenu(row, event)}
                         >
                           {visibleColumns.map((c, index) => {
-                            const coord = { rowIndex, colIndex: index };
+                            const coord = { rowIndex, colIndex: index, groupKey: group.key, instanceKey };
                             const isActive = sameCell(activeCell, coord);
                             const isEditing = sameCell(editingCell, coord);
                             const isSelected = !isEditing && cellInRange(coord, fillRange || cellRange);
@@ -1648,6 +1667,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                                   ].filter(Boolean).join(' ') || undefined,
                                   'data-akdb-row-index': rowIndex,
                                   'data-akdb-col-index': index,
+                                  'data-akdb-group-key': group.key,
+                                  'data-akdb-instance-key': instanceKey,
                                   'data-akdb-row-id': row.uuid,
                                   'data-akdb-col-id': c.column?.id,
                                   onClickCapture: (event) => {
@@ -1892,6 +1913,10 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
 function columnIconID(column?: DatabaseColumn) {
   return column?.icon || defaultColumnIconID(column);
+}
+
+function isSystemDateColumn(column?: DatabaseColumn) {
+  return column?.type === 'created_time' || column?.type === 'last_edited_time';
 }
 
 function DeleteColumnDialog({ column, loading, onCancel, onConfirm }: { column: DatabaseColumn; loading: boolean; onCancel: () => void; onConfirm: () => void }) {
@@ -2889,6 +2914,7 @@ function ColumnHeaderMenu({
   useDropdownOutsideClose(iconOpen, iconButtonRef, () => setIconOpen(false), '.akdb-column-icon-popover');
   useEffect(() => setName(column.name), [column.id, column.name]);
   const typeDisabled = !column.column || !!column.column.readonly;
+  const propertyDisabled = !column.column || (!!column.column.readonly && !isSystemDateColumn(column.column));
   const selectedIcon = columnIconID(column.column);
   const commitName = () => {
     const nextName = name.trim();
@@ -2991,7 +3017,7 @@ function ColumnHeaderMenu({
           ref={propertyButtonRef}
           type="button"
           className={`akdb-column-menu-item ${propertyOpen ? 'is-active' : ''}`}
-          disabled={typeDisabled}
+          disabled={propertyDisabled}
           onMouseEnter={onOpenProperty}
           onFocus={onOpenProperty}
           aria-haspopup="menu"
@@ -3057,7 +3083,7 @@ function checkboxDisplayStyleLabel(value: unknown) {
   return '复选框';
 }
 
-function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOption, onUpdateOption, onReorderOption, onDeleteOption, onUpdateConfig, onUpdateDefault, onChangeAlign }: { column: DatabaseColumn; align: ViewColumnRule['align']; style: CSSProperties; onMouseEnter: () => void; onCreateOption: (label: string) => Promise<any | null>; onUpdateOption: (optionID: string, patch: Record<string, any>) => void; onReorderOption: (sourceID: string, targetID: string) => void; onDeleteOption: (optionID: string) => void; onUpdateConfig: (patch: Record<string, any>) => void; onUpdateDefault: (value: any) => void; onChangeAlign: (align: ViewColumnRule['align']) => void }) {
+export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOption, onUpdateOption, onReorderOption, onDeleteOption, onUpdateConfig, onUpdateDefault, onChangeAlign }: { column: DatabaseColumn; align: ViewColumnRule['align']; style?: CSSProperties; onMouseEnter?: () => void; onCreateOption: (label: string) => Promise<any | null>; onUpdateOption: (optionID: string, patch: Record<string, any>) => void; onReorderOption: (sourceID: string, targetID: string) => void; onDeleteOption: (optionID: string) => void; onUpdateConfig: (patch: Record<string, any>) => void; onUpdateDefault: (value: any) => void; onChangeAlign: (align: ViewColumnRule['align']) => void }) {
   const config = column.config || {};
   const options = Array.isArray(config.options) ? config.options : [];
   const textMaxLength = Math.max(0, Number(config.max_length) || 0);
@@ -3105,9 +3131,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const dateContentButtonRef = useRef<HTMLButtonElement | null>(null);
   const dateFormatButtonRef = useRef<HTMLButtonElement | null>(null);
   const timezoneButtonRef = useRef<HTMLButtonElement | null>(null);
-  const optionEditAnchorRef = useRef<HTMLButtonElement | null>(null);
   const optionAddButtonRef = useRef<HTMLButtonElement | null>(null);
-  const statusGroupEditAnchorRef = useRef<HTMLDivElement | null>(null);
   const optionListRef = useRef<HTMLDivElement | null>(null);
   const optionDragStateRef = useRef<typeof optionDragState>(null);
   const statusGroupDragStateRef = useRef<typeof statusGroupDragState>(null);
@@ -3131,8 +3155,6 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const dateContentRect = useSubmenuPosition(dateContentOpen, dateContentButtonRef, 220, 220);
   const dateFormatRect = useSubmenuPosition(dateFormatOpen, dateFormatButtonRef, 220, 180);
   const timezoneRect = useSubmenuPosition(timezoneOpen, timezoneButtonRef, 220, 320);
-  const optionEditRect = useSubmenuPosition(!!editingOptionID, optionEditAnchorRef, 252, 430);
-  const statusGroupEditRect = useSubmenuPosition(!!editingStatusGroupID, statusGroupEditAnchorRef, 220, 180);
   const editingOption = options.find((option: any) => option.id === editingOptionID);
   const statusGroups = Array.isArray(config.groups) && config.groups.length
     ? config.groups
@@ -3221,7 +3243,6 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
   const createPropertyOption = async () => {
     setPropertyFlyout(null);
     setEditingStatusGroupID(null);
-    optionEditAnchorRef.current = optionAddButtonRef.current;
     const option = await onCreateOption('新选项');
     if (option?.id) setEditingOptionID(option.id);
   };
@@ -3643,7 +3664,7 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
           </>
         )}
 
-        {column.type === 'date' && (
+        {(column.type === 'date' || isSystemDateColumn(column)) && (
           <>
             <button
               ref={dateContentButtonRef}
@@ -3663,12 +3684,12 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
               aria-expanded={dateContentOpen}
             >
               <span>日期格式</span>
-              <span>{dateDisplayFormatLabel(dateDisplayFormat(config))}</span>
+              <span>{dateDisplayFormatLabel(dateDisplayFormatForColumn(column, config))}</span>
               <ChevronRight size={15} />
             </button>
             {dateContentOpen && dateContentRect && createPortal(
               <DateDisplayFormatSubmenu
-                value={dateDisplayFormat(config)}
+                value={dateDisplayFormatForColumn(column, config)}
                 style={dateContentRect}
                 onMouseEnter={() => setPropertyFlyout('dateDisplayFormat')}
                 onMouseLeave={() => undefined}
@@ -3743,199 +3764,193 @@ function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCreateOpt
         )}
 
         {(column.type === 'select' || column.type === 'multi_select') && (
-          <>
-            {renderAlignControl()}
-            <div className="akdb-column-property-options-head akdb-menu-caption" onMouseEnter={() => setPropertyFlyout(null)}>
-              <span>选项</span>
-              <button ref={optionAddButtonRef} type="button" aria-label="添加选项" onClick={createPropertyOption}>
-                <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-column-property-options-plus">
-                  <path d="M10 3.59a.66.66 0 0 1 .66.66v5.09h5.09a.66.66 0 0 1 0 1.32h-5.09v5.09a.66.66 0 0 1-1.32 0v-5.09H4.25a.66.66 0 0 1 0-1.32h5.09V4.25a.66.66 0 0 1 .66-.66" />
-                </svg>
-              </button>
-            </div>
-            <div ref={optionListRef} className="akdb-column-property-options" onMouseEnter={() => setPropertyFlyout(null)}>
-              {options.map((option: any, index: number) => {
-                const isDragging = optionDragState?.sourceID === option.id;
-                let translateY = 0;
-                if (optionDragState) {
-                  if (isDragging) translateY = optionDragState.currentTop - optionDragState.initialTop;
-                  else if (optionDragState.sourceIndex < optionDragState.targetIndex && index > optionDragState.sourceIndex && index <= optionDragState.targetIndex) translateY = -optionDragState.step;
-                  else if (optionDragState.targetIndex < optionDragState.sourceIndex && index >= optionDragState.targetIndex && index < optionDragState.sourceIndex) translateY = optionDragState.step;
-                }
-                return (
-                  <button
-                    key={option.id}
-                    ref={editingOptionID === option.id ? optionEditAnchorRef : undefined}
-                    data-option-id={option.id}
-                    type="button"
-                    className={`akdb-column-property-option ${editingOptionID === option.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
-                    style={{ transform: translateY ? `translateY(${translateY}px)` : undefined }}
-                    aria-haspopup="dialog"
-                    aria-expanded={editingOptionID === option.id}
-                    onClick={(event) => {
-                      if (suppressOptionClickRef.current) return;
-                      setPropertyFlyout(null);
-                      optionEditAnchorRef.current = event.currentTarget;
-                      setEditingOptionID((current) => current === option.id ? null : option.id);
-                    }}
-                  >
-                    <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
-                    <span className="akdb-column-property-option-tag"><OptionTag option={option} config={config} /></span>
-                    <ChevronRight size={15} />
-                  </button>
-                );
-              })}
-              {!options.length && <div className="akdb-column-property-empty">暂无选项</div>}
-            </div>
-            {editingOption && optionEditRect && createPortal(
-              <OptionEditMenu
-                option={editingOption}
-                config={config}
-                style={optionEditRect}
-                onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
-                onDelete={() => {
-                  onDeleteOption(editingOption.id);
-                  setEditingOptionID(null);
-                }}
-              />,
-              document.body,
-            )}
-          </>
+          editingOption ? (
+            <OptionEditMenu
+              option={editingOption}
+              config={config}
+              inline
+              onBack={() => setEditingOptionID(null)}
+              onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
+              onDelete={() => {
+                onDeleteOption(editingOption.id);
+                setEditingOptionID(null);
+              }}
+            />
+          ) : (
+            <>
+              {renderAlignControl()}
+              <div className="akdb-column-property-options-head akdb-menu-caption" onMouseEnter={() => setPropertyFlyout(null)}>
+                <span>选项</span>
+                <button ref={optionAddButtonRef} type="button" aria-label="添加选项" onClick={createPropertyOption}>
+                  <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-column-property-options-plus">
+                    <path d="M10 3.59a.66.66 0 0 1 .66.66v5.09h5.09a.66.66 0 0 1 0 1.32h-5.09v5.09a.66.66 0 0 1-1.32 0v-5.09H4.25a.66.66 0 0 1 0-1.32h5.09V4.25a.66.66 0 0 1 .66-.66" />
+                  </svg>
+                </button>
+              </div>
+              <div ref={optionListRef} className="akdb-column-property-options" onMouseEnter={() => setPropertyFlyout(null)}>
+                {options.map((option: any, index: number) => {
+                  const isDragging = optionDragState?.sourceID === option.id;
+                  let translateY = 0;
+                  if (optionDragState) {
+                    if (isDragging) translateY = optionDragState.currentTop - optionDragState.initialTop;
+                    else if (optionDragState.sourceIndex < optionDragState.targetIndex && index > optionDragState.sourceIndex && index <= optionDragState.targetIndex) translateY = -optionDragState.step;
+                    else if (optionDragState.targetIndex < optionDragState.sourceIndex && index >= optionDragState.targetIndex && index < optionDragState.sourceIndex) translateY = optionDragState.step;
+                  }
+                  return (
+                    <button
+                      key={option.id}
+                      data-option-id={option.id}
+                      type="button"
+                      className={`akdb-column-property-option ${editingOptionID === option.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
+                      style={{ transform: translateY ? `translateY(${translateY}px)` : undefined }}
+                      aria-haspopup="dialog"
+                      aria-expanded={editingOptionID === option.id}
+                      onClick={() => {
+                        if (suppressOptionClickRef.current) return;
+                        setPropertyFlyout(null);
+                        setEditingOptionID((current) => current === option.id ? null : option.id);
+                      }}
+                    >
+                      <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
+                      <span className="akdb-column-property-option-tag"><OptionTag option={option} config={config} /></span>
+                      <ChevronRight size={15} />
+                    </button>
+                  );
+                })}
+                {!options.length && <div className="akdb-column-property-empty">暂无选项</div>}
+              </div>
+            </>
+          )
         )}
 
         {column.type === 'status' && (
-          <>
-            {renderAlignControl()}
-            <div className="akdb-column-property-divider" />
-            <div ref={optionListRef} className="akdb-status-property-groups" onMouseEnter={() => setPropertyFlyout(null)}>
-              {statusGroups.map((group: any, groupIndex: number) => {
-                const groupID = String(group.id || group.name || `status-group-${groupIndex}`);
-                const groupOptions = (group.option_ids || []).map((id: string) => statusOptionByID.get(id)).filter(Boolean);
-                const isGroupDragging = statusGroupDragState?.sourceID === groupID;
-                let groupTranslateY = 0;
-                if (statusGroupDragState) {
-                  if (isGroupDragging) groupTranslateY = statusGroupDragState.currentTop - statusGroupDragState.initialTop;
-                  else if (statusGroupDragState.sourceIndex < statusGroupDragState.targetIndex && groupIndex > statusGroupDragState.sourceIndex && groupIndex <= statusGroupDragState.targetIndex) groupTranslateY = -statusGroupDragState.step;
-                  else if (statusGroupDragState.targetIndex < statusGroupDragState.sourceIndex && groupIndex >= statusGroupDragState.targetIndex && groupIndex < statusGroupDragState.sourceIndex) groupTranslateY = statusGroupDragState.step;
-                }
-                return (
-                  <div
-                    key={groupID}
-                    data-status-group-id={groupID}
-                    className={`akdb-status-property-group ${isGroupDragging ? 'is-dragging' : ''}`}
-                    style={{ transform: groupTranslateY ? `translateY(${groupTranslateY}px)` : undefined }}
-                  >
+          editingStatusGroup ? (
+            <StatusGroupEditMenu
+              group={editingStatusGroup}
+              inline
+              onBack={() => setEditingStatusGroupID(null)}
+              onRename={(name) => updateStatusGroup(editingStatusGroupID!, { name })}
+              onDelete={() => deleteStatusGroup(editingStatusGroupID!)}
+            />
+          ) : editingOption ? (
+            <OptionEditMenu
+              option={editingOption}
+              config={config}
+              inline
+              isDefault={editingOption.id === defaultStatusOptionID}
+              onBack={() => setEditingOptionID(null)}
+              onSetDefault={() => onUpdateDefault(editingOption.id)}
+              onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
+              onDelete={() => {
+                onDeleteOption(editingOption.id);
+                setEditingOptionID(null);
+              }}
+            />
+          ) : (
+            <>
+              {renderAlignControl()}
+              <div className="akdb-column-property-divider" />
+              <div ref={optionListRef} className="akdb-status-property-groups" onMouseEnter={() => setPropertyFlyout(null)}>
+                {statusGroups.map((group: any, groupIndex: number) => {
+                  const groupID = String(group.id || group.name || `status-group-${groupIndex}`);
+                  const groupOptions = (group.option_ids || []).map((id: string) => statusOptionByID.get(id)).filter(Boolean);
+                  const isGroupDragging = statusGroupDragState?.sourceID === groupID;
+                  let groupTranslateY = 0;
+                  if (statusGroupDragState) {
+                    if (isGroupDragging) groupTranslateY = statusGroupDragState.currentTop - statusGroupDragState.initialTop;
+                    else if (statusGroupDragState.sourceIndex < statusGroupDragState.targetIndex && groupIndex > statusGroupDragState.sourceIndex && groupIndex <= statusGroupDragState.targetIndex) groupTranslateY = -statusGroupDragState.step;
+                    else if (statusGroupDragState.targetIndex < statusGroupDragState.sourceIndex && groupIndex >= statusGroupDragState.targetIndex && groupIndex < statusGroupDragState.sourceIndex) groupTranslateY = statusGroupDragState.step;
+                  }
+                  return (
                     <div
-                      ref={editingStatusGroupID === groupID ? statusGroupEditAnchorRef : undefined}
-                      role="button"
-                      tabIndex={0}
-                      className={`akdb-status-property-group-head akdb-menu-caption ${editingStatusGroupID === groupID ? 'is-active' : ''}`}
-                      aria-haspopup="dialog"
-                      aria-expanded={editingStatusGroupID === groupID}
-                      onClick={(event) => {
-                        if (suppressStatusGroupClickRef.current) return;
-                        setPropertyFlyout(null);
-                        setEditingOptionID(null);
-                        statusGroupEditAnchorRef.current = event.currentTarget;
-                        setEditingStatusGroupID((current) => current === groupID ? null : groupID);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter' && event.key !== ' ') return;
-                        event.preventDefault();
-                        setPropertyFlyout(null);
-                        setEditingOptionID(null);
-                        statusGroupEditAnchorRef.current = event.currentTarget;
-                        setEditingStatusGroupID((current) => current === groupID ? null : groupID);
-                      }}
+                      key={groupID}
+                      data-status-group-id={groupID}
+                      className={`akdb-status-property-group ${isGroupDragging ? 'is-dragging' : ''}`}
+                      style={{ transform: groupTranslateY ? `translateY(${groupTranslateY}px)` : undefined }}
                     >
-                      <GripVertical size={16} className="akdb-status-property-group-handle" onPointerDown={(event) => beginStatusGroupDrag(groupID, event)} />
-                      <span>{group.name || '未命名分组'}</span>
-                      <button
-                        type="button"
-                        className="akdb-status-property-group-add"
-                        aria-label="添加状态"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          createStatusGroupOption(groupID);
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className={`akdb-status-property-group-head akdb-menu-caption ${editingStatusGroupID === groupID ? 'is-active' : ''}`}
+                        aria-haspopup="dialog"
+                        aria-expanded={editingStatusGroupID === groupID}
+                        onClick={() => {
+                          if (suppressStatusGroupClickRef.current) return;
+                          setPropertyFlyout(null);
+                          setEditingOptionID(null);
+                          setEditingStatusGroupID((current) => current === groupID ? null : groupID);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return;
+                          event.preventDefault();
+                          setPropertyFlyout(null);
+                          setEditingOptionID(null);
+                          setEditingStatusGroupID((current) => current === groupID ? null : groupID);
                         }}
                       >
-                        <Plus size={16} strokeWidth={1.8} />
-                      </button>
-                      <ChevronRight size={15} />
+                        <GripVertical size={16} className="akdb-status-property-group-handle" onPointerDown={(event) => beginStatusGroupDrag(groupID, event)} />
+                        <span>{group.name || '未命名分组'}</span>
+                        <button
+                          type="button"
+                          className="akdb-status-property-group-add"
+                          aria-label="添加状态"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            createStatusGroupOption(groupID);
+                          }}
+                        >
+                          <Plus size={16} strokeWidth={1.8} />
+                        </button>
+                        <ChevronRight size={15} />
+                      </div>
+                      <div className="akdb-status-property-options">
+                        {groupOptions.map((option: any) => {
+                          const index = statusVisibleOptionIDs.indexOf(option.id);
+                          const isDragging = optionDragState?.sourceID === option.id;
+                          let translateY = 0;
+                          if (optionDragState && index >= 0) {
+                            if (isDragging) translateY = optionDragState.currentTop - optionDragState.initialTop;
+                            else if (optionDragState.sourceIndex < optionDragState.targetIndex && index > optionDragState.sourceIndex && index <= optionDragState.targetIndex) translateY = -optionDragState.step;
+                            else if (optionDragState.targetIndex < optionDragState.sourceIndex && index >= optionDragState.targetIndex && index < optionDragState.sourceIndex) translateY = optionDragState.step;
+                          }
+                          const isDefault = option.id === defaultStatusOptionID;
+                          return (
+                            <button
+                              key={option.id}
+                              data-option-id={option.id}
+                              data-group-id={groupID}
+                              type="button"
+                              className={`akdb-column-property-option akdb-status-property-option ${editingOptionID === option.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
+                              style={{ transform: translateY ? `translateY(${translateY}px)` : undefined }}
+                              aria-haspopup="dialog"
+                              aria-expanded={editingOptionID === option.id}
+                              onClick={() => {
+                                if (suppressOptionClickRef.current) return;
+                                setPropertyFlyout(null);
+                                setEditingOptionID((current) => current === option.id ? null : option.id);
+                              }}
+                            >
+                              <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
+                              <span className="akdb-column-property-option-tag"><StatusPropertyTag option={option} config={config} /></span>
+                              <span className="akdb-status-property-default">{isDefault ? '默认' : ''}</span>
+                              <ChevronRight size={15} />
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="akdb-status-property-options">
-                      {groupOptions.map((option: any) => {
-                        const index = statusVisibleOptionIDs.indexOf(option.id);
-                        const isDragging = optionDragState?.sourceID === option.id;
-                        let translateY = 0;
-                        if (optionDragState && index >= 0) {
-                          if (isDragging) translateY = optionDragState.currentTop - optionDragState.initialTop;
-                          else if (optionDragState.sourceIndex < optionDragState.targetIndex && index > optionDragState.sourceIndex && index <= optionDragState.targetIndex) translateY = -optionDragState.step;
-                          else if (optionDragState.targetIndex < optionDragState.sourceIndex && index >= optionDragState.targetIndex && index < optionDragState.sourceIndex) translateY = optionDragState.step;
-                        }
-                        const isDefault = option.id === defaultStatusOptionID;
-                        return (
-                          <button
-                            key={option.id}
-                            ref={editingOptionID === option.id ? optionEditAnchorRef : undefined}
-                            data-option-id={option.id}
-                            data-group-id={groupID}
-                            type="button"
-                            className={`akdb-column-property-option akdb-status-property-option ${editingOptionID === option.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
-                            style={{ transform: translateY ? `translateY(${translateY}px)` : undefined }}
-                            aria-haspopup="dialog"
-                            aria-expanded={editingOptionID === option.id}
-                            onClick={(event) => {
-                              if (suppressOptionClickRef.current) return;
-                              setPropertyFlyout(null);
-                              optionEditAnchorRef.current = event.currentTarget;
-                              setEditingOptionID((current) => current === option.id ? null : option.id);
-                            }}
-                          >
-                            <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
-                            <span className="akdb-column-property-option-tag"><StatusPropertyTag option={option} config={config} /></span>
-                            <span className="akdb-status-property-default">{isDefault ? '默认' : ''}</span>
-                            <ChevronRight size={15} />
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-              <button type="button" className="akdb-status-property-add-group" onClick={createStatusGroup}>
-                <Plus size={16} strokeWidth={1.8} />
-                <span>添加分组</span>
-              </button>
-            </div>
-            {editingStatusGroup && statusGroupEditRect && createPortal(
-              <StatusGroupEditMenu
-                group={editingStatusGroup}
-                style={statusGroupEditRect}
-                onRename={(name) => updateStatusGroup(editingStatusGroupID!, { name })}
-                onDelete={() => deleteStatusGroup(editingStatusGroupID!)}
-              />,
-              document.body,
-            )}
-            {editingOption && optionEditRect && createPortal(
-              <OptionEditMenu
-                option={editingOption}
-                config={config}
-                style={optionEditRect}
-                isDefault={editingOption.id === defaultStatusOptionID}
-                onSetDefault={() => onUpdateDefault(editingOption.id)}
-                onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
-                onDelete={() => {
-                  onDeleteOption(editingOption.id);
-                  setEditingOptionID(null);
-                }}
-              />,
-              document.body,
-            )}
-          </>
+                  );
+                })}
+                <button type="button" className="akdb-status-property-add-group" onClick={createStatusGroup}>
+                  <Plus size={16} strokeWidth={1.8} />
+                  <span>添加分组</span>
+                </button>
+              </div>
+            </>
+          )
         )}
 
-        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && column.type !== 'checkbox' && renderAlignControl()}
+        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && !isSystemDateColumn(column) && column.type !== 'checkbox' && renderAlignControl()}
 
         {column.type === 'text' && (
           <div className="akdb-column-property-limit">
@@ -4037,6 +4052,13 @@ function dateDisplayFormat(config: Record<string, any>): DateDisplayFormat {
   if (value === 'none' || value === 'slash' || value === 'chinese' || value === 'dash') return value;
   if (config.date_content === 'time') return 'none';
   return 'chinese';
+}
+
+function dateDisplayFormatForColumn(column: DatabaseColumn | undefined, config: Record<string, any>): DateDisplayFormat {
+  const value = config.date_format;
+  if (value === 'none' || value === 'slash' || value === 'chinese' || value === 'dash') return value;
+  if (isSystemDateColumn(column)) return 'slash';
+  return dateDisplayFormat(config);
 }
 
 function timeDisplayFormat(config: Record<string, any>): TimeDisplayFormat {
@@ -4506,6 +4528,10 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
     if (editingActive && !editing && column && column.type !== 'checkbox' && column.type !== 'select' && column.type !== 'status' && column.type !== 'multi_select' && column.type !== 'date') {
       setEditing(true);
       requestAnimationFrame(() => {
+        if (column.type === 'text' && !column.config?.secret) {
+          updateTextEditorRect();
+          return;
+        }
         inputRef.current?.focus();
         inputRef.current?.select();
       });
@@ -5443,7 +5469,7 @@ function CellPopupMask({ onClose }: { onClose: () => void }) {
   );
 }
 
-function OptionEditMenu({ option, config, style, isDefault, onUpdate, onSetDefault, onDelete }: { option: any; config: Record<string, any>; style: CSSProperties; isDefault?: boolean; onUpdate?: (patch: Record<string, any>) => void | Promise<void>; onSetDefault?: () => void | Promise<void>; onDelete?: () => void | Promise<void> }) {
+function OptionEditMenu({ option, config, style, inline = false, isDefault, onBack, onUpdate, onSetDefault, onDelete }: { option: any; config: Record<string, any>; style?: CSSProperties; inline?: boolean; isDefault?: boolean; onBack?: () => void; onUpdate?: (patch: Record<string, any>) => void | Promise<void>; onSetDefault?: () => void | Promise<void>; onDelete?: () => void | Promise<void> }) {
   const [name, setName] = useState(String(option.value || option.id || ''));
   const [colorOpen, setColorOpen] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
@@ -5464,7 +5490,15 @@ function OptionEditMenu({ option, config, style, isDefault, onUpdate, onSetDefau
     if (!next) setName(String(option.value || option.id || ''));
   };
   return (
-    <div className="akdb-option-edit-menu" role="dialog" aria-label="修改选项" style={style} onPointerDown={(event) => event.stopPropagation()}>
+    <div className={`akdb-option-edit-menu ${inline ? 'is-inline' : ''}`} role="dialog" aria-label="修改选项" style={inline ? undefined : style} onPointerDown={(event) => event.stopPropagation()}>
+      {inline && (
+        <div className="akdb-option-edit-head akdb-option-edit-head-inline">
+          <button type="button" className="akdb-option-edit-back" aria-label="返回" onClick={onBack}>
+            <ArrowLeft size={17} />
+          </button>
+          <div className="akdb-option-edit-title">修改选项</div>
+        </div>
+      )}
       <div className="akdb-option-edit-head">
         <button
           ref={iconButtonRef}
@@ -6008,15 +6042,31 @@ function parseDateValue(value: string) {
 function formatDateValue(value: string, column?: DatabaseColumn) {
   const date = parseDateValue(value);
   if (!date) return value || '';
-  const systemDate = column?.type === 'created_time' || column?.type === 'last_edited_time';
   const config = column?.config || {};
-  const dateFormat = systemDate ? 'chinese' : dateDisplayFormat(config);
-  const timeFormat = systemDate ? 'h24_colon_seconds' : timeDisplayFormat(config);
+  const displayDate = dateInConfiguredTimezone(date, config.timezone);
+  const dateFormat = dateDisplayFormatForColumn(column, config);
+  const timeFormat = timeDisplayFormat(config);
   const parts = [
-    formatDatePart(date, dateFormat),
-    formatTimePart(date, timeFormat),
+    formatDatePart(displayDate, dateFormat),
+    formatTimePart(displayDate, timeFormat),
   ].filter(Boolean);
   return parts.join(' ');
+}
+
+function dateInConfiguredTimezone(date: Date, timezone: unknown) {
+  const targetOffset = timezoneOffsetMinutes(timezone);
+  if (targetOffset == null) return date;
+  const localOffset = -date.getTimezoneOffset();
+  return new Date(date.getTime() + (targetOffset - localOffset) * 60_000);
+}
+
+function timezoneOffsetMinutes(timezone: unknown) {
+  if (typeof timezone !== 'string') return null;
+  const match = timezone.trim().match(/^GMT([+-])(\d{1,2})$/);
+  if (!match) return null;
+  const hours = Number(match[2]);
+  if (!Number.isInteger(hours) || hours > 14) return null;
+  return (match[1] === '-' ? -1 : 1) * hours * 60;
 }
 
 function formatDatePart(date: Date, format: DateDisplayFormat) {
@@ -6498,7 +6548,7 @@ const optionColorModeChoices = [
   { id: 'outline', label: '边框' },
 ];
 
-function createOptionConfig(value: string, options: any[]) {
+export function createOptionConfig(value: string, options: any[]) {
   const idBase = slugOptionID(value) || 'option';
   const existingIDs = new Set(options.map((option) => String(option.id || '')));
   let id = idBase;
@@ -6563,7 +6613,7 @@ export function OptionTag({ option, config, removable, onRemove }: { option: any
   );
 }
 
-function StatusGroupEditMenu({ group, style, onRename, onDelete }: { group: any; style: CSSProperties; onRename: (name: string) => void; onDelete: () => void }) {
+function StatusGroupEditMenu({ group, style, inline = false, onBack, onRename, onDelete }: { group: any; style?: CSSProperties; inline?: boolean; onBack?: () => void; onRename: (name: string) => void; onDelete: () => void }) {
   const [name, setName] = useState(String(group.name || '未命名分组'));
   useEffect(() => setName(String(group.name || '未命名分组')), [group.id, group.name]);
   const commitName = () => {
@@ -6572,7 +6622,15 @@ function StatusGroupEditMenu({ group, style, onRename, onDelete }: { group: any;
     if (!next) setName(String(group.name || '未命名分组'));
   };
   return (
-    <div className="akdb-status-group-edit-menu" role="dialog" aria-label="编辑状态分组" style={style} onPointerDown={(event) => event.stopPropagation()}>
+    <div className={`akdb-status-group-edit-menu ${inline ? 'is-inline' : ''}`} role="dialog" aria-label="编辑状态分组" style={inline ? undefined : style} onPointerDown={(event) => event.stopPropagation()}>
+      {inline && (
+        <div className="akdb-option-edit-head akdb-option-edit-head-inline">
+          <button type="button" className="akdb-option-edit-back" aria-label="返回" onClick={onBack}>
+            <ArrowLeft size={17} />
+          </button>
+          <div className="akdb-option-edit-title">编辑状态分组</div>
+        </div>
+      )}
       <div className="akdb-status-group-name">
         <input
           value={name}

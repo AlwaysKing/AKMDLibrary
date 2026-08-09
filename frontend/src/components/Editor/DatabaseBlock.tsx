@@ -6,8 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
-import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, OptionTag, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
-import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
+import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
+import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
 
 const optionColorMap: Record<string, { bg: string; fg: string; border: string }> = {
@@ -61,7 +61,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
-  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source'>('main');
+  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' | 'properties'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
@@ -166,7 +166,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   useDropdownOutsideClose(viewSettingsOpen, viewSettingsButtonRef, () => {
     setViewSettingsOpen(false);
     setViewSettingsPane('main');
-  }, '.akdb-view-settings-menu, .akdb-sort-rules-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu, .akdb-color-rules-menu, .akdb-color-rule-editor, .akdb-color-rule-dropdown-menu');
+  }, '.akdb-view-settings-menu, .akdb-sort-rules-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu, .akdb-color-rules-menu, .akdb-color-rule-editor, .akdb-color-rule-dropdown-menu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-option-color-palette, .akdb-column-icon-popover, .akdb-date-picker, .akdb-date-picker-submenu, .akdb-timezone-submenu');
 
   useEffect(() => {
     if (!viewContextMenu) return;
@@ -362,7 +362,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     requestDatabaseImmediateSync();
   };
 
-  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' = 'main') => {
+  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' | 'properties' = 'main') => {
     setFilterOpen(false);
     setSortOpen(false);
     setViewContextMenu(null);
@@ -583,7 +583,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     }
     updateView({
       ...activeView,
-      columns: [...activeView.columns, { property: column.id, width: 150 }],
+      columns: [...activeView.columns, { property: column.id, width: defaultViewColumnWidth(column) }],
     });
   };
 
@@ -598,12 +598,90 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const reorderSourceColumns = (orderedColumnIDs: string[]) => {
     if (!activeView) return;
     const ruleByProperty = new Map(activeView.columns.filter((rule) => rule.property).map((rule) => [rule.property!, rule]));
-    const nextSourceRules = orderedColumnIDs.map((id) => ruleByProperty.get(id) || { property: id, hidden: true, width: 150 });
+    const nextSourceRules = orderedColumnIDs.map((id) => {
+      const column = schemaColumns.find((item) => item.id === id);
+      return ruleByProperty.get(id) || { property: id, hidden: true, width: defaultViewColumnWidth(column) };
+    });
     const nonSourceRules = activeView.columns.filter((rule) => !rule.property);
     updateView({
       ...activeView,
       columns: [...nextSourceRules, ...nonSourceRules],
     });
+  };
+
+  const updateSourceColumn = async (columnID: string, patch: Partial<DatabaseColumn>) => {
+    if (!slug || !activeSource || viewLocked) return;
+    const column = schemaColumns.find((item) => item.id === columnID);
+    const configOnlyPatch = Object.keys(patch).every((key) => key === 'config');
+    if (!column || (column.readonly && (!isSystemDateColumn(column) || !configOnlyPatch))) return;
+    const nextSchema = await databasesApi.updateColumn(slug, activeSource, columnID, patch);
+    setSchemaColumns(nextSchema.columns || []);
+    requestDatabaseImmediateSync();
+  };
+
+  const createSourceColumnOption = async (column: DatabaseColumn, label: string) => {
+    if (viewLocked || column.readonly || !['select', 'multi_select', 'status'].includes(column.type)) return null;
+    const value = label.trim();
+    if (!value) return null;
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    const existing = options.find((option: any) => String(option.value || '').trim().toLowerCase() === value.toLowerCase());
+    if (existing) return existing;
+    const option = createOptionConfig(value, options);
+    await updateSourceColumn(column.id, { config: { ...(column.config || {}), options: [...options, option] } });
+    return option;
+  };
+
+  const updateSourceColumnOption = async (column: DatabaseColumn, optionID: string, patch: Record<string, any>) => {
+    if (viewLocked || column.readonly || !['select', 'multi_select', 'status'].includes(column.type)) return;
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    await updateSourceColumn(column.id, {
+      config: {
+        ...(column.config || {}),
+        options: options.map((option: any) => option.id === optionID ? { ...option, ...patch } : option),
+      },
+    });
+  };
+
+  const reorderSourceColumnOption = async (column: DatabaseColumn, sourceID: string, targetID: string) => {
+    if (viewLocked || column.readonly || !['select', 'multi_select', 'status'].includes(column.type)) return;
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    const sourceIndex = options.findIndex((option: any) => option.id === sourceID);
+    const targetIndex = options.findIndex((option: any) => option.id === targetID);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const nextOptions = [...options];
+    const [moved] = nextOptions.splice(sourceIndex, 1);
+    nextOptions.splice(targetIndex, 0, moved);
+    await updateSourceColumn(column.id, { config: { ...(column.config || {}), options: nextOptions } });
+  };
+
+  const deleteSourceColumnOption = async (column: DatabaseColumn, optionID: string) => {
+    if (viewLocked || column.readonly || !['select', 'multi_select', 'status'].includes(column.type)) return;
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    await updateSourceColumn(column.id, {
+      config: {
+        ...(column.config || {}),
+        options: options.filter((option: any) => option.id !== optionID),
+        groups: Array.isArray(column.config?.groups)
+          ? column.config.groups.map((group: any) => ({ ...group, option_ids: (group.option_ids || []).filter((id: string) => id !== optionID) }))
+          : column.config?.groups,
+      },
+    });
+  };
+
+  const reorderSchemaColumns = async (orderedColumnIDs: string[]) => {
+    if (!slug || !activeSource || viewLocked || orderedColumnIDs.length < 2) return;
+    const nextSchema = await databasesApi.reorderColumns(slug, activeSource, orderedColumnIDs);
+    setSchemaColumns(nextSchema.columns || []);
+    requestDatabaseImmediateSync();
+  };
+
+  const updateViewColumnAlign = (columnID: string, align: ViewColumnRule['align']) => {
+    if (!activeView) return;
+    const hasRule = activeView.columns.some((rule) => rule.property === columnID);
+    const nextColumns = hasRule
+      ? activeView.columns.map((rule) => rule.property === columnID ? { ...rule, align } : rule)
+      : [...activeView.columns, { property: columnID, hidden: true, width: defaultViewColumnWidth(schemaColumns.find((column) => column.id === columnID)), align }];
+    updateView({ ...activeView, columns: nextColumns });
   };
 
   const renameTitle = (value: string) => {
@@ -849,6 +927,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
             setActiveSortId(null);
             setAdvancedFilterOpen(false);
           }}
+          onOpenProperties={() => {
+            setViewSettingsPane('properties');
+            setFilterOpen(false);
+            setSortOpen(false);
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
           onPickSource={(sourceId) => {
             if (!canChangeSource) return;
             void changeViewSource(activeView, sourceId);
@@ -865,6 +951,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onToggle={toggleSourceColumnVisibility}
           onHideAll={hideAllSourceColumns}
           onReorder={reorderSourceColumns}
+          onReorderProperties={reorderSchemaColumns}
+          onUpdateColumnConfig={(column, patch) => updateSourceColumn(column.id, { config: { ...(column.config || {}), ...patch } })}
+          onUpdateColumnDefault={(column, value) => updateSourceColumn(column.id, { default: value })}
+          onCreateColumnOption={createSourceColumnOption}
+          onUpdateColumnOption={updateSourceColumnOption}
+          onReorderColumnOption={reorderSourceColumnOption}
+          onDeleteColumnOption={deleteSourceColumnOption}
+          onChangeColumnAlign={updateViewColumnAlign}
           filterQuery={filterQuery}
           filterColumns={filterColumns}
           onAddFilter={() => {
@@ -4067,6 +4161,14 @@ function viewSettingsColumnIconID(column?: DatabaseColumn) {
   return column?.icon || defaultColumnIconID(column);
 }
 
+function isSystemDateColumn(column?: DatabaseColumn) {
+  return column?.type === 'created_time' || column?.type === 'last_edited_time';
+}
+
+function defaultViewColumnWidth(column?: DatabaseColumn) {
+  return isSystemDateColumn(column) ? 220 : 150;
+}
+
 function ViewSettingsMenu({
   schemaName,
   sources,
@@ -4084,6 +4186,7 @@ function ViewSettingsMenu({
   onOpenGroup,
   onOpenColor,
   onOpenSource,
+  onOpenProperties,
   onPickSource,
   onBack,
   onClose,
@@ -4094,6 +4197,14 @@ function ViewSettingsMenu({
   onToggle,
   onHideAll,
   onReorder,
+  onReorderProperties,
+  onUpdateColumnConfig,
+  onUpdateColumnDefault,
+  onCreateColumnOption,
+  onUpdateColumnOption,
+  onReorderColumnOption,
+  onDeleteColumnOption,
+  onChangeColumnAlign,
   filterQuery,
   filterColumns,
   onAddFilter,
@@ -4132,7 +4243,7 @@ function ViewSettingsMenu({
   columns: DatabaseColumn[];
   runtimeGroupOptions: Array<{ key: string; label: string }>;
   activeView: DatabaseViewConfig;
-  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source';
+  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' | 'properties';
   focusNameRequest: number;
   onOpenLayout: () => void;
   onOpenVisibility: () => void;
@@ -4141,6 +4252,7 @@ function ViewSettingsMenu({
   onOpenGroup: () => void;
   onOpenColor: () => void;
   onOpenSource: () => void;
+  onOpenProperties: () => void;
   onPickSource: (sourceId: string) => void;
   onBack: () => void;
   onClose: () => void;
@@ -4151,6 +4263,14 @@ function ViewSettingsMenu({
   onToggle: (column: DatabaseColumn) => void;
   onHideAll: () => void;
   onReorder: (orderedColumnIDs: string[]) => void;
+  onReorderProperties: (orderedColumnIDs: string[]) => void;
+  onUpdateColumnConfig: (column: DatabaseColumn, patch: Record<string, any>) => void;
+  onUpdateColumnDefault: (column: DatabaseColumn, value: any) => void;
+  onCreateColumnOption: (column: DatabaseColumn, label: string) => Promise<any | null>;
+  onUpdateColumnOption: (column: DatabaseColumn, optionID: string, patch: Record<string, any>) => void;
+  onReorderColumnOption: (column: DatabaseColumn, sourceID: string, targetID: string) => void;
+  onDeleteColumnOption: (column: DatabaseColumn, optionID: string) => void;
+  onChangeColumnAlign: (columnID: string, align: ViewColumnRule['align']) => void;
   filterQuery: string;
   filterColumns: DatabaseColumn[];
   onAddFilter: () => void;
@@ -4192,6 +4312,7 @@ function ViewSettingsMenu({
   const [settingsAddColorOpen, setSettingsAddColorOpen] = useState(false);
   const [groupQuery, setGroupQuery] = useState('');
   const [groupPage, setGroupPage] = useState<'settings' | 'property' | 'sort' | 'statusMode' | 'dateMode'>(activeView.groupBy ? 'settings' : 'property');
+  const [settingsPropertyID, setSettingsPropertyID] = useState<string | null>(null);
   const [filterSettingsDragState, setFilterSettingsDragState] = useState<{
     sourceID: string;
     targetID: string;
@@ -4231,6 +4352,19 @@ function ViewSettingsMenu({
     maxTop: number;
     centers: number[];
   } | null>(null);
+  const [propertyDragState, setPropertyDragState] = useState<{
+    sourceID: string;
+    targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    initialTop: number;
+    currentTop: number;
+    itemHeight: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    centers: number[];
+  } | null>(null);
   const [dragState, setDragState] = useState<{
     sourceIndex: number;
     targetIndex: number;
@@ -4251,9 +4385,11 @@ function ViewSettingsMenu({
   const filterSettingsDragStateRef = useRef<typeof filterSettingsDragState>(null);
   const colorSettingsDragStateRef = useRef<typeof colorSettingsDragState>(null);
   const groupOptionDragStateRef = useRef<typeof groupOptionDragState>(null);
+  const propertyDragStateRef = useRef<typeof propertyDragState>(null);
   const dragStateRef = useRef<typeof dragState>(null);
   const suppressSettingsFilterClickRef = useRef(false);
   const suppressVisibilityClickRef = useRef(false);
+  const suppressPropertyClickRef = useRef(false);
   const iconPickerRect = useDropdownPosition(iconOpen, iconButtonRef, 408);
   const columnByID = useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
   const groupColumn = activeView.groupBy ? columnByID.get(activeView.groupBy) : undefined;
@@ -4286,6 +4422,9 @@ function ViewSettingsMenu({
     return [...fromView, ...rest];
   }, [activeView.columns, columns]);
   const filteredColumns = orderedColumns.filter((column) => !search || column.name.toLowerCase().includes(search) || column.type.toLowerCase().includes(search));
+  const filteredPropertyColumns = columns.filter((column) => !search || column.name.toLowerCase().includes(search) || column.type.toLowerCase().includes(search));
+  const settingsPropertyColumn = settingsPropertyID ? columnByID.get(settingsPropertyID) : undefined;
+  const settingsPropertyRule = settingsPropertyID ? activeView.columns.find((rule) => rule.property === settingsPropertyID) : undefined;
   const visibleCount = columns.filter((column) => visibleSourceIDs.has(column.id)).length;
   const filterRuleCount = (activeView.filters || []).length + (activeView.advancedFilter ? countAdvancedFilterRules(activeView.advancedFilter) : 0);
   const sortRuleCount = (activeView.sorts || []).length;
@@ -4326,6 +4465,16 @@ function ViewSettingsMenu({
     if (pane !== 'group') return;
     setGroupPage(activeView.groupBy ? 'settings' : 'property');
   }, [activeView.groupBy, pane]);
+
+  useEffect(() => {
+    if (pane !== 'properties') {
+      setSettingsPropertyID(null);
+      return;
+    }
+    if (settingsPropertyID && !columnByID.has(settingsPropertyID)) {
+      setSettingsPropertyID(null);
+    }
+  }, [columnByID, pane, settingsPropertyID]);
 
   const commitName = () => {
     const nextName = nameDraft.trim() || viewName(activeView.type);
@@ -4398,6 +4547,84 @@ function ViewSettingsMenu({
 
   const visibilityDragTransform = (index: number) => {
     const state = dragState;
+    if (!state) return undefined;
+    if (index === state.sourceIndex) return `translateY(${state.currentTop - state.initialTop}px)`;
+    if (state.sourceIndex < state.targetIndex && index > state.sourceIndex && index <= state.targetIndex) return `translateY(${-state.itemHeight}px)`;
+    if (state.targetIndex < state.sourceIndex && index >= state.targetIndex && index < state.sourceIndex) return `translateY(${state.itemHeight}px)`;
+    return undefined;
+  };
+
+  const beginPropertyDrag = (index: number, event: ReactPointerEvent<HTMLSpanElement>) => {
+    if (search) return;
+    const row = event.currentTarget.closest('.akdb-source-property-item') as HTMLButtonElement | null;
+    const list = event.currentTarget.closest('.akdb-source-property-list') as HTMLDivElement | null;
+    if (!row || !list || filteredPropertyColumns.length < 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressPropertyClickRef.current = true;
+    const rows = Array.from(list.querySelectorAll<HTMLButtonElement>('.akdb-source-property-item'));
+    const listRect = list.getBoundingClientRect();
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const rowRect = row.getBoundingClientRect();
+    const itemHeight = rowRect.height;
+    const firstRect = rowRects[0];
+    const lastRect = rowRects[rowRects.length - 1];
+    const sourceID = filteredPropertyColumns[index]?.id || '';
+    if (!sourceID) return;
+    const baseState = {
+      sourceID,
+      targetID: sourceID,
+      sourceIndex: index,
+      targetIndex: index,
+      initialTop: rowRect.top - listRect.top,
+      currentTop: rowRect.top - listRect.top,
+      itemHeight,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: firstRect.top - listRect.top,
+      maxTop: lastRect.bottom - listRect.top - itemHeight,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    propertyDragStateRef.current = baseState;
+    setPropertyDragState(baseState);
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setPropertyDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, moveEvent.clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.itemHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const next = {
+          ...current,
+          currentTop,
+          targetIndex: nextTargetIndex,
+          targetID: filteredPropertyColumns[nextTargetIndex]?.id || current.targetID,
+        };
+        propertyDragStateRef.current = next;
+        return next;
+      });
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const finalState = propertyDragStateRef.current;
+      propertyDragStateRef.current = null;
+      setPropertyDragState(null);
+      window.setTimeout(() => {
+        suppressPropertyClickRef.current = false;
+      }, 0);
+      if (!finalState || finalState.sourceIndex === finalState.targetIndex) return;
+      const next = [...filteredPropertyColumns];
+      const [moved] = next.splice(finalState.sourceIndex, 1);
+      next.splice(finalState.targetIndex, 0, moved);
+      onReorderProperties(next.map((column) => column.id));
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const propertyDragTransform = (index: number) => {
+    const state = propertyDragState;
     if (!state) return undefined;
     if (index === state.sourceIndex) return `translateY(${state.currentTop - state.initialTop}px)`;
     if (state.sourceIndex < state.targetIndex && index > state.sourceIndex && index <= state.targetIndex) return `translateY(${-state.itemHeight}px)`;
@@ -4708,10 +4935,104 @@ function ViewSettingsMenu({
             trailing={canChangeSource}
             onClick={canChangeSource ? onOpenSource : undefined}
           />
-          <SettingsMenuItem icon={<List size={17} />} label="编辑属性" />
+          <SettingsMenuItem icon={<List size={17} />} label="编辑属性" detail={String(columns.length)} onClick={onOpenProperties} />
           <SettingsMenuItem icon={<Zap size={17} />} label="自动化" />
           <SettingsMenuItem icon={<MoreHorizontal size={17} />} label="更多设置" />
         </div>
+      </div>
+    );
+  }
+
+  if (pane === 'properties') {
+    const propertyBack = () => {
+      if (settingsPropertyColumn) {
+        setSettingsPropertyID(null);
+        return;
+      }
+      setQuery('');
+      onBack();
+    };
+    return (
+      <div className="akdb-view-settings-menu akdb-source-properties-menu" role="dialog" aria-label="编辑属性" style={style}>
+        <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+          <button type="button" aria-label="返回查看设置" onClick={propertyBack}><ArrowLeft size={17} /></button>
+          <span>{settingsPropertyColumn?.name || '编辑属性'}</span>
+          <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭编辑属性" onClick={onClose}><X size={15} /></button>
+        </div>
+        {settingsPropertyColumn ? (
+          <ColumnPropertySubmenu
+            key={settingsPropertyColumn.id}
+            column={settingsPropertyColumn}
+            align={settingsPropertyRule?.align}
+            style={{
+              position: 'static',
+              zIndex: 'auto',
+              width: 'auto',
+              minWidth: 'auto',
+              maxWidth: 'none',
+              maxHeight: 'none',
+              overflow: 'visible',
+              border: 0,
+              borderRadius: 0,
+              background: 'transparent',
+              boxShadow: 'none',
+              padding: '3px 0 5px',
+            }}
+            onCreateOption={(label) => onCreateColumnOption(settingsPropertyColumn, label)}
+            onUpdateOption={(optionID, patch) => onUpdateColumnOption(settingsPropertyColumn, optionID, patch)}
+            onReorderOption={(sourceID, targetID) => onReorderColumnOption(settingsPropertyColumn, sourceID, targetID)}
+            onDeleteOption={(optionID) => onDeleteColumnOption(settingsPropertyColumn, optionID)}
+            onUpdateConfig={(patch) => onUpdateColumnConfig(settingsPropertyColumn, patch)}
+            onUpdateDefault={(value) => onUpdateColumnDefault(settingsPropertyColumn, value)}
+            onChangeAlign={(align) => onChangeColumnAlign(settingsPropertyColumn.id, align)}
+          />
+        ) : (
+          <>
+            <div className="akdb-column-visibility-search">
+              <input
+                autoFocus
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                placeholder="搜索属性..."
+                aria-label="搜索属性"
+              />
+            </div>
+            <div className="akdb-column-visibility-subhead">
+              <span>属性</span>
+            </div>
+            <div className={`akdb-column-visibility-list akdb-source-property-list ${propertyDragState ? 'is-property-dragging' : ''}`}>
+              {filteredPropertyColumns.length === 0 && <div className="akdb-add-column-empty">没有匹配的字段</div>}
+              {filteredPropertyColumns.map((column, index) => (
+                <button
+                  type="button"
+                  key={column.id}
+                  className="akdb-column-visibility-item akdb-source-property-item"
+                  style={{
+                    transform: propertyDragTransform(index),
+                    transition: propertyDragState?.sourceIndex === index ? 'none' : undefined,
+                  }}
+                  onClick={() => {
+                    if (suppressPropertyClickRef.current) return;
+                    setSettingsPropertyID(column.id);
+                    setQuery('');
+                  }}
+                >
+                  <span
+                    className="akdb-column-visibility-handle"
+                    onPointerDown={(event) => beginPropertyDrag(index, event)}
+                    onClick={(event) => event.stopPropagation()}
+                    aria-label="拖拽调整属性顺序"
+                  >
+                    <GripVertical size={15} />
+                  </span>
+                  <span className="akdb-filter-type"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
+                  <span className="akdb-column-visibility-name">{column.name}</span>
+                  <ChevronRight size={15} className="akdb-source-property-chevron" />
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     );
   }

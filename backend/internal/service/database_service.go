@@ -109,8 +109,8 @@ func validateDBName(name string) error {
 func defaultColumns() []model.DatabaseColumn {
 	return []model.DatabaseColumn{
 		{ID: "title", Name: "名称", Type: "text", Config: map[string]any{}, Default: ""},
-		{ID: "created_time", Name: "创建时间", Type: "created_time", Readonly: true, Auto: true, Config: map[string]any{"include_time": true}},
-		{ID: "last_edited_time", Name: "修改时间", Type: "last_edited_time", Readonly: true, Auto: true, Config: map[string]any{"include_time": true}},
+		{ID: "created_time", Name: "创建时间", Type: "created_time", Readonly: true, Auto: true, Config: map[string]any{"date_format": "slash", "time_format": "h24_colon_seconds", "date_content": "datetime", "include_time": true, "hour12": false, "timezone": "GMT+8"}},
+		{ID: "last_edited_time", Name: "修改时间", Type: "last_edited_time", Readonly: true, Auto: true, Config: map[string]any{"date_format": "slash", "time_format": "h24_colon_seconds", "date_content": "datetime", "include_time": true, "hour12": false, "timezone": "GMT+8"}},
 		{ID: "last_edited_user", Name: "修改人", Type: "last_edited_user", Readonly: true, Auto: true, Config: map[string]any{}},
 	}
 }
@@ -292,7 +292,10 @@ func (s *DatabaseService) UpdateColumn(spaceSlug, dbID, colID string, req model.
 	for i := range cfg.Columns {
 		if cfg.Columns[i].ID == colID {
 			if cfg.Columns[i].Readonly {
-				return nil, errors.New("readonly column")
+				configOnly := req.Config != nil && req.Name == nil && req.Type == nil && req.Icon == nil && req.Description == nil && req.Default == nil
+				if !configOnly || !isSystemDateColumnType(cfg.Columns[i].Type) {
+					return nil, errors.New("readonly column")
+				}
 			}
 			if req.Name != nil {
 				cfg.Columns[i].Name = strings.TrimSpace(*req.Name)
@@ -325,6 +328,10 @@ func (s *DatabaseService) UpdateColumn(spaceSlug, dbID, colID string, req model.
 		}
 	}
 	return nil, errors.New("column not found")
+}
+
+func isSystemDateColumnType(columnType string) bool {
+	return columnType == "created_time" || columnType == "last_edited_time"
 }
 
 func (s *DatabaseService) DeleteColumn(spaceSlug, dbID, colID string) (*model.DatabaseDetail, error) {
