@@ -34,6 +34,10 @@ export interface ViewSortRule {
   dir: 'asc' | 'desc';
 }
 
+export type ViewGroupSort = 'manual' | 'ascending' | 'descending';
+export type ViewStatusGroupMode = 'option' | 'group';
+export type ViewDateGroupMode = 'relative' | 'day' | 'week' | 'month' | 'year';
+
 export interface DatabaseViewConfig {
   id: string;
   type: DatabaseViewType;
@@ -51,6 +55,12 @@ export interface DatabaseViewConfig {
   advancedFilter?: ViewAdvancedFilterGroup;
   sorts?: ViewSortRule[];
   groupBy?: string;
+  groupSort?: ViewGroupSort;
+  groupStatusMode?: ViewStatusGroupMode;
+  groupDateMode?: ViewDateGroupMode;
+  hideEmptyGroups?: boolean;
+  hiddenGroups?: string[];
+  groupOrder?: string[];
   cover?: string;
   cardSize?: 'small' | 'medium' | 'large';
   date?: string;
@@ -113,7 +123,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
       filters,
       advancedFilter,
       sorts,
-      groupBy: tagAttr(body, 'group-by', 'property'),
+      ...parseGroupBy(body),
       cover: tagAttr(body, 'cover', 'property'),
       date: tagAttr(body, 'date', 'property'),
       startDate: tagAttr(body, 'start-date', 'property'),
@@ -159,7 +169,15 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
       filters ? `    <source-filter op="and">\n${filters}\n    </source-filter>` : '',
       advancedFilter ? `    <advanced-filter value="${esc(encodeAdvancedFilter(advancedFilter))}"/>` : '',
       sorts ? `    <sort>\n${sorts}\n    </sort>` : '',
-      v.groupBy ? `    <group-by property="${esc(v.groupBy)}"/>` : '',
+      v.groupBy ? `    <group-by ${[
+        `property="${esc(v.groupBy)}"`,
+        v.groupSort && v.groupSort !== 'manual' ? `sort="${esc(v.groupSort)}"` : '',
+        v.groupStatusMode && v.groupStatusMode !== 'option' ? `status-mode="${esc(v.groupStatusMode)}"` : '',
+        v.groupDateMode && v.groupDateMode !== 'relative' ? `date-mode="${esc(v.groupDateMode)}"` : '',
+        v.hideEmptyGroups ? 'hide-empty="true"' : '',
+        v.hiddenGroups?.length ? `hidden="${esc(v.hiddenGroups.join(','))}"` : '',
+        v.groupOrder?.length ? `order="${esc(v.groupOrder.join(','))}"` : '',
+      ].filter(Boolean).join(' ')}/>` : '',
       v.cover ? `    <cover property="${esc(v.cover)}"/>` : '',
       v.cardSize ? `    <card-size>${v.cardSize}</card-size>` : '',
       v.date ? `    <date property="${esc(v.date)}"/>` : '',
@@ -195,6 +213,20 @@ function attrsOf(text: string): Record<string, string> {
 function tagAttr(body: string, tag: string, attr: string) {
   const m = body.match(new RegExp(`<${tag}\\s+([^>]*)\\/>`));
   return m ? attrsOf(m[1])[attr] : undefined;
+}
+function parseGroupBy(body: string): Pick<DatabaseViewConfig, 'groupBy' | 'groupSort' | 'groupStatusMode' | 'groupDateMode' | 'hideEmptyGroups' | 'hiddenGroups' | 'groupOrder'> {
+  const attrs = body.match(/<group-by\s+([^>]*)\/>/)?.[1];
+  if (!attrs) return {};
+  const values = attrsOf(attrs);
+  return {
+    groupBy: values.property,
+    groupSort: normalizeGroupSort(values.sort),
+    groupStatusMode: normalizeStatusGroupMode(values['status-mode']),
+    groupDateMode: normalizeDateGroupMode(values['date-mode']),
+    hideEmptyGroups: optionalBooleanAttr(values['hide-empty']),
+    hiddenGroups: values.hidden ? values.hidden.split(',').map((item) => item.trim()).filter(Boolean) : undefined,
+    groupOrder: values.order ? values.order.split(',').map((item) => item.trim()).filter(Boolean) : undefined,
+  };
 }
 function tagText(body: string, tag: string) {
   return body.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`))?.[1]?.trim();
@@ -262,6 +294,20 @@ function normalizeFilterOperator(op = ''): ViewFilterOperator {
     || op === 'between'
   ) return op;
   return 'contains';
+}
+function normalizeGroupSort(value = ''): ViewGroupSort | undefined {
+  if (value === 'ascending' || value === 'descending') return value;
+  if (value === 'manual') return 'manual';
+  return undefined;
+}
+function normalizeStatusGroupMode(value = ''): ViewStatusGroupMode | undefined {
+  if (value === 'group') return 'group';
+  if (value === 'option') return 'option';
+  return undefined;
+}
+function normalizeDateGroupMode(value = ''): ViewDateGroupMode | undefined {
+  if (value === 'relative' || value === 'day' || value === 'week' || value === 'month' || value === 'year') return value;
+  return undefined;
 }
 function normalizeColumnAlign(align = ''): ViewColumnRule['align'] {
   if (align === 'left' || align === 'center' || align === 'right') return align;

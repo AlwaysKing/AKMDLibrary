@@ -1,7 +1,7 @@
-import { forwardRef, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { createReactBlockSpec } from '@blocknote/react';
 import { createPortal } from 'react-dom';
-import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
+import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, EyeOff, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
 import { useSpaceStore } from '../../stores/spaceStore';
@@ -27,6 +27,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [draftTitle, setDraftTitle] = useState(title);
   const [sourceAvailable, setSourceAvailable] = useState(!!src);
   const [schemaColumns, setSchemaColumns] = useState<DatabaseColumn[]>([]);
+  const [runtimeGroupOptions, setRuntimeGroupOptions] = useState<Array<{ key: string; label: string }>>([]);
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [filterQuery, setFilterQuery] = useState('');
@@ -36,7 +37,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
-  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort'>('main');
+  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
@@ -52,6 +53,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const filterMenuRect = useDropdownPosition(filterOpen, filterButtonRef, 290);
   const sortMenuRect = useDropdownPosition(sortOpen, sortButtonRef, 292, '', { edge: 'right' });
   const viewSettingsRect = useDropdownPosition(viewSettingsOpen, viewSettingsButtonRef, 292, viewSettingsPane, viewSettingsPane === 'sort' ? { edge: 'right' } : undefined);
+  const handleRuntimeGroupOptionsChange = useCallback((groups: Array<{ key: string; label: string }>) => {
+    setRuntimeGroupOptions(groups);
+  }, []);
 
   const parsed = useMemo(() => parseDatabaseMarkdown(viewsText), [viewsText]);
   const activeView = parsed.views.find((v) => v.id === viewId) || parsed.views[0];
@@ -280,7 +284,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     requestDatabaseImmediateSync();
   };
 
-  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' = 'main') => {
+  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' = 'main') => {
     setFilterOpen(false);
     setSortOpen(false);
     setViewContextMenu(null);
@@ -418,6 +422,11 @@ function DatabaseBlockComponent({ block, editor }: any) {
     if (!activeView || !(activeView.sorts || []).length) return;
     updateView({ ...activeView, sorts: [] });
     setActiveSortId(null);
+  };
+
+  const updateGroup = (patch: Partial<Pick<DatabaseViewConfig, 'groupBy' | 'groupSort' | 'groupStatusMode' | 'groupDateMode' | 'hideEmptyGroups' | 'hiddenGroups' | 'groupOrder'>>) => {
+    if (!activeView) return;
+    updateView({ ...activeView, ...patch });
   };
 
   const toggleSourceColumnVisibility = (column: DatabaseColumn) => {
@@ -658,6 +667,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
         <ViewSettingsMenu
           schemaName={sourceName}
           columns={schemaColumns}
+          runtimeGroupOptions={runtimeGroupOptions}
           activeView={activeView}
           pane={viewSettingsPane}
           focusNameRequest={viewNameFocusRequest}
@@ -677,6 +687,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
             setFilterOpen(false);
             setSortOpen(false);
             setSortQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onOpenGroup={() => {
+            setViewSettingsPane('group');
+            setFilterOpen(false);
+            setSortOpen(false);
             setActiveFilterId(null);
             setActiveSortId(null);
             setAdvancedFilterOpen(false);
@@ -727,6 +745,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onRemoveSort={removeSort}
           onReorderSorts={reorderSorts}
           onClearSorts={clearSorts}
+          onChangeGroup={updateGroup}
           style={viewSettingsRect}
         />,
         document.body,
@@ -883,6 +902,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onOpenViewSettings={openViewSettings}
           onAddFilterColumn={addFilter}
           onAddSortColumn={addSort}
+          onGroupOptionsChange={handleRuntimeGroupOptionsChange}
           onOpenRow={(rowId) => navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`)}
         />
       )}
@@ -1096,7 +1116,7 @@ function FilterPropertyMenu({
           <div className="akdb-filter-empty">没有匹配的属性</div>
         ) : columns.map((column) => (
           <button key={column.id} type="button" className="akdb-filter-property" onClick={() => onPick(column)}>
-            <span className="akdb-filter-type"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+            <span className="akdb-filter-type"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
             <span>{column.name}</span>
           </button>
         ))}
@@ -1379,7 +1399,7 @@ function ViewRuleBar({
                 onActivateFilter(filter.id);
               }}
             >
-              <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+              <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
               <span>
                 {effective ? (
                   <>
@@ -1649,7 +1669,7 @@ function SortRulesMenu({
                 setDirectionPicker(null);
                 openInlineMenu(sort.id, event.currentTarget, setPropertyPicker, 220);
               }}>
-                <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+                <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
                 <span>{column?.name || '属性'}</span>
                 <ChevronDown size={14} />
               </button>
@@ -2291,7 +2311,7 @@ function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule:
   return (
     <>
       <button ref={propertyRef} type="button" className="akdb-advanced-filter-control is-property" aria-haspopup="menu" aria-expanded={propertyOpen} onClick={() => { setPropertyOpen((open) => !open); setOperatorOpen(false); setValueOpen(false); }}>
-        <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+        <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
         <span>{column?.name || '属性'}</span>
         <ChevronDown size={13} />
       </button>
@@ -2299,7 +2319,7 @@ function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule:
         <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown" role="menu" style={propertyRect}>
           {columns.map((item) => (
             <button key={item.id} type="button" role="menuitem" className={item.id === rule.property ? 'is-active' : ''} onClick={() => { updateProperty(item.id); setPropertyOpen(false); }}>
-              <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(item)} /></span>
+              <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={viewSettingsColumnIconID(item)} /></span>
               <span>{item.name}</span>
             </button>
           ))}
@@ -3099,23 +3119,74 @@ function removeAdvancedNodeAtPath(group: ViewAdvancedFilterGroup, path: number[]
   };
 }
 
-function columnTypeIcon(column: DatabaseColumn) {
-  if (column.type === 'text') return column.config?.secret ? '***' : 'Aa';
-  if (column.type === 'number') return '#';
-  if (column.type === 'select') return '▾';
-  if (column.type === 'multi_select') return '▾▾';
-  if (column.type === 'status') return '≡';
-  if (column.type === 'date') return '@';
-  if (column.type === 'checkbox') return '☑';
-  if (column.type === 'url') return '↗';
-  if (column.type === 'relation') return '→';
-  if (column.type === 'created_time' || column.type === 'last_edited_time') return '@';
-  return 'Aa';
+function statusGroupSettingOptions(column: DatabaseColumn): Array<{ key: string; label: string; content?: ReactNode }> {
+  const options = Array.isArray(column.config?.options) ? column.config.options : [];
+  const optionByID = new Map(options.map((option: any) => [String(option.id || ''), option]));
+  const used = new Set<string>();
+  const groups = Array.isArray(column.config?.groups) ? column.config.groups : [];
+  const out = groups.map((group: any, index: number) => {
+    const ids = Array.isArray(group.option_ids) ? group.option_ids.map((id: string) => String(id || '')) : [];
+    ids.forEach((id: string) => {
+      if (optionByID.has(id)) used.add(id);
+    });
+    return {
+      key: `status-group:${String(group.id || group.name || index)}`,
+      label: String(group.name || '未命名分组'),
+    };
+  }).filter((group) => group.label);
+  if (options.some((option: any) => !used.has(String(option.id || '')))) out.push({ key: 'status-group:ungrouped', label: '未分组' });
+  return [...out, { key: '__empty__', label: '空白' }];
+}
+
+function groupSettingOptions(column: DatabaseColumn, statusMode: 'option' | 'group' = 'option', dateMode: 'relative' | 'day' | 'week' | 'month' | 'year' = 'relative'): Array<{ key: string; label: string; content?: ReactNode }> {
+  if (column.type === 'checkbox') {
+    return [
+      {
+        key: 'unchecked',
+        label: column.name,
+        content: <span className="akdb-group-checkbox-option"><span className="akdb-group-checkbox-box" />{column.name}</span>,
+      },
+      {
+        key: 'checked',
+        label: column.name,
+        content: <span className="akdb-group-checkbox-option"><span className="akdb-group-checkbox-box is-checked"><Check size={13} /></span>{column.name}</span>,
+      },
+    ];
+  }
+  if (column.type === 'status' && statusMode === 'group') return statusGroupSettingOptions(column);
+  if (column.type === 'date' || column.type === 'created_time' || column.type === 'last_edited_time') {
+    if (dateMode !== 'relative') return [{ key: '__empty__', label: '无日期' }];
+    return [
+      { key: '__empty__', label: '无日期' },
+      { key: 'yesterday', label: '昨天' },
+      { key: 'today', label: '今天' },
+      { key: 'tomorrow', label: '明天' },
+      { key: 'past', label: '过去' },
+      { key: 'future', label: '未来' },
+    ];
+  }
+  if (column.type === 'select' || column.type === 'status' || column.type === 'multi_select') {
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    return [
+      ...options.map((option: any) => ({
+        key: String(option.id || ''),
+        label: String(option.value || option.id || '未命名'),
+        content: <OptionTag option={option} config={column.config || {}} />,
+      })),
+      { key: '__empty__', label: '空白' },
+    ];
+  }
+  return [];
+}
+
+function viewSettingsColumnIconID(column?: DatabaseColumn) {
+  return column?.icon || defaultColumnIconID(column);
 }
 
 function ViewSettingsMenu({
   schemaName,
   columns,
+  runtimeGroupOptions,
   activeView,
   pane,
   focusNameRequest,
@@ -3123,6 +3194,7 @@ function ViewSettingsMenu({
   onOpenVisibility,
   onOpenFilter,
   onOpenSort,
+  onOpenGroup,
   onBack,
   onClose,
   onRename,
@@ -3152,17 +3224,20 @@ function ViewSettingsMenu({
   onRemoveSort,
   onReorderSorts,
   onClearSorts,
+  onChangeGroup,
   style,
 }: {
   schemaName: string;
   columns: DatabaseColumn[];
+  runtimeGroupOptions: Array<{ key: string; label: string }>;
   activeView: DatabaseViewConfig;
-  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort';
+  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group';
   focusNameRequest: number;
   onOpenLayout: () => void;
   onOpenVisibility: () => void;
   onOpenFilter: () => void;
   onOpenSort: () => void;
+  onOpenGroup: () => void;
   onBack: () => void;
   onClose: () => void;
   onRename: (name: string) => void;
@@ -3192,6 +3267,7 @@ function ViewSettingsMenu({
   onRemoveSort: (id: string) => void;
   onReorderSorts: (sourceID: string, targetID: string) => void;
   onClearSorts: () => void;
+  onChangeGroup: (patch: Partial<Pick<DatabaseViewConfig, 'groupBy' | 'groupSort' | 'groupStatusMode' | 'groupDateMode' | 'hideEmptyGroups' | 'hiddenGroups' | 'groupOrder'>>) => void;
   style: CSSProperties;
 }) {
   const [query, setQuery] = useState('');
@@ -3200,9 +3276,24 @@ function ViewSettingsMenu({
   const [settingsActiveFilterID, setSettingsActiveFilterID] = useState<string | null>(null);
   const [settingsAdvancedOpen, setSettingsAdvancedOpen] = useState(false);
   const [settingsAddFilterOpen, setSettingsAddFilterOpen] = useState(false);
+  const [groupQuery, setGroupQuery] = useState('');
+  const [groupPage, setGroupPage] = useState<'settings' | 'property' | 'sort' | 'statusMode' | 'dateMode'>(activeView.groupBy ? 'settings' : 'property');
   const [filterSettingsDragState, setFilterSettingsDragState] = useState<{
     sourceID: string;
     targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    initialTop: number;
+    currentTop: number;
+    itemHeight: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    centers: number[];
+  } | null>(null);
+  const [groupOptionDragState, setGroupOptionDragState] = useState<{
+    sourceKey: string;
+    targetKey: string;
     sourceIndex: number;
     targetIndex: number;
     initialTop: number;
@@ -3230,11 +3321,13 @@ function ViewSettingsMenu({
   const settingsAdvancedFilterRef = useRef<HTMLButtonElement | null>(null);
   const settingsAddFilterRef = useRef<HTMLButtonElement | null>(null);
   const filterSettingsDragStateRef = useRef<typeof filterSettingsDragState>(null);
+  const groupOptionDragStateRef = useRef<typeof groupOptionDragState>(null);
   const dragStateRef = useRef<typeof dragState>(null);
   const suppressSettingsFilterClickRef = useRef(false);
   const suppressVisibilityClickRef = useRef(false);
   const iconPickerRect = useDropdownPosition(iconOpen, iconButtonRef, 408);
   const columnByID = useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
+  const groupColumn = activeView.groupBy ? columnByID.get(activeView.groupBy) : undefined;
   const settingsActiveFilter = (activeView.filters || []).find((filter) => filter.id === settingsActiveFilterID);
   const settingsActiveFilterColumn = settingsActiveFilter ? columnByID.get(settingsActiveFilter.property) : undefined;
   const settingsFilterEditorRect = useDropdownPosition(!!settingsActiveFilter, settingsActiveFilterRef, settingsActiveFilter ? (isDateFilterColumn(settingsActiveFilterColumn) ? 260 : 282) : 282, settingsActiveFilterID || '');
@@ -3264,6 +3357,11 @@ function ViewSettingsMenu({
   const visibleCount = columns.filter((column) => visibleSourceIDs.has(column.id)).length;
   const filterRuleCount = (activeView.filters || []).length + (activeView.advancedFilter ? countAdvancedFilterRules(activeView.advancedFilter) : 0);
   const sortRuleCount = (activeView.sorts || []).length;
+  const groupColumns = columns.filter((column) => column.type !== 'linked');
+  const filteredGroupColumns = groupColumns.filter((column) => {
+    const text = groupQuery.trim().toLowerCase();
+    return !text || column.name.toLowerCase().includes(text) || column.type.toLowerCase().includes(text);
+  });
   const showDatabaseTitle = activeView.showSourceTitle !== false;
   const showVerticalLines = activeView.showVerticalLines !== false;
   const wrapContent = !!activeView.wrapContent;
@@ -3287,6 +3385,11 @@ function ViewSettingsMenu({
       setSettingsAddFilterOpen(false);
     }
   }, [pane]);
+
+  useEffect(() => {
+    if (pane !== 'group') return;
+    setGroupPage(activeView.groupBy ? 'settings' : 'property');
+  }, [activeView.groupBy, pane]);
 
   const commitName = () => {
     const nextName = nameDraft.trim() || viewName(activeView.type);
@@ -3446,6 +3549,73 @@ function ViewSettingsMenu({
     return undefined;
   };
 
+  const beginGroupOptionDrag = (optionKey: string, index: number, options: Array<{ key: string; label: string; content?: ReactNode }>, event: ReactPointerEvent<HTMLSpanElement>) => {
+    const list = event.currentTarget.closest('.akdb-group-option-list') as HTMLDivElement | null;
+    const row = event.currentTarget.closest('.akdb-group-option-item') as HTMLElement | null;
+    if (!list || !row || !options.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('.akdb-group-option-item'));
+    const listRect = list.getBoundingClientRect();
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const rowRect = row.getBoundingClientRect();
+    const itemHeight = rowRect.height;
+    const firstRect = rowRects[0];
+    const lastRect = rowRects[rowRects.length - 1];
+    const baseState = {
+      sourceKey: optionKey,
+      targetKey: optionKey,
+      sourceIndex: index,
+      targetIndex: index,
+      initialTop: rowRect.top - listRect.top,
+      currentTop: rowRect.top - listRect.top,
+      itemHeight,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: firstRect.top - listRect.top,
+      maxTop: lastRect.bottom - listRect.top - itemHeight,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    groupOptionDragStateRef.current = baseState;
+    setGroupOptionDragState(baseState);
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setGroupOptionDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, moveEvent.clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.itemHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const targetKey = rows[nextTargetIndex]?.dataset.groupOptionKey || current.targetKey;
+        const next = { ...current, currentTop, targetIndex: nextTargetIndex, targetKey };
+        groupOptionDragStateRef.current = next;
+        return next;
+      });
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const finalState = groupOptionDragStateRef.current;
+      groupOptionDragStateRef.current = null;
+      setGroupOptionDragState(null);
+      if (!finalState || finalState.sourceIndex === finalState.targetIndex) return;
+      const next = [...options];
+      const [moved] = next.splice(finalState.sourceIndex, 1);
+      next.splice(finalState.targetIndex, 0, moved);
+      onChangeGroup({ groupOrder: next.map((option) => option.key), groupSort: 'manual' });
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const groupOptionDragTransform = (index: number) => {
+    const state = groupOptionDragState;
+    if (!state) return undefined;
+    if (index === state.sourceIndex) return `translateY(${state.currentTop - state.initialTop}px)`;
+    if (state.sourceIndex < state.targetIndex && index > state.sourceIndex && index <= state.targetIndex) return `translateY(${-state.itemHeight}px)`;
+    if (state.targetIndex < state.sourceIndex && index >= state.targetIndex && index < state.sourceIndex) return `translateY(${state.itemHeight}px)`;
+    return undefined;
+  };
+
   if (pane === 'main') {
     return (
       <div className="akdb-view-settings-menu" role="dialog" aria-label="查看设置" style={style}>
@@ -3509,7 +3679,7 @@ function ViewSettingsMenu({
             detail={sortRuleCount ? String(sortRuleCount) : undefined}
             onClick={onOpenSort}
           />
-          <SettingsMenuItem icon={<Columns3 size={17} />} label="分组" />
+          <SettingsMenuItem icon={<Columns3 size={17} />} label="分组" detail={groupColumn?.name} onClick={onOpenGroup} />
           <SettingsMenuItem icon={<Palette size={17} />} label="条件颜色" />
           <SettingsMenuItem icon={<Link size={17} />} label="拷贝视图链接" trailing={false} />
         </div>
@@ -3627,11 +3797,11 @@ function ViewSettingsMenu({
                 >
                   <GripVertical size={15} />
                 </span>
-                {!effective && <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>}
+                {!effective && <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>}
                 <span className={`akdb-view-settings-filter-label ${effective ? 'akdb-view-settings-filter-pill is-effective' : ''}`}>
                   {effective ? (
                     <>
-                      <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={defaultColumnIconID(column)} /></span>
+                      <span className="akdb-view-rule-icon"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
                       <span className="akdb-view-rule-field">{column?.name || '属性'}</span>: <span>{valueLabel}</span>
                       <ChevronDown size={14} />
                     </>
@@ -3755,6 +3925,234 @@ function ViewSettingsMenu({
     );
   }
 
+  if (pane === 'group') {
+    const groupSort = activeView.groupSort || 'manual';
+    const hiddenGroups = new Set(activeView.hiddenGroups || []);
+    const groupDateMode = activeView.groupDateMode || 'relative';
+    const isGroupDate = groupColumn ? isDateFilterColumn(groupColumn) : false;
+    const staticGroupOptions = groupColumn ? groupSettingOptions(groupColumn, activeView.groupStatusMode || 'option', groupDateMode) : [];
+    const groupOptions = isGroupDate && runtimeGroupOptions.length
+      ? runtimeGroupOptions.map((option) => ({ key: option.key, label: option.label }))
+      : staticGroupOptions;
+    const visibleGroupOptions = activeView.hideEmptyGroups ? groupOptions.filter((option) => option.key !== '__empty__') : groupOptions;
+    const groupOrderIndex = new Map((activeView.groupOrder || []).map((key, index) => [key, index]));
+    const orderedGroupOptions = [...visibleGroupOptions].sort((a, b) => {
+      const aIndex = groupOrderIndex.has(a.key) ? groupOrderIndex.get(a.key)! : Number.MAX_SAFE_INTEGER;
+      const bIndex = groupOrderIndex.has(b.key) ? groupOrderIndex.get(b.key)! : Number.MAX_SAFE_INTEGER;
+      if (aIndex !== bIndex) return aIndex - bIndex;
+      return visibleGroupOptions.findIndex((option) => option.key === a.key) - visibleGroupOptions.findIndex((option) => option.key === b.key);
+    });
+    const allGroupsHidden = orderedGroupOptions.length > 0 && orderedGroupOptions.every((option) => hiddenGroups.has(option.key));
+    const groupBack = () => {
+      if ((groupPage === 'property' || groupPage === 'sort' || groupPage === 'statusMode' || groupPage === 'dateMode') && groupColumn) {
+        setGroupPage('settings');
+        setGroupQuery('');
+        return;
+      }
+      onBack();
+    };
+    return (
+      <div className="akdb-view-settings-menu akdb-view-settings-group-menu" role="dialog" aria-label="分组" style={style}>
+        <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+          <button type="button" aria-label="返回查看设置" onClick={groupBack}><ArrowLeft size={17} /></button>
+          <span>{groupPage === 'property' ? '分组方式' : groupPage === 'sort' ? '排序' : groupPage === 'statusMode' ? '按状态' : groupPage === 'dateMode' ? '按日期' : '分组'}</span>
+          <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭分组菜单" onClick={onClose}><X size={15} /></button>
+        </div>
+        {groupPage === 'property' ? (
+          <div className="akdb-view-settings-section">
+            <div className="akdb-column-visibility-search akdb-group-property-search">
+              <input
+                autoFocus
+                value={groupQuery}
+                onChange={(event) => setGroupQuery(event.currentTarget.value)}
+                placeholder="搜索属性..."
+                aria-label="搜索分组属性"
+              />
+            </div>
+            <div className="akdb-group-property-list is-page">
+              <button
+                type="button"
+                className={`akdb-group-property-item ${!activeView.groupBy ? 'is-active' : ''}`}
+                onClick={() => {
+                  onChangeGroup({ groupBy: undefined, groupSort: undefined, groupStatusMode: undefined, groupDateMode: undefined, hideEmptyGroups: undefined, hiddenGroups: undefined, groupOrder: undefined });
+                  setGroupQuery('');
+                }}
+              >
+                <span className="akdb-filter-type">无</span>
+                <span className="akdb-group-property-name">不分组</span>
+                {!activeView.groupBy && <Check size={15} className="akdb-group-property-check" />}
+              </button>
+              {filteredGroupColumns.map((column) => {
+                const active = activeView.groupBy === column.id;
+                return (
+                  <button
+                    type="button"
+                    key={column.id}
+                    className={`akdb-group-property-item ${active ? 'is-active' : ''}`}
+                    onClick={() => {
+                      onChangeGroup({ groupBy: column.id, groupSort: isDateFilterColumn(column) ? 'descending' : 'manual', groupStatusMode: column.type === 'status' ? 'option' : undefined, groupDateMode: isDateFilterColumn(column) ? 'relative' : undefined, hiddenGroups: [], groupOrder: [] });
+                      setGroupQuery('');
+                      setGroupPage('settings');
+                    }}
+                  >
+                    <span className="akdb-filter-type"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
+                    <span className="akdb-group-property-name">{column.name}</span>
+                    {active && <Check size={15} className="akdb-group-property-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : groupPage === 'dateMode' ? (
+          <div className="akdb-view-settings-section">
+            {[
+              { value: 'relative' as const, label: '相对' },
+              { value: 'day' as const, label: '日' },
+              { value: 'week' as const, label: '周' },
+              { value: 'month' as const, label: '月' },
+              { value: 'year' as const, label: '年' },
+            ].map((option) => {
+              const active = groupDateMode === option.value;
+              return (
+                <button
+                  type="button"
+                  key={option.value}
+                  className={`akdb-group-property-item ${active ? 'is-active' : ''}`}
+                  onClick={() => {
+                    onChangeGroup({ groupDateMode: option.value, hiddenGroups: [], groupOrder: [] });
+                    setGroupPage('settings');
+                  }}
+                >
+                  <span className="akdb-group-property-name">{option.label}</span>
+                  {active && <Check size={15} className="akdb-group-property-check" />}
+                </button>
+              );
+            })}
+          </div>
+        ) : groupPage === 'statusMode' ? (
+          <div className="akdb-view-settings-section">
+            {[
+              { value: 'group' as const, label: '组' },
+              { value: 'option' as const, label: '选项' },
+            ].map((option) => {
+              const active = (activeView.groupStatusMode || 'option') === option.value;
+              return (
+                <button
+                  type="button"
+                  key={option.value}
+                  className={`akdb-group-property-item ${active ? 'is-active' : ''}`}
+                  onClick={() => {
+                    onChangeGroup({ groupStatusMode: option.value, hiddenGroups: [], groupOrder: [] });
+                    setGroupPage('settings');
+                  }}
+                >
+                  <span className="akdb-group-property-name">{option.label}</span>
+                  {active && <Check size={15} className="akdb-group-property-check" />}
+                </button>
+              );
+            })}
+          </div>
+        ) : groupPage === 'sort' ? (
+          <div className="akdb-view-settings-section">
+            {[
+              ...(isGroupDate ? [] : [{ value: 'manual' as const, label: '手动' }]),
+              { value: 'ascending' as const, label: isGroupDate ? '最早优先' : '升序' },
+              { value: 'descending' as const, label: isGroupDate ? '最新优先' : '降序' },
+            ].map((option) => {
+              const active = groupSort === option.value;
+              return (
+                <button
+                  type="button"
+                  key={option.value}
+                  className={`akdb-group-property-item ${active ? 'is-active' : ''}`}
+                  onClick={() => {
+                    onChangeGroup({ groupSort: option.value });
+                    setGroupPage('settings');
+                  }}
+                >
+                  <span className="akdb-group-property-name">{option.label}</span>
+                  {active && <Check size={15} className="akdb-group-property-check" />}
+                </button>
+              );
+            })}
+          </div>
+        ) : groupColumn ? (
+          <>
+            <div className="akdb-view-settings-section">
+              <ViewLayoutItem label="分组方式" detail={groupColumn.name} onClick={() => setGroupPage('property')} />
+              {groupColumn.type === 'status' && <ViewLayoutItem label="按状态" detail={(activeView.groupStatusMode || 'option') === 'group' ? '组' : '选项'} onClick={() => setGroupPage('statusMode')} />}
+              {isGroupDate && <ViewLayoutItem label="按日期" detail={groupDateMode === 'day' ? '日' : groupDateMode === 'week' ? '周' : groupDateMode === 'month' ? '月' : groupDateMode === 'year' ? '年' : '相对'} onClick={() => setGroupPage('dateMode')} />}
+              {groupColumn.type !== 'checkbox' && <ViewLayoutItem label="排序" detail={isGroupDate ? (groupSort === 'ascending' ? '最早优先' : '最新优先') : (groupSort === 'ascending' ? '升序' : groupSort === 'descending' ? '降序' : '手动')} onClick={() => setGroupPage('sort')} />}
+              <ViewLayoutSwitch label="隐藏空白分组" checked={!!activeView.hideEmptyGroups} onChange={() => onChangeGroup({ hideEmptyGroups: !activeView.hideEmptyGroups })} />
+            </div>
+            {orderedGroupOptions.length > 0 && (
+              <div className="akdb-view-settings-section">
+                <div className="akdb-column-visibility-subhead">
+                  <span>群组</span>
+                  <button
+                    type="button"
+                    onClick={() => onChangeGroup({ hiddenGroups: allGroupsHidden ? [] : orderedGroupOptions.map((option) => option.key) })}
+                  >
+                    {allGroupsHidden ? '全部显示' : '全部隐藏'}
+                  </button>
+                </div>
+                <div className="akdb-column-visibility-list akdb-group-option-list">
+                  {orderedGroupOptions.map((option, index) => {
+                    const hidden = hiddenGroups.has(option.key);
+                    const toggleHidden = () => {
+                      const next = new Set(hiddenGroups);
+                      if (next.has(option.key)) next.delete(option.key);
+                      else next.add(option.key);
+                      onChangeGroup({ hiddenGroups: Array.from(next) });
+                    };
+                    return (
+                      <div
+                        key={option.key}
+                        data-group-option-key={option.key}
+                        className={`akdb-group-property-item akdb-group-option-item ${hidden ? 'is-hidden' : ''}`}
+                        style={{
+                          transform: groupOptionDragTransform(index),
+                          transition: groupOptionDragState?.sourceIndex === index ? 'none' : undefined,
+                        }}
+                      >
+                        <span
+                          className="akdb-column-visibility-handle"
+                          onPointerDown={(event) => beginGroupOptionDrag(option.key, index, orderedGroupOptions, event)}
+                          onClick={(event) => event.stopPropagation()}
+                          aria-label="拖拽调整群组顺序"
+                        >
+                          <GripVertical size={15} />
+                        </span>
+                        <span className="akdb-group-property-name">{option.content || option.label}</span>
+                        <button
+                          type="button"
+                          className="akdb-group-option-eye"
+                          aria-label={hidden ? '显示群组' : '隐藏群组'}
+                          onClick={toggleHidden}
+                        >
+                          <GroupVisibilityIcon hidden={hidden} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="akdb-view-settings-section">
+              <button type="button" className="akdb-option-edit-delete" onClick={() => {
+                onChangeGroup({ groupBy: undefined, groupSort: undefined, groupStatusMode: undefined, groupDateMode: undefined, hideEmptyGroups: undefined, hiddenGroups: undefined, groupOrder: undefined });
+                setGroupPage('property');
+              }}>
+                <Trash2 size={16} />
+                <span>移除分组</span>
+              </button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="akdb-view-settings-menu akdb-column-visibility-menu" role="dialog" aria-label="属性可见性" style={style}>
       <div className="akdb-column-visibility-head">
@@ -3799,7 +4197,7 @@ function ViewSettingsMenu({
               >
                 <GripVertical size={15} />
               </span>
-              <span className="akdb-add-column-icon">{columnTypeIcon(column)}</span>
+              <span className="akdb-filter-type"><ColumnIconGlyph icon={viewSettingsColumnIconID(column)} /></span>
               <span className="akdb-column-visibility-name">{column.name}</span>
               <Eye size={15} className="akdb-column-visibility-eye" />
             </button>
@@ -3807,6 +4205,15 @@ function ViewSettingsMenu({
         })}
       </div>
     </div>
+  );
+}
+
+function GroupVisibilityIcon({ hidden }: { hidden: boolean }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20" className="akdb-group-visibility-icon">
+      <path d="M10 4.2c4.2 0 7.05 3.26 8.05 5.2.2.38.2.82 0 1.2-1 1.94-3.85 5.2-8.05 5.2s-7.05-3.26-8.05-5.2a1.32 1.32 0 0 1 0-1.2c1-1.94 3.85-5.2 8.05-5.2Zm0 3.2a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Z" />
+      {hidden && <path className="akdb-group-visibility-slash" d="M4.1 2.9 17.1 15.9" />}
+    </svg>
   );
 }
 

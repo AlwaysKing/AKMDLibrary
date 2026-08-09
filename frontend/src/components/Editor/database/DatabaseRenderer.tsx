@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TdHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
+import { Fragment, forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TdHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   AlignCenter,
@@ -56,6 +56,7 @@ interface Props {
   onSelectionChange?: (count: number) => void;
   onAddFilterColumn?: (column: DatabaseColumn) => void;
   onAddSortColumn?: (column: DatabaseColumn) => void;
+  onGroupOptionsChange?: (groups: Array<{ key: string; label: string }>) => void;
 }
 
 type CellCoord = { rowIndex: number; colIndex: number };
@@ -92,7 +93,7 @@ export function requestDatabaseImmediateSync() {
   }, 0);
 }
 
-export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onSchemaChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange, onAddFilterColumn, onAddSortColumn }: Props) {
+export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, readonly, columnControls = true, createRequest = 0, missingState, onAvailabilityChange, onSchemaChange, onOpenRow, onViewChange, onOpenViewSettings, onSelectionChange, onAddFilterColumn, onAddSortColumn, onGroupOptionsChange }: Props) {
   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
   const [rows, setRows] = useState<DatabaseRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,6 +111,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const [cellRange, setCellRange] = useState<CellRange | null>(null);
   const [fillRange, setFillRange] = useState<CellRange | null>(null);
   const [hoveredRowID, setHoveredRowID] = useState<string | null>(null);
+  const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(() => new Set());
   const [rowDragState, setRowDragState] = useState<{ sourceRowID: string; targetRowID: string; sourceIndex: number; targetIndex: number; placement: 'before' | 'after' } | null>(null);
   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
@@ -216,6 +218,39 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     return items;
   }, [activeView, rows, schema, visibleColumns]);
   const displayRowIDs = useMemo(() => displayRows.map(({ row }) => row.uuid), [displayRows]);
+  const tableGroupColumn = useMemo(() => schema?.columns.find((column) => column.id === activeView.groupBy), [activeView.groupBy, schema?.columns]);
+  const tableGroups = useMemo(() => {
+    if (!schema || !tableGroupColumn || activeView.type !== 'table') return [];
+    return buildTableGroups(displayRows, tableGroupColumn, activeView);
+  }, [activeView, displayRows, schema, tableGroupColumn]);
+  const tableGroupOptions = useMemo(() => {
+    if (!schema || !tableGroupColumn || activeView.type !== 'table') return [];
+    return buildTableGroups(displayRows, tableGroupColumn, { ...activeView, hiddenGroups: [] }).map((group) => ({ key: group.key, label: group.label }));
+  }, [activeView, displayRows, schema, tableGroupColumn]);
+
+  useEffect(() => {
+    onGroupOptionsChange?.(tableGroupOptions);
+  }, [onGroupOptionsChange, tableGroupOptions]);
+  const tableRowOffsets = useMemo(() => {
+    const offsets = new Map<string, number>();
+    if (!tableGroups.length) {
+      displayRows.forEach(({ row }, index) => offsets.set(row.uuid, 36 + index * 36));
+      return offsets;
+    }
+    let top = 0;
+    for (const group of tableGroups) {
+      offsets.set(`__group__:${group.key}`, top);
+      top += 36;
+      if (collapsedGroupKeys.has(group.key)) continue;
+      top += 36;
+      for (const item of group.rows) {
+        offsets.set(item.row.uuid, top);
+        top += 36;
+      }
+      if (!readonly) top += 37;
+    }
+    return offsets;
+  }, [collapsedGroupKeys, displayRows, readonly, tableGroups]);
 
   useEffect(() => {
     const visible = new Set(displayRowIDs);
@@ -396,6 +431,19 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const reordered = await databasesApi.reorderRows(spaceSlug, dbId, next);
     setRows(reordered.rows || []);
     requestDatabaseImmediateSync();
+  };
+
+  const createRowInGroup = async (group: TableGroup) => {
+    await createRow(group.defaults);
+  };
+
+  const toggleTableGroup = (groupKey: string) => {
+    setCollapsedGroupKeys((current) => {
+      const next = new Set(current);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
   };
 
   const reorderRows = async (sourceRowID: string, targetRowID: string, placement: 'before' | 'after' = 'before') => {
@@ -1346,7 +1394,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 <div
                   key={row.uuid}
                   className={`akdb-row-gutter-item ${controlsVisible ? 'is-controls-visible' : ''} ${checkboxVisible ? 'is-checkbox-visible' : ''} ${isDraggingRow ? 'is-row-dragging' : ''}`}
-                  style={{ top: 36 + index * 36 }}
+                  style={{ top: tableRowOffsets.get(row.uuid) ?? (36 + index * 36) }}
                   onMouseEnter={() => setHoveredRowID(row.uuid)}
                   onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
                 >
@@ -1406,7 +1454,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
               {showColumnControls && <col style={{ width: 64 }} />}
               {showFillColumn && <col />}
             </colgroup>
-            <thead
+            {!tableGroups.length && <thead
               className={columnDragState ? 'is-column-dragging' : undefined}
               style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
             >
@@ -1479,12 +1527,154 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 )}
                 {showFillColumn && <th className="akdb-fill-cell" aria-hidden="true" />}
               </tr>
-            </thead>
+            </thead>}
             <tbody
               className={columnDragState ? 'is-column-dragging' : undefined}
               style={columnDragState ? { clipPath: `inset(0 ${columnDragState.clipRight}px 0 ${columnDragState.clipLeft}px)` } : undefined}
             >
-            {visibleColumns.length > 0 && displayRows.map(({ row, display }, rowIndex) => (
+            {visibleColumns.length > 0 && tableGroups.length > 0 && tableGroups.map((group) => {
+              const collapsed = collapsedGroupKeys.has(group.key);
+              return (
+                <Fragment key={group.key}>
+                  <tr key={`group:${group.key}`} className="akdb-group-row">
+                    <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
+                      <button type="button" className="akdb-group-toggle" onClick={() => toggleTableGroup(group.key)}>
+                        <ChevronDown size={14} className={collapsed ? 'is-collapsed' : undefined} />
+                        <span className="akdb-group-label">{renderTableGroupLabel(group, tableGroupColumn)}</span>
+                        <span className="akdb-group-count">{group.rows.length}</span>
+                      </button>
+                    </td>
+                  </tr>
+                  {!collapsed && (
+                    <>
+                      <tr key={`group-head:${group.key}`} className="akdb-group-column-head">
+                        {visibleColumns.map((c, index) => (
+                          <th
+                            key={c.id}
+                            data-column-index={index}
+                            className={columnDragState?.sourceIndex === index ? 'is-dragging' : undefined}
+                            style={{ transform: columnDragTransform(index), transition: columnDragState?.sourceIndex === index ? 'none' : undefined }}
+                            onPointerDown={showColumnControls ? (event) => beginColumnDrag(index, event) : undefined}
+                            onClick={showColumnControls ? (event) => handleColumnHeaderClick(index, event) : undefined}
+                            onContextMenu={showColumnControls ? (event) => handleColumnHeaderContextMenu(index, event) : undefined}
+                          >
+                            <span className="akdb-col-head">
+                              <span className="akdb-col-type"><ColumnIconGlyph icon={columnIconID(c.column)} /></span>
+                              <span>{c.name}</span>
+                            </span>
+                            {showColumnControls && (
+                              <span
+                                className="akdb-col-resizer"
+                                role="separator"
+                                aria-orientation="vertical"
+                                onPointerDown={(event) => resizeColumn(event, c, index)}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }}
+                              />
+                            )}
+                          </th>
+                        ))}
+                        {showColumnControls && <th className="akdb-action-cell" />}
+                        {showFillColumn && <th className="akdb-fill-cell" aria-hidden="true" />}
+                      </tr>
+                      {group.rows.map(({ row, display, sourceIndex: rowIndex }) => (
+                        <tr
+                          key={row.uuid}
+                          data-akdb-row-id={row.uuid}
+                          className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${rowDragState?.targetRowID === row.uuid ? 'is-row-drop-target' : ''}`}
+                          onMouseEnter={() => setHoveredRowID(row.uuid)}
+                          onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
+                          onContextMenu={(event) => openRowContextMenu(row, event)}
+                        >
+                          {visibleColumns.map((c, index) => {
+                            const coord = { rowIndex, colIndex: index };
+                            const isActive = sameCell(activeCell, coord);
+                            const isEditing = sameCell(editingCell, coord);
+                            const isSelected = !isEditing && cellInRange(coord, fillRange || cellRange);
+                            const isFillSelected = !isEditing && cellInRange(coord, fillRange);
+                            const cellValue = c.column?.type === 'formula' ? String(display[c.id] ?? '') : String(row.values?.[c.column!.id] ?? '');
+                            return (
+                              <EditableCell
+                                key={c.id}
+                                value={cellValue}
+                                column={c.column}
+                                align={c.rule.align}
+                                readonly={readonly || c.column?.type === 'formula' || !!c.rule.readonly}
+                                active={isActive}
+                                editingActive={isEditing}
+                                rangeSelected={isSelected}
+                                fillSelected={isFillSelected}
+                                onChange={(v) => updateCell(row.uuid, c.column, v)}
+                                onEditStateChange={(editing) => {
+                                  if (editing) {
+                                    clearEditorBlockSelection();
+                                    setSelectedRowIDs(new Set());
+                                    setActiveCell(coord);
+                                    setCellRange({ anchor: coord, focus: coord });
+                                    setFillRange(null);
+                                    setEditingCell(coord);
+                                    return;
+                                  }
+                                  setEditingCell((current) => {
+                                    if (!sameCell(current, coord)) return current;
+                                    recentlyClosedEditingCellRef.current = coord;
+                                    window.setTimeout(() => {
+                                      if (sameCell(recentlyClosedEditingCellRef.current, coord)) recentlyClosedEditingCellRef.current = null;
+                                    }, 0);
+                                    return null;
+                                  });
+                                }}
+                                onFillPointerDown={(event) => beginFillDrag(coord, event)}
+                                onCreateOption={(label) => c.column ? createColumnOption(c.column, label) : Promise.resolve(null)}
+                                onReorderOption={(sourceID, targetID) => c.column ? reorderColumnOption(c.column, sourceID, targetID) : Promise.resolve()}
+                                onUpdateOption={(optionID, patch) => c.column ? updateColumnOption(c.column, optionID, patch) : Promise.resolve()}
+                                onDeleteOption={(optionID) => c.column ? deleteColumnOption(c.column, optionID) : Promise.resolve()}
+                                onUpdateColumnConfig={(patch) => c.column ? updateColumnConfig(c.column, patch) : Promise.resolve()}
+                                onEditProperty={(anchor) => openColumnMenu(index, anchor)}
+                                cellProps={{
+                                  className: [
+                                    columnDragState?.sourceIndex === index ? 'is-dragging' : '',
+                                    isActive && !isEditing ? 'is-akdb-cell-active' : '',
+                                    isSelected ? 'is-akdb-cell-selected' : '',
+                                    isFillSelected ? 'is-akdb-cell-fill-selected' : '',
+                                  ].filter(Boolean).join(' ') || undefined,
+                                  'data-akdb-row-index': rowIndex,
+                                  'data-akdb-col-index': index,
+                                  'data-akdb-row-id': row.uuid,
+                                  'data-akdb-col-id': c.column?.id,
+                                  onClickCapture: (event) => {
+                                    if (!suppressNextCellClickRef.current) return;
+                                    suppressNextCellClickRef.current();
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                  },
+                                  style: {
+                                    transform: columnDragTransform(index),
+                                    transition: columnDragState?.sourceIndex === index ? 'none' : undefined,
+                                  },
+                                } as TdHTMLAttributes<HTMLTableCellElement> & Record<string, any>}
+                              />
+                            );
+                          })}
+                          {showColumnControls && <td className="akdb-action-cell" />}
+                          {showFillColumn && <td className="akdb-fill-cell" aria-hidden="true" />}
+                        </tr>
+                      ))}
+                      {!readonly && (
+                        <tr key={`group-add:${group.key}`} className="akdb-add-row akdb-group-add-row">
+                          <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
+                            <button type="button" onClick={() => void createRowInGroup(group)}><Plus size={15} />新页面</button>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  )}
+                </Fragment>
+              );
+            })}
+            {visibleColumns.length > 0 && tableGroups.length === 0 && displayRows.map(({ row, display }, rowIndex) => (
               <tr
                 key={row.uuid}
                 data-akdb-row-id={row.uuid}
@@ -1566,7 +1756,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 {showFillColumn && <td className="akdb-fill-cell" aria-hidden="true" />}
               </tr>
             ))}
-            {!readonly && (
+            {!readonly && tableGroups.length === 0 && (
               <tr className="akdb-add-row">
                 <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
                   <button type="button" onClick={() => createRow()}><Plus size={15} />新页面</button>
@@ -2136,6 +2326,230 @@ function applyViewSorts<T extends { row: DatabaseRow; props: Record<string, any>
     }
     return 0;
   });
+}
+
+type TableDisplayRow = { row: DatabaseRow; display: Record<string, any>; props: Record<string, any> };
+type TableGroup = {
+  key: string;
+  label: string;
+  value?: string;
+  rows: Array<TableDisplayRow & { sourceIndex: number }>;
+  defaults: Record<string, string>;
+};
+
+function buildTableGroups(items: TableDisplayRow[], column: DatabaseColumn, view: DatabaseViewConfig): TableGroup[] {
+  const hidden = new Set(view.hiddenGroups || []);
+  const byKey = new Map<string, TableGroup>();
+  const ensure = (key: string, label: string, defaults: Record<string, string> = {}, value?: string) => {
+    if (!byKey.has(key)) byKey.set(key, { key, label, value, rows: [], defaults });
+    return byKey.get(key)!;
+  };
+
+  for (const preset of presetTableGroups(column, view)) ensure(preset.key, preset.label, preset.defaults, preset.value);
+
+  items.forEach((item, sourceIndex) => {
+    const keys = tableGroupKeysForRow(item, column, view);
+    keys.forEach((group) => {
+      ensure(group.key, group.label, group.defaults, group.value).rows.push({ ...item, sourceIndex });
+    });
+  });
+
+  let groups = Array.from(byKey.values()).filter((group) => {
+    if (hidden.has(group.key)) return false;
+    if (view.hideEmptyGroups && isEmptyTableGroup(group)) return false;
+    return group.rows.length > 0 || hasPresetTableGroup(column, group.key, view);
+  });
+
+  const sort = view.groupSort || 'manual';
+  if (sort === 'manual' && view.groupOrder?.length) {
+    const orderIndex = new Map(view.groupOrder.map((key, index) => [key, index]));
+    groups = [...groups].sort((a, b) => {
+      const aIndex = orderIndex.has(a.key) ? orderIndex.get(a.key)! : Number.MAX_SAFE_INTEGER;
+      const bIndex = orderIndex.has(b.key) ? orderIndex.get(b.key)! : Number.MAX_SAFE_INTEGER;
+      if (aIndex !== bIndex) return aIndex - bIndex;
+      return 0;
+    });
+  } else if (sort !== 'manual') {
+    const dir = sort === 'descending' ? -1 : 1;
+    groups = [...groups].sort((a, b) => {
+      if (a.key === '__empty__') return 1;
+      if (b.key === '__empty__') return -1;
+      return dir * compareDatabaseValues(a.value ?? a.label, b.value ?? b.label, column);
+    });
+  }
+  return groups;
+}
+
+function presetTableGroups(column: DatabaseColumn, view?: DatabaseViewConfig): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
+  if (column.type === 'status' && view?.groupStatusMode === 'group') return statusGroupTablePresets(column);
+  if (column.type === 'select' || column.type === 'status' || column.type === 'multi_select') {
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    return [
+      ...options.map((option: any) => ({
+        key: String(option.id || ''),
+        label: String(option.value || option.id || '未命名'),
+        value: String(option.id || ''),
+        defaults: groupCreateDefaults(column, String(option.id || '')),
+      })),
+      { key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') },
+    ];
+  }
+  if (column.type === 'checkbox') {
+    return [
+      { key: 'checked', label: '已勾选', value: 'true', defaults: groupCreateDefaults(column, 'true') },
+      { key: 'unchecked', label: '未勾选', value: 'false', defaults: groupCreateDefaults(column, 'false') },
+    ];
+  }
+  return [];
+}
+
+function hasPresetTableGroup(column: DatabaseColumn, key: string, view?: DatabaseViewConfig) {
+  return presetTableGroups(column, view).some((group) => group.key === key);
+}
+
+function tableGroupKeysForRow(item: TableDisplayRow, column: DatabaseColumn, view?: DatabaseViewConfig): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
+  const raw = String(item.props[column.id] ?? item.row.values[column.id] ?? '').trim();
+  if (column.type === 'multi_select') {
+    const values = parseMultiSelectValue(raw);
+    if (!values.length) return [{ key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') }];
+    return values.map((value) => optionTableGroup(column, value));
+  }
+  if (column.type === 'status' && view?.groupStatusMode === 'group') {
+    return [statusGroupForOption(column, raw)];
+  }
+  if (column.type === 'select' || column.type === 'status') {
+    return [raw ? optionTableGroup(column, raw) : { key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') }];
+  }
+  if (column.type === 'checkbox') {
+    return [raw === 'true'
+      ? { key: 'checked', label: '已勾选', value: 'true', defaults: groupCreateDefaults(column, 'true') }
+      : { key: 'unchecked', label: '未勾选', value: 'false', defaults: groupCreateDefaults(column, 'false') }];
+  }
+  if (column.type === 'date' || column.type === 'created_time' || column.type === 'last_edited_time') {
+    return [dateTableGroup(column, raw, view?.groupDateMode || 'relative')];
+  }
+  const key = raw || '__empty__';
+  return [{ key, label: raw || '空白', value: raw, defaults: groupCreateDefaults(column, raw) }];
+}
+
+function statusGroupTablePresets(column: DatabaseColumn): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
+  const options = Array.isArray(column.config?.options) ? column.config.options : [];
+  const optionByID = new Map(options.map((option: any) => [String(option.id || ''), option]));
+  const used = new Set<string>();
+  const groups = Array.isArray(column.config?.groups) ? column.config.groups : [];
+  const presets: Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> = groups.map((group: any, index: number) => {
+    const ids = Array.isArray(group.option_ids) ? group.option_ids.map((id: string) => String(id || '')).filter((id: string) => optionByID.has(id)) : [];
+    ids.forEach((id: string) => used.add(id));
+    return {
+      key: `status-group:${String(group.id || group.name || index)}`,
+      label: String(group.name || '未命名分组'),
+      defaults: groupCreateDefaults(column, ids[0] || ''),
+    };
+  });
+  const rest = options.filter((option: any) => !used.has(String(option.id || '')));
+  if (rest.length) presets.push({ key: 'status-group:ungrouped', label: '未分组', defaults: groupCreateDefaults(column, String(rest[0]?.id || '')) });
+  presets.push({ key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') });
+  return presets;
+}
+
+function statusGroupForOption(column: DatabaseColumn, value: string) {
+  if (!value) return { key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') };
+  const options = Array.isArray(column.config?.options) ? column.config.options : [];
+  const optionIDs = new Set(options.map((option: any) => String(option.id || '')));
+  const groups = Array.isArray(column.config?.groups) ? column.config.groups : [];
+  for (let index = 0; index < groups.length; index += 1) {
+    const group = groups[index];
+    const ids = Array.isArray(group.option_ids) ? group.option_ids.map((id: string) => String(id || '')) : [];
+    if (ids.includes(value)) {
+      return {
+        key: `status-group:${String(group.id || group.name || index)}`,
+        label: String(group.name || '未命名分组'),
+        defaults: groupCreateDefaults(column, value),
+      };
+    }
+  }
+  if (optionIDs.has(value)) return { key: 'status-group:ungrouped', label: '未分组', defaults: groupCreateDefaults(column, value) };
+  return { key: value, label: value, defaults: groupCreateDefaults(column, value) };
+}
+
+function dateTableGroup(column: DatabaseColumn, raw: string, mode: 'relative' | 'day' | 'week' | 'month' | 'year') {
+  const date = parseDateValue(raw);
+  if (!date) return { key: '__empty__', label: '无日期', value: '', defaults: groupCreateDefaults(column, '') };
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const isoDay = `${yyyy}-${mm}-${dd}`;
+  if (mode === 'day') return { key: `day:${isoDay}`, label: isoDay, value: isoDay, defaults: groupCreateDefaults(column, isoDay) };
+  if (mode === 'month') return { key: `month:${yyyy}-${mm}`, label: `${yyyy}年${Number(mm)}月`, value: `${yyyy}-${mm}-01`, defaults: groupCreateDefaults(column, isoDay) };
+  if (mode === 'year') return { key: `year:${yyyy}`, label: `${yyyy}年`, value: `${yyyy}-01-01`, defaults: groupCreateDefaults(column, isoDay) };
+  if (mode === 'week') {
+    const start = startOfWeek(date);
+    const startYear = start.getFullYear();
+    const startMonth = String(start.getMonth() + 1).padStart(2, '0');
+    const startDay = String(start.getDate()).padStart(2, '0');
+    const key = `${startYear}-${startMonth}-${startDay}`;
+    return { key: `week:${key}`, label: `${key} 所在周`, value: key, defaults: groupCreateDefaults(column, isoDay) };
+  }
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((dateStart.getTime() - todayStart.getTime()) / 86400000);
+  if (diffDays === -1) return { key: 'yesterday', label: '昨天', value: isoDay, defaults: groupCreateDefaults(column, isoDay) };
+  if (diffDays === 0) return { key: 'today', label: '今天', value: isoDay, defaults: groupCreateDefaults(column, isoDay) };
+  if (diffDays === 1) return { key: 'tomorrow', label: '明天', value: isoDay, defaults: groupCreateDefaults(column, isoDay) };
+  if (diffDays < 0) return { key: 'past', label: '过去', value: isoDay, defaults: groupCreateDefaults(column, isoDay) };
+  return { key: 'future', label: '未来', value: isoDay, defaults: groupCreateDefaults(column, isoDay) };
+}
+
+function startOfWeek(date: Date) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const offset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - offset);
+  return start;
+}
+
+function optionTableGroup(column: DatabaseColumn, value: string) {
+  const options = Array.isArray(column.config?.options) ? column.config.options : [];
+  const option = options.find((item: any) => String(item.id || '') === value);
+  return {
+    key: value || '__empty__',
+    label: String(option?.value || value || '空白'),
+    value,
+    defaults: groupCreateDefaults(column, value),
+  };
+}
+
+function groupCreateDefaults(column: DatabaseColumn, value: string): Record<string, string> {
+  if (column.readonly || column.type === 'formula' || column.type === 'linked' || column.type === 'created_time' || column.type === 'last_edited_time' || column.type === 'last_edited_user') return {};
+  if (column.type === 'multi_select') return value ? { [column.id]: JSON.stringify([value]) } : { [column.id]: '[]' };
+  return { [column.id]: value };
+}
+
+function isEmptyTableGroup(group: TableGroup) {
+  return group.key === '__empty__' || group.value === '';
+}
+
+function renderTableGroupLabel(group: TableGroup, column?: DatabaseColumn): ReactNode {
+  if (!column) return group.label;
+  if ((column.type === 'select' || column.type === 'status') && group.value) {
+    const option = (column.config?.options || []).find((item: any) => String(item.id || '') === group.value);
+    if (option) return <OptionTag option={option} config={column.config || {}} />;
+  }
+  if (column.type === 'multi_select' && group.value) {
+    const option = (column.config?.options || []).find((item: any) => String(item.id || '') === group.value);
+    if (option) return <OptionTag option={option} config={column.config || {}} />;
+  }
+  if (column.type === 'checkbox') {
+    return (
+      <span className="akdb-group-checkbox">
+        <span className={`akdb-group-checkbox-box is-table ${group.key === 'checked' ? 'is-checked' : ''}`}>
+          {group.key === 'checked' && <Check size={13} />}
+        </span>
+        <span>{column.name}</span>
+      </span>
+    );
+  }
+  return group.label;
 }
 
 function removeColumnFromView(view: DatabaseViewConfig, columnId: string): DatabaseViewConfig {
