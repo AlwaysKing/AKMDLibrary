@@ -506,6 +506,15 @@
 .akdb-dialog-danger { background: #eb5757; color: #fff; }
 .akdb-dialog-danger:hover:not(:disabled) { background: #d94444; }
 .akdb-table-shell { position: relative; overflow: visible; }
+.akdb-group-overlay { position: absolute; inset: 0 auto auto 0; z-index: 5; width: max-content; pointer-events: none; }
+.akdb-group-overlay-toggle,
+.akdb-group-overlay-add { position: absolute; left: 0; pointer-events: auto; }
+.akdb-group-overlay-toggle { max-width: none; white-space: nowrap; transform: translateY(4px); }
+.akdb-group-overlay-toggle .akdb-group-label,
+.akdb-group-overlay-toggle .akdb-option-tag,
+.akdb-group-overlay-toggle .akdb-group-count { flex: 0 0 auto; min-width: max-content; }
+.akdb-group-overlay-toggle .akdb-group-label { overflow: visible; text-overflow: clip; }
+.akdb-group-overlay-toggle .akdb-group-count { margin-left: 6px; }
 .akdb-table-wrap { position: relative; overflow: auto; border-top: 0; padding-left: 0; scrollbar-width: thin; scrollbar-color: #c8c9c5 transparent; user-select: none; -webkit-user-select: none; }
 .akdb-table-wrap.is-groups-collapsed { overflow-x: hidden; }
 .akdb-table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -1004,6 +1013,8 @@
 .akdb-group-column-head th { position: relative; height: 36px; border-bottom: 1px solid rgba(55,53,47,.10); border-right: 0; background: #fff; color: #787774; padding: 0 8px; text-align: left; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .akdb-group-column-head th:last-child { border-right: 0; }
 .akdb-group-add-row td { border-bottom: 0; }
+.akdb-group-overlay-add { display: inline-flex; align-items: center; gap: 8px; width: max-content; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #9b9a97; cursor: pointer; padding: 0 8px; font: inherit; font-size: 13px; line-height: 20px; text-align: left; white-space: nowrap; transform: translateY(4px); }
+.akdb-group-overlay-add:hover { background: rgba(55,53,47,.06); color: #37352f; }
 .akdb-table input,
 .akdb-table textarea { width: 100%; height: 28px; border: 0; background: transparent; outline: none; font: inherit; color: #37352f; user-select: text; -webkit-user-select: text; }
 .akdb-table textarea { display: block; min-height: 28px; overflow: hidden; resize: none; line-height: 20px; padding: 4px 0; white-space: pre; }

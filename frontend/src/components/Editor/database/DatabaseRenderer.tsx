@@ -1483,7 +1483,45 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             })}
           </div>
         )}
-        <div ref={tableWrapRef} className={`akdb-table-wrap ${allTableGroupsCollapsed ? 'is-groups-collapsed' : ''}`} tabIndex={-1} onPointerDownCapture={beginCellPointerFromTable}>
+        {visibleColumns.length > 0 && tableGroups.length > 0 && (
+          <div className="akdb-group-overlay">
+            {tableGroups.map((group) => {
+              const collapsed = collapsedGroupKeys.has(group.key);
+              const groupTop = tableRowOffsets.get(`__group__:${group.key}`) ?? 0;
+              const groupAddTop = groupTop + 72 + group.rows.length * 36;
+              return (
+                <Fragment key={`overlay:${group.key}`}>
+                  <button
+                    type="button"
+                    className="akdb-group-toggle akdb-group-overlay-toggle"
+                    style={{ top: groupTop }}
+                    onClick={() => toggleTableGroup(group.key)}
+                  >
+                    <span className={`akdb-group-toggle-caret ${collapsed ? 'is-collapsed' : ''}`} aria-hidden="true" />
+                    <span className="akdb-group-label">{renderTableGroupLabel(group, tableGroupColumn)}</span>
+                    <span className="akdb-group-count">{group.rows.length}</span>
+                  </button>
+                  {!readonly && !collapsed && (
+                    <button
+                      type="button"
+                      className="akdb-group-overlay-add"
+                      style={{ top: groupAddTop }}
+                      onClick={() => void createRowInGroup(group)}
+                    >
+                      <Plus size={15} />新页面
+                    </button>
+                  )}
+                </Fragment>
+              );
+            })}
+          </div>
+        )}
+        <div
+          ref={tableWrapRef}
+          className={`akdb-table-wrap ${allTableGroupsCollapsed ? 'is-groups-collapsed' : ''}`}
+          tabIndex={-1}
+          onPointerDownCapture={beginCellPointerFromTable}
+        >
           <table
             className={[
               'akdb-table',
@@ -1582,13 +1620,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
               return (
                 <Fragment key={group.key}>
                   <tr key={`group:${group.key}`} className="akdb-group-row">
-                    <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
-                      <button type="button" className="akdb-group-toggle" onClick={() => toggleTableGroup(group.key)}>
-                        <span className={`akdb-group-toggle-caret ${collapsed ? 'is-collapsed' : ''}`} aria-hidden="true" />
-                        <span className="akdb-group-label">{renderTableGroupLabel(group, tableGroupColumn)}</span>
-                        <span className="akdb-group-count">{group.rows.length}</span>
-                      </button>
-                    </td>
+                    <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)} />
                   </tr>
                   {!collapsed && (
                     <>
@@ -1729,9 +1761,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                           data-akdb-row-drop-key={groupAddDropKey}
                           data-akdb-drop-group-key={group.key}
                         >
-                          <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
-                            <button type="button" onClick={() => void createRowInGroup(group)}><Plus size={15} />新页面</button>
-                          </td>
+                          <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)} />
                         </tr>
                       )}
                     </>
