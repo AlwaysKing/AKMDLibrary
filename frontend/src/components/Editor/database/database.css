@@ -506,7 +506,7 @@
 .akdb-dialog-danger { background: #eb5757; color: #fff; }
 .akdb-dialog-danger:hover:not(:disabled) { background: #d94444; }
 .akdb-table-shell { position: relative; overflow: visible; }
-.akdb-table-wrap { position: relative; overflow: auto; border-top: 1px solid rgba(55,53,47,.10); padding-left: 0; scrollbar-width: thin; scrollbar-color: #c8c9c5 transparent; user-select: none; -webkit-user-select: none; }
+.akdb-table-wrap { position: relative; overflow: auto; border-top: 0; padding-left: 0; scrollbar-width: thin; scrollbar-color: #c8c9c5 transparent; user-select: none; -webkit-user-select: none; }
 .akdb-table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
 .akdb-table-wrap::-webkit-scrollbar-track { background: transparent; }
 .akdb-table-wrap::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background-color: #c8c9c5 !important; background-clip: padding-box; }
@@ -517,6 +517,7 @@
 .akdb-table thead.is-column-dragging,
 .akdb-table tbody.is-column-dragging { overflow: hidden; contain: paint; }
 .akdb-table th, .akdb-table td { border-right: 1px solid rgba(55,53,47,.10); border-bottom: 1px solid rgba(55,53,47,.10); height: 36px; padding: 0 8px; text-align: left; vertical-align: middle; }
+.akdb-table th { border-right: 0; }
 .akdb-table.is-hide-vertical-lines th,
 .akdb-table.is-hide-vertical-lines td { border-right-color: transparent; }
 .akdb-table th:last-child, .akdb-table td:last-child { border-right: 0; }
@@ -594,6 +595,7 @@
 .akdb-timezone-item > svg { color: var(--akdb-menu-icon); }
 .akdb-table th { position: relative; background: transparent; color: #8f8e8a; font-weight: 400; }
 .akdb-table th[data-column-index] { cursor: grab; touch-action: none; }
+.akdb-table th[data-column-index]:hover { background: rgba(55,53,47,.06); }
 .akdb-table th[data-column-index]:active { cursor: grabbing; }
 .akdb-table th.is-dragging,
 .akdb-table td.is-dragging { position: relative; z-index: 3; opacity: .92; background: #fff; box-shadow: 0 8px 18px rgba(15,23,42,.14); }
@@ -993,7 +995,7 @@
 .akdb-group-checkbox-box.is-table.is-checked { background: var(--c-bluBacAccPri, #2383e2); }
 .akdb-group-checkbox-box svg { width: 12px; height: 12px; stroke-width: 2.5; }
 .akdb-group-checkbox-box.is-table svg { width: 11px; height: 11px; }
-.akdb-group-column-head th { position: relative; height: 36px; border-bottom: 1px solid rgba(55,53,47,.10); border-right: 1px solid rgba(55,53,47,.10); background: #fff; color: #787774; padding: 0 8px; text-align: left; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.akdb-group-column-head th { position: relative; height: 36px; border-bottom: 1px solid rgba(55,53,47,.10); border-right: 0; background: #fff; color: #787774; padding: 0 8px; text-align: left; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .akdb-group-column-head th:last-child { border-right: 0; }
 .akdb-group-add-row td { border-bottom: 0; }
 .akdb-table input,
