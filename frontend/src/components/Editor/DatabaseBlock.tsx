@@ -38,7 +38,6 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const { currentSpace } = useSpaceStore();
   const slug = currentSpace?.slug || '';
   const navigate = useNavigate();
-  const src = block.props?.src || '';
   const viewId = block.props?.viewId || '';
   const viewsText = block.props?.views || '';
   const title = block.props?.title || '数据库';
@@ -49,7 +48,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [newName, setNewName] = useState('');
   const [createRowRequest, setCreateRowRequest] = useState(0);
   const [draftTitle, setDraftTitle] = useState(title);
-  const [sourceAvailable, setSourceAvailable] = useState(!!src);
+  const [sourceAvailable, setSourceAvailable] = useState(false);
   const [schemaColumns, setSchemaColumns] = useState<DatabaseColumn[]>([]);
   const [runtimeGroupOptions, setRuntimeGroupOptions] = useState<Array<{ key: string; label: string }>>([]);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -62,12 +61,13 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
-  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color'>('main');
+  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
   const [iconPickerRequest, setIconPickerRequest] = useState(0);
   const [viewContextMenu, setViewContextMenu] = useState<{ viewId: string; top: number; left: number; pane: 'main' | 'source' } | null>(null);
+  const [createViewMenu, setCreateViewMenu] = useState<{ top: number; left: number; step: 'type' | 'source'; type?: DatabaseViewType; showAll?: boolean; query?: string } | null>(null);
   const [viewNameFocusRequest, setViewNameFocusRequest] = useState(0);
   const filterRef = useRef<HTMLDivElement | null>(null);
   const sortRef = useRef<HTMLDivElement | null>(null);
@@ -75,6 +75,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const sortButtonRef = useRef<HTMLButtonElement | null>(null);
   const viewSettingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const viewContextMenuRef = useRef<HTMLDivElement | null>(null);
+  const createViewMenuRef = useRef<HTMLDivElement | null>(null);
   const filterMenuRect = useDropdownPosition(filterOpen, filterButtonRef, 290);
   const sortMenuRect = useDropdownPosition(sortOpen, sortButtonRef, 292, '', { edge: 'right' });
   const viewSettingsRect = useDropdownPosition(viewSettingsOpen, viewSettingsButtonRef, 292, viewSettingsPane, viewSettingsPane === 'sort' ? { edge: 'right' } : undefined);
@@ -84,14 +85,17 @@ function DatabaseBlockComponent({ block, editor }: any) {
 
   const parsed = useMemo(() => parseDatabaseMarkdown(viewsText), [viewsText]);
   const activeView = parsed.views.find((v) => v.id === viewId) || parsed.views[0];
-  const activeSource = activeView?.source || src;
+  const activeSource = activeView?.source || '';
   const viewLocked = !!activeView?.readonly;
   const showDatabaseTitle = activeView?.showSourceTitle !== false;
+  const usedSourceIds = useMemo(() => Array.from(new Set(parsed.views.map((view) => view.source).filter((source): source is string => !!source))), [parsed.views]);
+  const usedSources = useMemo(() => sources.filter((source) => usedSourceIds.includes(source.id)), [sources, usedSourceIds]);
+  const otherSources = useMemo(() => sources.filter((source) => !usedSourceIds.includes(source.id)), [sources, usedSourceIds]);
 
   useEffect(() => {
-    if (!slug || (!pickerOpen && !viewContextMenu && src)) return;
+    if (!slug) return;
     databasesApi.list(slug).then(setSources).catch(() => setSources([]));
-  }, [slug, src, pickerOpen, viewContextMenu]);
+  }, [slug]);
 
   useEffect(() => {
     setDraftTitle(title);
@@ -182,6 +186,24 @@ function DatabaseBlockComponent({ block, editor }: any) {
     };
   }, [viewContextMenu]);
 
+  useEffect(() => {
+    if (!createViewMenu) return;
+    const close = (event: globalThis.PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && createViewMenuRef.current?.contains(target)) return;
+      setCreateViewMenu(null);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setCreateViewMenu(null);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [createViewMenu]);
+
   const bind = (db: DatabaseSummary) => {
     setPendingBind(db);
     setPickerOpen(false);
@@ -194,9 +216,10 @@ function DatabaseBlockComponent({ block, editor }: any) {
       const view = insertAllColumns
         ? defaultView((await databasesApi.get(slug, db.id)).columns)
         : defaultView([]);
+      view.source = db.id;
       editor.updateBlock(block.id, {
         type: 'database',
-        props: { src: db.id, viewId: view.id, views: serializeDatabaseMarkdown([view]) },
+        props: { src: '', viewId: view.id, views: serializeDatabaseMarkdown([view]) },
       } as any);
       requestDatabaseImmediateSync();
       setPickerOpen(false);
@@ -224,9 +247,10 @@ function DatabaseBlockComponent({ block, editor }: any) {
     try {
       const db = await databasesApi.create(slug, { name: newName.trim(), icon: '🗃️' });
       const view = defaultView([]);
+      view.source = db.id;
       editor.updateBlock(block.id, {
         type: 'database',
-        props: { src: db.id, viewId: view.id, views: serializeDatabaseMarkdown([view]) },
+        props: { src: '', viewId: view.id, views: serializeDatabaseMarkdown([view]) },
       } as any);
       requestDatabaseImmediateSync();
       setPickerOpen(false);
@@ -236,11 +260,37 @@ function DatabaseBlockComponent({ block, editor }: any) {
     }
   };
 
-  const addView = (type: DatabaseViewType) => {
-    const next: DatabaseViewConfig = { ...defaultView([]), type, name: viewName(type), source: activeSource && activeSource !== src ? activeSource : undefined };
+  const createViewWithSource = async (type: DatabaseViewType, sourceId: string) => {
+    if (!slug || !sourceId) return;
+    const detail = await databasesApi.get(slug, sourceId);
+    const next: DatabaseViewConfig = { ...defaultView(detail.columns || []), type, name: viewName(type), source: sourceId };
     const views = [...parsed.views, next];
-    editor.updateBlock(block.id, { props: { ...block.props, viewId: next.id, views: serializeDatabaseMarkdown(views) } } as any);
+    editor.updateBlock(block.id, { props: { ...block.props, src: '', viewId: next.id, views: serializeDatabaseMarkdown(views) } } as any);
     requestDatabaseImmediateSync();
+    setCreateViewMenu(null);
+  };
+
+  const openCreateViewMenu = (event: MouseEvent<HTMLButtonElement>) => {
+    if (!slug) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setFilterOpen(false);
+    setSortOpen(false);
+    setViewSettingsOpen(false);
+    setViewContextMenu(null);
+    const width = 292;
+    const left = Math.min(Math.max(event.clientX, 8), Math.max(8, window.innerWidth - width - 8));
+    const top = Math.min(Math.max(event.clientY, 8), Math.max(8, window.innerHeight - 420));
+    setCreateViewMenu({ top, left, step: 'type', showAll: false, query: '' });
+  };
+
+  const selectCreateViewType = (type: DatabaseViewType) => {
+    if (!createViewMenu) return;
+    if (usedSourceIds.length === 1) {
+      void createViewWithSource(type, usedSourceIds[0]);
+      return;
+    }
+    setCreateViewMenu({ ...createViewMenu, step: 'source', type, showAll: usedSourceIds.length === 0, query: '' });
   };
 
   const switchView = (id: string) => {
@@ -287,7 +337,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     const nextColumns = defaultView(detail.columns || []).columns;
     const nextViews = parsed.views.map((view) => view.id === targetView.id ? {
       ...view,
-      source: sourceId === src ? undefined : sourceId,
+      source: sourceId,
       columns: nextColumns,
       filters: [],
       sorts: [],
@@ -301,6 +351,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     editor.updateBlock(block.id, { props: { ...block.props, viewId: targetView.id, views: serializeDatabaseMarkdown(nextViews) } } as any);
     requestDatabaseImmediateSync();
     setViewContextMenu(null);
+    setViewSettingsPane('main');
   };
 
   const deleteView = (targetView: DatabaseViewConfig) => {
@@ -311,7 +362,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     requestDatabaseImmediateSync();
   };
 
-  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' = 'main') => {
+  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' = 'main') => {
     setFilterOpen(false);
     setSortOpen(false);
     setViewContextMenu(null);
@@ -563,6 +614,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   };
   const sourceControlsDisabled = !activeSource || !sourceAvailable;
   const controlsDisabled = sourceControlsDisabled || viewLocked;
+  const createViewDisabled = !slug || viewLocked;
   const filterColumns = useMemo(() => {
     const query = filterQuery.trim().toLowerCase();
     const columns = schemaColumns.filter((column) => !column.readonly && column.type !== 'linked');
@@ -583,7 +635,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const hasViewRules = hasFilterRules || (activeView?.sorts || []).length > 0;
   const showRuleBar = !!activeView && hasViewRules && !sourceControlsDisabled && !filterBarHidden;
   const contextView = viewContextMenu ? parsed.views.find((view) => view.id === viewContextMenu.viewId) : null;
-  const sourceName = sources.find((source) => source.id === activeSource)?.name || title;
+  const sourceName = sources.find((source) => source.id === activeSource)?.name || '未选择';
+  const canChangeSource = true;
   const stopEditorTableHandles = (event: MouseEvent<HTMLDivElement>) => {
     event.stopPropagation();
   };
@@ -742,6 +795,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
       {viewSettingsOpen && viewSettingsRect && activeView && createPortal(
         <ViewSettingsMenu
           schemaName={sourceName}
+          sources={sources}
+          currentSourceId={activeSource}
+          canChangeSource={canChangeSource}
           columns={schemaColumns}
           runtimeGroupOptions={runtimeGroupOptions}
           activeView={activeView}
@@ -783,6 +839,19 @@ function DatabaseBlockComponent({ block, editor }: any) {
             setActiveSortId(null);
             setAdvancedFilterOpen(false);
             setColorQuery('');
+          }}
+          onOpenSource={() => {
+            if (!canChangeSource) return;
+            setViewSettingsPane('source');
+            setFilterOpen(false);
+            setSortOpen(false);
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onPickSource={(sourceId) => {
+            if (!canChangeSource) return;
+            void changeViewSource(activeView, sourceId);
           }}
           onBack={() => setViewSettingsPane('main')}
           onClose={() => {
@@ -894,7 +963,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
                   }}
                 />
               </div>
-              {parsed.views.length <= 1 && <button className="akdb-ghost-icon" type="button" disabled={controlsDisabled} onClick={() => addView('table')} aria-label="新增表格视图"><Plus size={19} /></button>}
+              {parsed.views.length <= 1 && <button className="akdb-ghost-icon" type="button" disabled={createViewDisabled} onClick={openCreateViewMenu} aria-label="新增视图"><Plus size={19} /></button>}
             </div>
           )}
           {!showViewTabs && actions}
@@ -918,7 +987,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
                   <span>{v.name}</span>
                 </button>
               ))}
-              <button type="button" disabled={controlsDisabled} onClick={() => addView('table')}><Plus size={15} /></button>
+              <button type="button" disabled={createViewDisabled} onClick={openCreateViewMenu}><Plus size={15} /></button>
             </div>
           )}
           {actions}
@@ -1018,7 +1087,8 @@ function DatabaseBlockComponent({ block, editor }: any) {
         <ViewTabContextMenu
           ref={viewContextMenuRef}
           sources={sources}
-          currentSourceId={contextView.source || src}
+          currentSourceId={contextView.source || ''}
+          canChangeSource={canChangeSource}
           canDelete={parsed.views.length > 1}
           pane={viewContextMenu.pane}
           style={{ top: viewContextMenu.top, left: viewContextMenu.left }}
@@ -1028,9 +1098,15 @@ function DatabaseBlockComponent({ block, editor }: any) {
             openViewSettings('main');
           }}
           onEdit={() => openViewSettings('main')}
-          onOpenSource={() => setViewContextMenu((current) => current ? { ...current, pane: 'source' } : current)}
+          onOpenSource={() => {
+            if (!canChangeSource) return;
+            setViewContextMenu((current) => current ? { ...current, pane: 'source' } : current);
+          }}
           onBack={() => setViewContextMenu((current) => current ? { ...current, pane: 'main' } : current)}
-          onPickSource={(sourceId) => void changeViewSource(contextView, sourceId)}
+          onPickSource={(sourceId) => {
+            if (!canChangeSource) return;
+            void changeViewSource(contextView, sourceId);
+          }}
           onDuplicate={() => {
             duplicateView(contextView);
             setViewContextMenu(null);
@@ -1041,6 +1117,102 @@ function DatabaseBlockComponent({ block, editor }: any) {
           }}
           onClose={() => setViewContextMenu(null)}
         />,
+        document.body,
+      )}
+      {createViewMenu && createPortal(
+        <div
+          ref={createViewMenuRef}
+          className="akdb-view-create-menu"
+          role="dialog"
+          aria-label={createViewMenu.step === 'type' ? '选择视图类型' : '链接到现有数据源'}
+          style={{ top: createViewMenu.top, left: createViewMenu.left }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {createViewMenu.step === 'type' ? (
+            <>
+              <div className="akdb-view-create-head">
+                <span>选择视图类型</span>
+                <button type="button" aria-label="关闭" onClick={() => setCreateViewMenu(null)}><X size={15} /></button>
+              </div>
+              <div className="akdb-view-layout-grid akdb-view-create-grid">
+                {databaseViewTypeChoices.map((choice) => (
+                  <button
+                    key={choice.type}
+                    type="button"
+                    className="akdb-view-layout-card"
+                    onClick={() => selectCreateViewType(choice.type)}
+                  >
+                    <span className="akdb-view-layout-card-icon">{choice.icon}</span>
+                    <span>{choice.label}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="akdb-view-create-head">
+                <button type="button" aria-label="返回" onClick={() => setCreateViewMenu((current) => current ? { ...current, step: 'type', query: '', showAll: false } : current)}><ArrowLeft size={15} /></button>
+                <span>链接到现有数据源</span>
+                <button type="button" aria-label="关闭" onClick={() => setCreateViewMenu(null)}><X size={15} /></button>
+              </div>
+              <input
+                className="akdb-view-create-search"
+                value={createViewMenu.query || ''}
+                placeholder="链接..."
+                onChange={(event) => setCreateViewMenu((current) => current ? { ...current, query: event.currentTarget.value } : current)}
+              />
+              <div className="akdb-view-create-section">
+                <div className="akdb-view-create-section-title">建议</div>
+                <div className="akdb-view-create-list">
+                  {usedSources.length === 0 ? (
+                    <div className="akdb-view-create-empty">暂无推荐来源</div>
+                  ) : usedSources.filter((source) => {
+                    const query = (createViewMenu.query || '').trim().toLowerCase();
+                    return !query || source.name.toLowerCase().includes(query);
+                  }).map((source) => (
+                    <button
+                      key={source.id}
+                      type="button"
+                      className="akdb-view-create-item"
+                      onClick={() => createViewMenu.type && void createViewWithSource(createViewMenu.type, source.id)}
+                    >
+                      <Database size={17} />
+                      <span>{source.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="akdb-view-create-section">
+                <div className="akdb-view-create-section-title">现有数据源</div>
+                <div className="akdb-view-create-list">
+                  {(createViewMenu.showAll ? sources : usedSources).filter((source) => {
+                    const query = (createViewMenu.query || '').trim().toLowerCase();
+                    return !query || source.name.toLowerCase().includes(query);
+                  }).map((source) => (
+                    <button
+                      key={source.id}
+                      type="button"
+                      className="akdb-view-create-item"
+                      onClick={() => createViewMenu.type && void createViewWithSource(createViewMenu.type, source.id)}
+                    >
+                      <Database size={17} />
+                      <span>{source.name}</span>
+                    </button>
+                  ))}
+                  {!createViewMenu.showAll && otherSources.length > 0 && (
+                    <button
+                      type="button"
+                      className="akdb-view-create-more"
+                      onClick={() => setCreateViewMenu((current) => current ? { ...current, showAll: true } : current)}
+                    >
+                      <span>显示其他 {otherSources.length} 个</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>,
         document.body,
       )}
     </div>
@@ -1086,6 +1258,7 @@ function ViewTypeIcon({ type }: { type: DatabaseViewType }) {
 const ViewTabContextMenu = forwardRef<HTMLDivElement, {
   sources: DatabaseSummary[];
   currentSourceId: string;
+  canChangeSource: boolean;
   canDelete: boolean;
   pane: 'main' | 'source';
   style: CSSProperties;
@@ -1097,7 +1270,7 @@ const ViewTabContextMenu = forwardRef<HTMLDivElement, {
   onDuplicate: () => void;
   onDelete: () => void;
   onClose: () => void;
-}>(({ sources, currentSourceId, canDelete, pane, style, onRename, onEdit, onOpenSource, onBack, onPickSource, onDuplicate, onDelete, onClose }, ref) => {
+}>(({ sources, currentSourceId, canChangeSource, canDelete, pane, style, onRename, onEdit, onOpenSource, onBack, onPickSource, onDuplicate, onDelete, onClose }, ref) => {
   const currentSource = sources.find((source) => source.id === currentSourceId);
   return (
     <div
@@ -1128,7 +1301,8 @@ const ViewTabContextMenu = forwardRef<HTMLDivElement, {
                 key={source.id}
                 type="button"
                 className={`akdb-view-tab-context-item ${source.id === currentSourceId ? 'is-active' : ''}`}
-                onClick={() => onPickSource(source.id)}
+                disabled={!canChangeSource}
+                onClick={canChangeSource ? () => onPickSource(source.id) : undefined}
               >
                 <Database size={17} />
                 <span>{source.name}</span>
@@ -1151,7 +1325,12 @@ const ViewTabContextMenu = forwardRef<HTMLDivElement, {
           <SlidersHorizontal size={17} />
           <span>编辑视图</span>
         </button>
-        <button type="button" className="akdb-view-tab-context-item" onClick={onOpenSource}>
+        <button
+          type="button"
+          className="akdb-view-tab-context-item"
+          disabled={!canChangeSource}
+          onClick={canChangeSource ? onOpenSource : undefined}
+        >
           <Database size={17} />
           <span>来源</span>
           <span className="akdb-view-tab-context-detail">{currentSource?.name || '未绑定'}</span>
@@ -3890,6 +4069,9 @@ function viewSettingsColumnIconID(column?: DatabaseColumn) {
 
 function ViewSettingsMenu({
   schemaName,
+  sources,
+  currentSourceId,
+  canChangeSource,
   columns,
   runtimeGroupOptions,
   activeView,
@@ -3901,6 +4083,8 @@ function ViewSettingsMenu({
   onOpenSort,
   onOpenGroup,
   onOpenColor,
+  onOpenSource,
+  onPickSource,
   onBack,
   onClose,
   onRename,
@@ -3942,10 +4126,13 @@ function ViewSettingsMenu({
   style,
 }: {
   schemaName: string;
+  sources: DatabaseSummary[];
+  currentSourceId: string;
+  canChangeSource: boolean;
   columns: DatabaseColumn[];
   runtimeGroupOptions: Array<{ key: string; label: string }>;
   activeView: DatabaseViewConfig;
-  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color';
+  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source';
   focusNameRequest: number;
   onOpenLayout: () => void;
   onOpenVisibility: () => void;
@@ -3953,6 +4140,8 @@ function ViewSettingsMenu({
   onOpenSort: () => void;
   onOpenGroup: () => void;
   onOpenColor: () => void;
+  onOpenSource: () => void;
+  onPickSource: (sourceId: string) => void;
   onBack: () => void;
   onClose: () => void;
   onRename: (name: string) => void;
@@ -4511,10 +4700,49 @@ function ViewSettingsMenu({
         </div>
         <div className="akdb-view-settings-section">
           <div className="akdb-view-settings-section-title">数据源设置</div>
-          <SettingsMenuItem icon={<Database size={17} />} label="来源" detail={schemaName} disabled />
+          <SettingsMenuItem
+            icon={<Database size={17} />}
+            label="来源"
+            detail={schemaName}
+            disabled={!canChangeSource}
+            trailing={canChangeSource}
+            onClick={canChangeSource ? onOpenSource : undefined}
+          />
           <SettingsMenuItem icon={<List size={17} />} label="编辑属性" />
           <SettingsMenuItem icon={<Zap size={17} />} label="自动化" />
           <SettingsMenuItem icon={<MoreHorizontal size={17} />} label="更多设置" />
+        </div>
+      </div>
+    );
+  }
+
+  if (pane === 'source') {
+    return (
+      <div className="akdb-view-settings-menu akdb-view-settings-source-menu" role="dialog" aria-label="来源" style={style}>
+        <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+          <button type="button" aria-label="返回查看设置" onClick={onBack}><ArrowLeft size={17} /></button>
+          <span>来源</span>
+          <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭来源菜单" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className="akdb-view-tab-source-list">
+          {sources.length === 0 ? (
+            <div className="akdb-view-tab-context-empty">暂无数据源</div>
+          ) : sources.map((source) => (
+            <button
+              key={source.id}
+              type="button"
+              className={`akdb-view-tab-context-item ${source.id === currentSourceId ? 'is-active' : ''}`}
+              disabled={!canChangeSource}
+              onClick={() => {
+                if (!canChangeSource) return;
+                onPickSource(source.id);
+              }}
+            >
+              <Database size={17} />
+              <span>{source.name}</span>
+              {source.id === currentSourceId && <Check size={16} />}
+            </button>
+          ))}
         </div>
       </div>
     );
