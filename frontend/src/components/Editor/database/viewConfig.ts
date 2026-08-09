@@ -37,6 +37,18 @@ export interface ViewSortRule {
 export type ViewGroupSort = 'manual' | 'ascending' | 'descending';
 export type ViewStatusGroupMode = 'option' | 'group';
 export type ViewDateGroupMode = 'relative' | 'day' | 'week' | 'month' | 'year';
+export type ViewConditionalColorScope = 'cell' | 'row';
+export type ViewConditionalColorSource = 'option' | 'custom';
+
+export interface ViewConditionalColorRule {
+  id: string;
+  property: string;
+  op: ViewFilterOperator;
+  value?: string | string[] | boolean;
+  scope?: ViewConditionalColorScope;
+  colorSource?: ViewConditionalColorSource;
+  color?: string;
+}
 
 export interface DatabaseViewConfig {
   id: string;
@@ -54,6 +66,7 @@ export interface DatabaseViewConfig {
   filters?: ViewFilterRule[];
   advancedFilter?: ViewAdvancedFilterGroup;
   sorts?: ViewSortRule[];
+  conditionalColors?: ViewConditionalColorRule[];
   groupBy?: string;
   groupSort?: ViewGroupSort;
   groupStatusMode?: ViewStatusGroupMode;
@@ -78,6 +91,7 @@ export function defaultView(columns: { id: string; name: string; type: string }[
       .map((c) => ({ property: c.id, width: 150 })),
     filters: [],
     sorts: [],
+    conditionalColors: [],
     limit: 50,
   };
 }
@@ -106,6 +120,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
     }
     const filters = parseFilterRules(body);
     const sorts = parseSortRules(body);
+    const conditionalColors = parseConditionalColorRules(body);
     const advancedFilter = parseAdvancedFilter(body);
     views.push({
       id: attrs.id,
@@ -123,6 +138,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
       filters,
       advancedFilter,
       sorts,
+      conditionalColors,
       ...parseGroupBy(body),
       cover: tagAttr(body, 'cover', 'property'),
       date: tagAttr(body, 'date', 'property'),
@@ -157,6 +173,7 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
       return `      <rule ${attrs}/>`;
     }).join('\n');
     const advancedFilter = normalizeAdvancedFilter(v.advancedFilter);
+    const conditionalColors = (v.conditionalColors || []).filter((rule) => rule.property).map((rule, index) => normalizeConditionalColorRule(rule, index));
     const sorts = (v.sorts || []).filter((s) => s.property).map((s) => {
       const attrs = [
         `id="${esc(s.id)}"`,
@@ -168,6 +185,7 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
     const extra = [
       filters ? `    <source-filter op="and">\n${filters}\n    </source-filter>` : '',
       advancedFilter ? `    <advanced-filter value="${esc(encodeAdvancedFilter(advancedFilter))}"/>` : '',
+      conditionalColors.length ? `    <conditional-colors>\n${conditionalColors}\n    </conditional-colors>` : '',
       sorts ? `    <sort>\n${sorts}\n    </sort>` : '',
       v.groupBy ? `    <group-by ${[
         `property="${esc(v.groupBy)}"`,
@@ -259,6 +277,40 @@ function parseAdvancedFilter(body: string): ViewAdvancedFilterGroup | undefined 
   } catch {
     return undefined;
   }
+}
+
+function parseConditionalColorRules(body: string): ViewConditionalColorRule[] {
+  const colorBody = body.match(/<conditional-colors>([\s\S]*?)<\/conditional-colors>/)?.[1] || '';
+  const rules: ViewConditionalColorRule[] = [];
+  const ruleRe = /<rule\s+([^>]*?)\/>/g;
+  let r: RegExpExecArray | null;
+  while ((r = ruleRe.exec(colorBody)) !== null) {
+    const a = attrsOf(r[1]);
+    if (!a.property) continue;
+    rules.push({
+      id: a.id || `conditional-color:${a.property}:${rules.length}`,
+      property: a.property,
+      op: normalizeFilterOperator(a.op),
+      value: decodeRuleValue(a.value),
+      scope: a.scope === 'row' ? 'row' : 'cell',
+      colorSource: a['color-source'] === 'option' ? 'option' : 'custom',
+      color: a.color || 'gray',
+    });
+  }
+  return rules;
+}
+
+function normalizeConditionalColorRule(rule: ViewConditionalColorRule, index: number): string {
+  const attrs = [
+    `id="${esc(rule.id || `conditional-color:${index}`)}"`,
+    `property="${esc(rule.property)}"`,
+    `op="${esc(rule.op)}"`,
+    rule.value !== undefined ? `value="${esc(encodeRuleValue(rule.value))}"` : '',
+    `scope="${esc(rule.scope || 'cell')}"`,
+    `color-source="${esc(rule.colorSource || 'custom')}"`,
+    `color="${esc(rule.color || 'gray')}"`,
+  ].filter(Boolean).join(' ');
+  return `      <rule ${attrs}/>`;
 }
 function parseSortRules(body: string): ViewSortRule[] {
   const sortBody = body.match(/<sort>([\s\S]*?)<\/sort>/)?.[1] || '';

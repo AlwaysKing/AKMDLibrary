@@ -1,14 +1,38 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { createReactBlockSpec } from '@blocknote/react';
 import { createPortal } from 'react-dom';
-import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, EyeOff, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
+import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
 import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, OptionTag, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
-import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
+import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
+
+const optionColorMap: Record<string, { bg: string; fg: string; border: string }> = {
+  gray: { bg: '#f1f1ef', fg: '#5f5e5b', border: '#d9d9d6' },
+  brown: { bg: '#f4eeee', fg: '#6f4e37', border: '#e1d1c7' },
+  blue: { bg: '#e7f3ff', fg: '#0f5ca8', border: '#b8d8f4' },
+  green: { bg: '#e6f4ea', fg: '#1f7a3a', border: '#b9dfc4' },
+  yellow: { bg: '#fff4d6', fg: '#8a5a00', border: '#ead58f' },
+  red: { bg: '#ffe8e8', fg: '#b42318', border: '#f0b8b8' },
+  purple: { bg: '#f0e7ff', fg: '#6b3fb7', border: '#d3bff4' },
+  pink: { bg: '#ffe8f3', fg: '#a8326f', border: '#efbad3' },
+  orange: { bg: '#ffeedd', fg: '#a84f00', border: '#efc59e' },
+};
+
+const optionColorChoices = [
+  { id: 'gray', label: '灰色' },
+  { id: 'brown', label: '棕色' },
+  { id: 'orange', label: '橙色' },
+  { id: 'yellow', label: '黄色' },
+  { id: 'green', label: '绿色' },
+  { id: 'blue', label: '蓝色' },
+  { id: 'purple', label: '紫色' },
+  { id: 'pink', label: '粉色' },
+  { id: 'red', label: '红色' },
+];
 
 function DatabaseBlockComponent({ block, editor }: any) {
   const { currentSpace } = useSpaceStore();
@@ -32,12 +56,13 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [sortOpen, setSortOpen] = useState(false);
   const [filterQuery, setFilterQuery] = useState('');
   const [sortQuery, setSortQuery] = useState('');
+  const [colorQuery, setColorQuery] = useState('');
   const [activeFilterId, setActiveFilterId] = useState<string | null>(null);
   const [, setActiveSortId] = useState<string | null>(null);
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
-  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group'>('main');
+  const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
@@ -137,7 +162,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   useDropdownOutsideClose(viewSettingsOpen, viewSettingsButtonRef, () => {
     setViewSettingsOpen(false);
     setViewSettingsPane('main');
-  }, '.akdb-view-settings-menu, .akdb-sort-rules-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu');
+  }, '.akdb-view-settings-menu, .akdb-sort-rules-menu, .akdb-view-rule-editor, .akdb-view-rule-dropdown-menu, .akdb-view-rule-action-menu, .akdb-advanced-filter-editor, .akdb-advanced-filter-add-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu, .akdb-filter-menu, .akdb-color-rules-menu, .akdb-color-rule-editor, .akdb-color-rule-dropdown-menu');
 
   useEffect(() => {
     if (!viewContextMenu) return;
@@ -247,6 +272,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
       columns: targetView.columns.map((column) => ({ ...column })),
       filters: (targetView.filters || []).map((filter) => ({ ...filter, id: crypto.randomUUID() })),
       sorts: (targetView.sorts || []).map((sort) => ({ ...sort, id: crypto.randomUUID() })),
+      conditionalColors: (targetView.conditionalColors || []).map((rule) => ({ ...rule, id: crypto.randomUUID() })),
     };
     const sourceIndex = parsed.views.findIndex((view) => view.id === targetView.id);
     const nextViews = [...parsed.views];
@@ -265,6 +291,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
       columns: nextColumns,
       filters: [],
       sorts: [],
+      conditionalColors: [],
       groupBy: undefined,
       cover: undefined,
       date: undefined,
@@ -284,7 +311,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
     requestDatabaseImmediateSync();
   };
 
-  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' = 'main') => {
+  const openViewSettings = (pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' = 'main') => {
     setFilterOpen(false);
     setSortOpen(false);
     setViewContextMenu(null);
@@ -418,6 +445,43 @@ function DatabaseBlockComponent({ block, editor }: any) {
     updateView({ ...activeView, sorts: nextSorts });
   };
 
+  const addConditionalColor = (column: DatabaseColumn) => {
+    if (!activeView) return;
+    const nextRule = createConditionalColorRule(column);
+    updateView({ ...activeView, conditionalColors: [...(activeView.conditionalColors || []), nextRule] });
+    setFilterOpen(false);
+    setSortOpen(false);
+    setFilterBarHidden(false);
+    setActiveFilterId(null);
+    setActiveSortId(null);
+    return nextRule.id;
+  };
+
+  const updateConditionalColor = (id: string, patch: Partial<ViewConditionalColorRule>) => {
+    if (!activeView) return;
+    updateView({
+      ...activeView,
+      conditionalColors: (activeView.conditionalColors || []).map((rule) => rule.id === id ? { ...rule, ...patch } : rule),
+    });
+  };
+
+  const removeConditionalColor = (id: string) => {
+    if (!activeView) return;
+    updateView({ ...activeView, conditionalColors: (activeView.conditionalColors || []).filter((rule) => rule.id !== id) });
+  };
+
+  const reorderConditionalColors = (sourceID: string, targetID: string) => {
+    if (!activeView || sourceID === targetID) return;
+    const rules = activeView.conditionalColors || [];
+    const sourceIndex = rules.findIndex((rule) => rule.id === sourceID);
+    const targetIndex = rules.findIndex((rule) => rule.id === targetID);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const nextRules = [...rules];
+    const [moved] = nextRules.splice(sourceIndex, 1);
+    nextRules.splice(targetIndex, 0, moved);
+    updateView({ ...activeView, conditionalColors: nextRules });
+  };
+
   const clearSorts = () => {
     if (!activeView || !(activeView.sorts || []).length) return;
     updateView({ ...activeView, sorts: [] });
@@ -428,6 +492,18 @@ function DatabaseBlockComponent({ block, editor }: any) {
     if (!activeView) return;
     updateView({ ...activeView, ...patch });
   };
+
+  function createConditionalColorRule(column: DatabaseColumn): ViewConditionalColorRule {
+    return {
+      id: crypto.randomUUID(),
+      property: column.id,
+      op: defaultFilterOperator(column),
+      value: defaultFilterValue(column),
+      scope: 'row',
+      colorSource: column.type === 'select' || column.type === 'status' || column.type === 'multi_select' ? 'option' : 'custom',
+      color: 'blue',
+    };
+  }
 
   const toggleSourceColumnVisibility = (column: DatabaseColumn) => {
     if (!activeView) return;
@@ -699,6 +775,15 @@ function DatabaseBlockComponent({ block, editor }: any) {
             setActiveSortId(null);
             setAdvancedFilterOpen(false);
           }}
+          onOpenColor={() => {
+            setViewSettingsPane('color');
+            setFilterOpen(false);
+            setSortOpen(false);
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+            setColorQuery('');
+          }}
           onBack={() => setViewSettingsPane('main')}
           onClose={() => {
             setViewSettingsOpen(false);
@@ -746,6 +831,19 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onReorderSorts={reorderSorts}
           onClearSorts={clearSorts}
           onChangeGroup={updateGroup}
+          colorQuery={colorQuery}
+          colorColumns={filterColumns}
+          onAddColor={() => {
+            setColorQuery('');
+            setActiveFilterId(null);
+            setActiveSortId(null);
+            setAdvancedFilterOpen(false);
+          }}
+          onColorQueryChange={setColorQuery}
+          onPickColor={addConditionalColor}
+          onUpdateColor={updateConditionalColor}
+          onRemoveColor={removeConditionalColor}
+          onReorderColors={reorderConditionalColors}
           style={viewSettingsRect}
         />,
         document.body,
@@ -1977,6 +2075,613 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove,
   );
 }
 
+function ConditionalColorRuleEditor({ rule, column, style, inline = false, onUpdate, onCommit, onRemove }: { rule: ViewConditionalColorRule; column?: DatabaseColumn; style?: CSSProperties; inline?: boolean; onUpdate: (patch: Partial<ViewConditionalColorRule>) => void; onCommit: () => void; onRemove: () => void }) {
+  const [panel, setPanel] = useState<'main' | 'condition' | 'background' | 'scope'>('main');
+  const [operatorOpen, setOperatorOpen] = useState(false);
+  const [valueOpen, setValueOpen] = useState(false);
+  const [backgroundOpen, setBackgroundOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const operatorButtonRef = useRef<HTMLButtonElement | null>(null);
+  const valueRef = useRef<HTMLDivElement | null>(null);
+  const backgroundButtonRef = useRef<HTMLButtonElement | null>(null);
+  const scopeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [scopeMenuRect, setScopeMenuRect] = useState<CSSProperties | null>(null);
+  const options = (column?.config?.options || []) as Array<{ id: string; value: string; color?: string }>;
+  const selected = Array.isArray(rule.value) ? rule.value.map(String) : String(rule.value || '').split(',').filter(Boolean);
+  const selectedSet = new Set(selected);
+  const selectedOptions = selected.map((id) => options.find((option) => option.id === id)).filter(Boolean);
+  const filteredOptions = query.trim()
+    ? options.filter((option) => String(option.value || option.id || '').toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
+  const optionGroups = groupedFilterOptions(column, filteredOptions);
+  const operators = filterOperatorsForColumn(column);
+  const valueDisabled = rule.op === 'is_empty' || rule.op === 'is_not_empty';
+  const isOptionColumn = column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select';
+  const colorSourceAvailable = isOptionColumn;
+  const colorSource = colorSourceAvailable && rule.colorSource !== 'custom' ? 'option' : 'custom';
+  const colorScope = rule.scope || 'row';
+  const operatorNeedsValue = !valueDisabled;
+  const backgroundLabel = colorSourceAvailable
+    ? (colorSource === 'option' ? '匹配选项' : (optionColorChoices.find((choice) => choice.id === (rule.color || 'blue'))?.label || '蓝色'))
+    : (optionColorChoices.find((choice) => choice.id === (rule.color || 'blue'))?.label || '蓝色');
+  const scopeLabel = colorScope === 'cell' ? '单元格' : '整行';
+  const conditionLabel = filterOperatorLabel(rule);
+  const checkboxValueLabel = rule.value === false ? '未勾选' : '已勾选';
+  const dateValueLabel = rule.op === 'relative_to_today'
+    ? dateRelativeLabel(String(rule.value || 'this_week'))
+    : advancedDateValueLabel(rule);
+
+  useEffect(() => {
+    if (panel === 'condition') return;
+    setOperatorOpen(false);
+    setValueOpen(false);
+  }, [panel]);
+
+  useEffect(() => {
+    if (operatorNeedsValue) return;
+    setValueOpen(false);
+    setQuery('');
+  }, [operatorNeedsValue]);
+
+  useEffect(() => {
+    if (inline) return;
+    setBackgroundOpen(false);
+    setScopeOpen(false);
+  }, [inline]);
+
+  const toggleOption = (optionID: string) => {
+    const next = selectedSet.has(optionID)
+      ? selected.filter((id) => id !== optionID)
+      : [...selected, optionID];
+    onUpdate({ value: next });
+  };
+  const toggleGroup = (groupOptions: Array<{ id: string; value: string; color?: string }>) => {
+    const groupIDs = groupOptions.map((option) => option.id);
+    if (!groupIDs.length) return;
+    const allSelected = groupIDs.every((id) => selectedSet.has(id));
+    const groupIDSet = new Set(groupIDs);
+    const next = allSelected
+      ? selected.filter((id) => !groupIDSet.has(id))
+      : Array.from(new Set([...selected, ...groupIDs]));
+    onUpdate({ value: next });
+  };
+  const clearSelected = () => {
+    onUpdate({ value: [] });
+    setQuery('');
+  };
+
+  const backgroundMenuRect = useDropdownPosition(backgroundOpen, backgroundButtonRef, colorSourceAvailable ? 192 : 168, 'conditional-color-background', { edge: 'right' });
+  const operatorMenuRect = useDropdownPosition(operatorOpen, operatorButtonRef, 160, `conditional-color-operator:${rule.id}`);
+  const valueMenuRect = useDropdownPosition(valueOpen, valueRef, isDateFilterColumn(column) ? 260 : 240, `conditional-color-value:${rule.id}`);
+  useEffect(() => {
+    if (!scopeOpen || !scopeButtonRef.current) {
+      setScopeMenuRect(null);
+      return;
+    }
+    const update = () => {
+      const buttonRect = scopeButtonRef.current?.getBoundingClientRect();
+      if (!buttonRect) return;
+      const viewportPadding = 16;
+      const width = 124;
+      const left = Math.max(viewportPadding, buttonRect.right - width);
+      const maxLeft = Math.max(viewportPadding, window.innerWidth - width - viewportPadding);
+      setScopeMenuRect({
+        position: 'fixed',
+        left: Math.min(left, maxLeft),
+        top: buttonRect.bottom + 6,
+        width,
+        minWidth: width,
+        maxWidth: width,
+      });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [scopeOpen]);
+  useDropdownOutsideClose(operatorOpen, operatorButtonRef, () => setOperatorOpen(false), '.akdb-view-rule-dropdown-menu');
+  useDropdownOutsideClose(valueOpen, valueRef, () => setValueOpen(false), '.akdb-view-rule-dropdown-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu');
+  useDropdownOutsideClose(backgroundOpen, backgroundButtonRef, () => setBackgroundOpen(false), '.akdb-color-rule-dropdown-menu');
+  useDropdownOutsideClose(scopeOpen, scopeButtonRef, () => setScopeOpen(false), '.akdb-color-rule-dropdown-menu');
+
+  const conditionPanel = (
+    <>
+      <div className="akdb-color-rule-condition-head">
+        <button type="button" className="akdb-color-rule-condition-title" onClick={() => setPanel('main')}>
+          {column?.name || '属性'}
+        </button>
+        <div className="akdb-view-rule-dropdown">
+          <button ref={operatorButtonRef} type="button" aria-haspopup="menu" aria-expanded={operatorOpen} onClick={() => setOperatorOpen((open) => !open)}>
+            {conditionLabel} <ChevronDown size={14} />
+          </button>
+        </div>
+        <button type="button" className="akdb-color-rule-remove" aria-label="删除规则" onClick={onRemove}>
+          <Trash2 size={16} />
+        </button>
+      </div>
+      {isOptionColumn ? (
+        <div className="akdb-view-rule-options">
+          {operatorNeedsValue && (
+          <div
+            ref={valueRef}
+            className={`akdb-filter-value-combobox akdb-color-rule-value-select ${selectedOptions.length ? 'has-value' : ''}`}
+            role="button"
+            tabIndex={0}
+            aria-haspopup="menu"
+            aria-expanded={valueOpen}
+            onClick={() => {
+              setValueOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setValueOpen(true);
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setValueOpen(false);
+              }
+            }}
+          >
+            {selectedOptions.map((option: any) => (
+              <OptionTag
+                key={option.id}
+                option={option}
+                config={column?.config || {}}
+                removable
+                onRemove={() => onUpdate({ value: selected.filter((id) => id !== option.id) })}
+              />
+            ))}
+            {!selectedOptions.length && <span className="akdb-color-rule-value-placeholder">选择一个或多个选项...</span>}
+            <span className="akdb-color-rule-value-chevron" aria-hidden="true">
+              <ChevronDown size={14} />
+            </span>
+            {(selected.length > 0 || query) && (
+              <button type="button" className="akdb-filter-value-clear" aria-label="清除条件值" onClick={(event) => { event.stopPropagation(); clearSelected(); }}>
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          )}
+        </div>
+      ) : isDateFilterColumn(column) ? (
+        <div className="akdb-view-rule-options">
+          {operatorNeedsValue && (
+            <div
+              ref={valueRef}
+              className={`akdb-filter-value-combobox akdb-color-rule-value-select akdb-color-rule-date-select ${dateValueLabel ? 'has-value' : ''}`}
+              role="button"
+              tabIndex={0}
+              aria-haspopup="dialog"
+              aria-expanded={valueOpen}
+              onClick={() => setValueOpen(true)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  setValueOpen(true);
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setValueOpen(false);
+                }
+              }}
+            >
+              <span className="akdb-color-rule-value-placeholder">{dateValueLabel || '选择日期'}</span>
+              <span className="akdb-color-rule-value-chevron" aria-hidden="true">
+                <ChevronDown size={14} />
+              </span>
+            </div>
+          )}
+        </div>
+      ) : column?.type === 'checkbox' ? (
+        <div className="akdb-view-rule-options">
+          <div
+            ref={valueRef}
+            className="akdb-filter-value-combobox akdb-color-rule-value-select akdb-color-rule-checkbox-select"
+            role="button"
+            tabIndex={0}
+            aria-haspopup="menu"
+            aria-expanded={valueOpen}
+            onClick={() => setValueOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setValueOpen(true);
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setValueOpen(false);
+              }
+            }}
+          >
+            <span className="akdb-color-rule-value-placeholder">{checkboxValueLabel}</span>
+            <span className="akdb-color-rule-value-chevron" aria-hidden="true">
+              <ChevronDown size={14} />
+            </span>
+          </div>
+        </div>
+      ) : (
+        <input
+          autoFocus
+          className="akdb-view-rule-input"
+          value={String(rule.value || '')}
+          onChange={(event) => onUpdate({ value: event.currentTarget.value })}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            event.stopPropagation();
+            onCommit();
+          }}
+          placeholder="输入一个值..."
+        />
+      )}
+    </>
+  );
+
+  const mainPanel = (
+    <div className="akdb-color-rule-main">
+      {conditionPanel}
+      <button
+        ref={backgroundButtonRef}
+        type="button"
+        className={`akdb-color-rule-nav ${backgroundOpen ? 'is-active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={backgroundOpen}
+        onClick={() => {
+          setScopeOpen(false);
+          setBackgroundOpen((open) => !open);
+        }}
+      >
+        <span>页面背景</span>
+        <span>{backgroundLabel}</span>
+        <ChevronRight size={15} />
+      </button>
+      <button
+        ref={scopeButtonRef}
+        type="button"
+        className={`akdb-color-rule-nav ${scopeOpen ? 'is-active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={scopeOpen}
+        onClick={() => {
+          setBackgroundOpen(false);
+          setScopeOpen((open) => !open);
+        }}
+      >
+        <span>应用于</span>
+        <span>{scopeLabel}</span>
+        <ChevronRight size={15} />
+      </button>
+    </div>
+  );
+
+  return (
+    <div className={`akdb-color-rule-editor ${inline ? 'is-inline' : ''} ${isDateFilterColumn(column) ? 'is-date' : ''}`} role="dialog" aria-label="条件颜色" style={style}>
+      {panel === 'main' ? (
+        inline ? mainPanel : (
+        <div className="akdb-color-rule-main">
+          <button type="button" className="akdb-color-rule-nav is-summary" onClick={() => setPanel('condition')}>
+            <span>{column?.name || '属性'}</span>
+            <span>{conditionLabel}</span>
+            <ChevronRight size={15} />
+          </button>
+          <button type="button" className="akdb-color-rule-remove" aria-label="删除规则" onClick={onRemove}>
+            <Trash2 size={16} />
+          </button>
+          <button type="button" className="akdb-color-rule-nav" onClick={() => setPanel('background')}>
+            <span>页面背景</span>
+            <span>{backgroundLabel}</span>
+            <ChevronRight size={15} />
+          </button>
+          <button type="button" className="akdb-color-rule-nav" onClick={() => setPanel('scope')}>
+            <span>应用于</span>
+            <span>{scopeLabel}</span>
+            <ChevronRight size={15} />
+          </button>
+        </div>
+        )
+      ) : panel === 'condition' ? (
+        conditionPanel
+      ) : panel === 'background' ? (
+        <>
+          <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+            <button type="button" aria-label="返回" onClick={() => setPanel('main')}><ChevronLeft size={17} /></button>
+            <span>页面背景</span>
+            <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭条件颜色菜单" onClick={onCommit}><X size={15} /></button>
+          </div>
+          {colorSourceAvailable ? (
+            <div className="akdb-color-rule-options">
+              <button
+                type="button"
+                className={`akdb-color-rule-nav ${colorSource === 'option' ? 'is-active' : ''}`}
+                onClick={() => onUpdate({ colorSource: 'option' })}
+              >
+                <span>匹配选项</span>
+                <span>{colorSource === 'option' ? '当前颜色' : ''}</span>
+                {colorSource === 'option' && <Check size={15} />}
+              </button>
+              <button
+                type="button"
+                className={`akdb-color-rule-nav ${colorSource === 'custom' ? 'is-active' : ''}`}
+                onClick={() => onUpdate({ colorSource: 'custom' })}
+              >
+                <span>指定颜色</span>
+                <span>{optionColorChoices.find((item) => item.id === (rule.color || 'blue'))?.label || '蓝色'}</span>
+                {colorSource === 'custom' && <Check size={15} />}
+              </button>
+              {colorSource === 'custom' && (
+                <div className="akdb-color-rule-row">
+                  <ConditionalColorDropdown
+                    value={rule.color || 'blue'}
+                    onChange={(color) => onUpdate({ color })}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="akdb-color-rule-row">
+              <ConditionalColorDropdown
+                value={rule.color || 'blue'}
+                onChange={(color) => onUpdate({ color })}
+              />
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+            <button type="button" aria-label="返回" onClick={() => setPanel('main')}><ChevronLeft size={17} /></button>
+            <span>应用于</span>
+            <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭条件颜色菜单" onClick={onCommit}><X size={15} /></button>
+          </div>
+          <div className="akdb-color-rule-options">
+            {[
+              { id: 'row', label: '整行' },
+              { id: 'cell', label: '单元格' },
+            ].map((choice) => (
+              <button
+                key={choice.id}
+                type="button"
+                className={`akdb-color-rule-nav ${colorScope === choice.id ? 'is-active' : ''}`}
+                onClick={() => {
+                  onUpdate({ scope: choice.id as ViewConditionalColorRule['scope'] });
+                  setPanel('main');
+                }}
+              >
+                <span>{choice.label}</span>
+                <span>{choice.id === colorScope ? '当前' : ''}</span>
+                {choice.id === colorScope && <Check size={15} />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {inline && backgroundOpen && backgroundMenuRect && createPortal(
+        <div className="akdb-color-rule-dropdown-menu akdb-color-rule-inline-menu" role="menu" style={backgroundMenuRect}>
+          {colorSourceAvailable && (
+            <button
+              type="button"
+              className="akdb-column-property-switch-row akdb-color-rule-source-row"
+              role="switch"
+              aria-checked={colorSource === 'option'}
+              onClick={() => onUpdate({ colorSource: colorSource === 'option' ? 'custom' : 'option' })}
+            >
+              <span>匹配选项</span>
+              <span className={`akdb-column-property-switch ${colorSource === 'option' ? 'is-active' : ''}`} aria-hidden="true">
+                <span />
+              </span>
+            </button>
+          )}
+          {colorSourceAvailable && <div className="akdb-color-rule-source-divider" aria-hidden="true" />}
+          <div className={`akdb-color-rule-inline-submenu ${colorSource === 'option' ? 'is-disabled' : ''}`}>
+            <ConditionalColorPalette
+              value={rule.color || 'blue'}
+              onChange={(color) => onUpdate({ color, colorSource: 'custom' })}
+              disabled={colorSource === 'option'}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+      {operatorOpen && operatorMenuRect && createPortal(
+        <div className="akdb-view-rule-dropdown-menu akdb-color-rule-operator-menu" role="menu" style={operatorMenuRect}>
+          {operators.map((operator) => (
+            <button
+              key={operator.op}
+              type="button"
+              role="menuitem"
+              className={rule.op === operator.op ? 'is-active' : ''}
+              onClick={() => {
+                onUpdate(nextFilterOperatorPatch(operator.op, column, rule.value));
+                setOperatorOpen(false);
+                setValueOpen(false);
+              }}
+            >
+              {operator.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+      {valueOpen && valueMenuRect && createPortal(
+        isDateFilterColumn(column) ? (
+          <div className="akdb-advanced-date-picker-menu akdb-color-rule-date-menu" role="dialog" aria-label="选择日期条件值" style={valueMenuRect}>
+            <DateFilterEditor filter={rule} onUpdate={onUpdate} />
+          </div>
+        ) : (
+          <div className="akdb-view-rule-dropdown-menu akdb-color-rule-value-menu" role="menu" style={valueMenuRect}>
+            {column?.type === 'checkbox' ? (
+            [true, false].map((value) => (
+              <button
+                key={String(value)}
+                type="button"
+                role="menuitem"
+                className={rule.value === value ? 'is-active' : ''}
+                onClick={() => {
+                  onUpdate({ value });
+                  setValueOpen(false);
+                }}
+              >
+                <span>{value ? '已勾选' : '未勾选'}</span>
+              </button>
+            ))
+            ) : (
+            <>
+              {filteredOptions.length === 0 && <div className="akdb-filter-empty">暂无选项</div>}
+              {optionGroups.map((group) => (
+                <div key={group.key} className={`akdb-view-rule-option-group ${group.label ? 'has-title' : ''}`}>
+                  {group.label && (() => {
+                    const selectedCount = group.options.filter((option) => selectedSet.has(option.id)).length;
+                    const allSelected = selectedCount > 0 && selectedCount === group.options.length;
+                    const partialSelected = selectedCount > 0 && !allSelected;
+                    return (
+                      <button
+                        type="button"
+                        className={`akdb-view-rule-option-group-title ${allSelected ? 'is-active' : ''} ${partialSelected ? 'is-partial' : ''}`}
+                        onClick={() => toggleGroup(group.options)}
+                      >
+                        <span className="akdb-view-rule-check">
+                          {allSelected ? <Check size={13} strokeWidth={2.4} /> : partialSelected ? <span className="akdb-view-rule-check-mixed" /> : null}
+                        </span>
+                        <span>{group.label}</span>
+                      </button>
+                    );
+                  })()}
+                  {group.options.map((option) => {
+                    const checked = selectedSet.has(option.id);
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={`akdb-view-rule-option ${checked ? 'is-active' : ''}`}
+                        onClick={() => toggleOption(option.id)}
+                      >
+                        <span className="akdb-view-rule-check">{checked ? <Check size={13} strokeWidth={2.4} /> : null}</span>
+                        <OptionTag option={option} config={column?.config || {}} />
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {selected.length > 0 && <button type="button" className="akdb-view-rule-clear" onClick={clearSelected}>清除选择</button>}
+            </>
+            )}
+          </div>
+        ),
+        document.body,
+      )}
+      {inline && scopeOpen && scopeMenuRect && createPortal(
+        <div className="akdb-color-rule-dropdown-menu akdb-color-rule-inline-menu akdb-color-rule-scope-menu" role="menu" style={{ ...scopeMenuRect, width: 124, minWidth: 124, maxWidth: 124 }}>
+          {[
+            { id: 'row', label: '整行' },
+            { id: 'cell', label: '单元格' },
+          ].map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitem"
+              className={colorScope === choice.id ? 'is-active' : ''}
+              onClick={() => {
+                onUpdate({ scope: choice.id as ViewConditionalColorRule['scope'] });
+                setScopeOpen(false);
+              }}
+            >
+              <span>{choice.label}</span>
+              {choice.id === colorScope && <Check size={14} />}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function ConditionalColorDropdown({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuStyle = useDropdownPosition(open, buttonRef);
+  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-color-rule-dropdown-menu');
+  const selected = optionColorMap[value] || optionColorMap.gray;
+  return (
+    <div className="akdb-color-rule-select">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((next) => !next)}
+        className="akdb-color-rule-swatch-btn"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="akdb-color-rule-swatch" style={{ backgroundColor: selected.bg, borderColor: selected.border }} />
+        <span>{optionColorChoices.find((item) => item.id === value)?.label || '蓝色'}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && menuStyle && createPortal(
+        <div ref={menuRef} className="akdb-color-rule-dropdown-menu" role="listbox" style={menuStyle}>
+          {optionColorChoices.map((choice) => {
+            const color = optionColorMap[choice.id] || optionColorMap.gray;
+            const active = choice.id === value;
+            return (
+              <button
+                key={choice.id}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(choice.id);
+                  setOpen(false);
+                }}
+                className={active ? 'is-active' : ''}
+              >
+                <span className="akdb-color-rule-swatch" style={{ backgroundColor: color.bg, borderColor: color.border }} />
+                <span>{choice.label}</span>
+                {active && <Check size={14} />}
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function ConditionalColorPalette({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
+  return (
+    <div className={`akdb-color-rule-palette ${disabled ? 'is-disabled' : ''}`} role="listbox" aria-label="页面背景颜色" aria-disabled={disabled}>
+      {optionColorChoices.map((choice) => {
+        const color = optionColorMap[choice.id] || optionColorMap.gray;
+        const active = choice.id === value;
+        return (
+          <button
+            key={choice.id}
+            type="button"
+            role="option"
+            aria-selected={active}
+            disabled={disabled}
+            className={active ? 'is-active' : ''}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onChange(choice.id)}
+            title={choice.label}
+            style={{
+              backgroundColor: color.bg,
+              borderColor: active ? color.border : color.border,
+              borderWidth: active ? 2 : 1,
+            } as CSSProperties}
+          >
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AdvancedFilterEditor({ group, columns, style, onChange, onRemove }: { group: ViewAdvancedFilterGroup; columns: DatabaseColumn[]; style?: CSSProperties; onChange: (group: ViewAdvancedFilterGroup) => void; onRemove: () => void }) {
   const filterableColumns = columns.filter((column) => !column.readonly && column.type !== 'linked');
   const byID = new Map(columns.map((column) => [column.id, column]));
@@ -2506,7 +3211,7 @@ function AdvancedDateRelativeControls({ value, onChange }: { value: string; onCh
           <ChevronDown size={13} />
         </button>
         {prefixOpen && prefixRect && createPortal(
-          <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown" role="menu" style={prefixRect}>
+          <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown akdb-advanced-date-relative-menu" role="menu" style={prefixRect}>
             {dateRelativePrefixChoices.map((choice) => (
               <button key={choice.id} type="button" role="menuitem" className={relative.prefix === choice.id ? 'is-active' : ''} onClick={() => { update({ prefix: choice.id }); setPrefixOpen(false); }}>
                 <span>{choice.label}</span>
@@ -2530,7 +3235,7 @@ function AdvancedDateRelativeControls({ value, onChange }: { value: string; onCh
           <ChevronDown size={13} />
         </button>
         {unitOpen && unitRect && createPortal(
-          <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown" role="menu" style={unitRect}>
+          <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown akdb-advanced-date-relative-menu" role="menu" style={unitRect}>
             {dateRelativeUnitChoices.map((choice) => (
               <button key={choice.id} type="button" role="menuitem" className={relative.unit === choice.id ? 'is-active' : ''} onClick={() => { update({ unit: choice.id }); setUnitOpen(false); }}>
                 <span>{choice.label}</span>
@@ -2722,7 +3427,7 @@ function DateFilterEditor({ filter, onUpdate }: { filter: ViewFilterRule; onUpda
             {dateRelativePrefixChoices.find((choice) => choice.id === relative.prefix)?.label || '本'} <ChevronDown size={14} />
           </button>
           {prefixOpen && prefixRect && createPortal(
-            <div className="akdb-view-rule-dropdown-menu" role="menu" style={prefixRect}>
+            <div className="akdb-view-rule-dropdown-menu akdb-advanced-date-relative-menu" role="menu" style={prefixRect}>
               {dateRelativePrefixChoices.map((choice) => (
                 <button key={choice.id} type="button" role="menuitem" className={relative.prefix === choice.id ? 'is-active' : ''} onClick={() => { updateRelative({ prefix: choice.id }); setPrefixOpen(false); }}>
                   {choice.label}
@@ -2745,7 +3450,7 @@ function DateFilterEditor({ filter, onUpdate }: { filter: ViewFilterRule; onUpda
             {dateRelativeUnitChoices.find((choice) => choice.id === relative.unit)?.label || '周'} <ChevronDown size={14} />
           </button>
           {unitOpen && unitRect && createPortal(
-            <div className="akdb-view-rule-dropdown-menu" role="menu" style={unitRect}>
+            <div className="akdb-view-rule-dropdown-menu akdb-advanced-date-relative-menu" role="menu" style={unitRect}>
               {dateRelativeUnitChoices.map((choice) => (
                 <button key={choice.id} type="button" role="menuitem" className={relative.unit === choice.id ? 'is-active' : ''} onClick={() => { updateRelative({ unit: choice.id }); setUnitOpen(false); }}>
                   {choice.label}
@@ -3195,6 +3900,7 @@ function ViewSettingsMenu({
   onOpenFilter,
   onOpenSort,
   onOpenGroup,
+  onOpenColor,
   onBack,
   onClose,
   onRename,
@@ -3225,19 +3931,28 @@ function ViewSettingsMenu({
   onReorderSorts,
   onClearSorts,
   onChangeGroup,
+  colorQuery,
+  colorColumns,
+  onAddColor,
+  onColorQueryChange,
+  onPickColor,
+  onUpdateColor,
+  onRemoveColor,
+  onReorderColors,
   style,
 }: {
   schemaName: string;
   columns: DatabaseColumn[];
   runtimeGroupOptions: Array<{ key: string; label: string }>;
   activeView: DatabaseViewConfig;
-  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group';
+  pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color';
   focusNameRequest: number;
   onOpenLayout: () => void;
   onOpenVisibility: () => void;
   onOpenFilter: () => void;
   onOpenSort: () => void;
   onOpenGroup: () => void;
+  onOpenColor: () => void;
   onBack: () => void;
   onClose: () => void;
   onRename: (name: string) => void;
@@ -3268,6 +3983,14 @@ function ViewSettingsMenu({
   onReorderSorts: (sourceID: string, targetID: string) => void;
   onClearSorts: () => void;
   onChangeGroup: (patch: Partial<Pick<DatabaseViewConfig, 'groupBy' | 'groupSort' | 'groupStatusMode' | 'groupDateMode' | 'hideEmptyGroups' | 'hiddenGroups' | 'groupOrder'>>) => void;
+  colorQuery: string;
+  colorColumns: DatabaseColumn[];
+  onAddColor: () => void;
+  onColorQueryChange: (value: string) => void;
+  onPickColor: (column: DatabaseColumn) => string | void;
+  onUpdateColor: (id: string, patch: Partial<ViewConditionalColorRule>) => void;
+  onRemoveColor: (id: string) => void;
+  onReorderColors: (sourceID: string, targetID: string) => void;
   style: CSSProperties;
 }) {
   const [query, setQuery] = useState('');
@@ -3276,9 +3999,24 @@ function ViewSettingsMenu({
   const [settingsActiveFilterID, setSettingsActiveFilterID] = useState<string | null>(null);
   const [settingsAdvancedOpen, setSettingsAdvancedOpen] = useState(false);
   const [settingsAddFilterOpen, setSettingsAddFilterOpen] = useState(false);
+  const [, setSettingsActiveColorID] = useState<string | null>(null);
+  const [settingsAddColorOpen, setSettingsAddColorOpen] = useState(false);
   const [groupQuery, setGroupQuery] = useState('');
   const [groupPage, setGroupPage] = useState<'settings' | 'property' | 'sort' | 'statusMode' | 'dateMode'>(activeView.groupBy ? 'settings' : 'property');
   const [filterSettingsDragState, setFilterSettingsDragState] = useState<{
+    sourceID: string;
+    targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    initialTop: number;
+    currentTop: number;
+    itemHeight: number;
+    pointerOffset: number;
+    minTop: number;
+    maxTop: number;
+    centers: number[];
+  } | null>(null);
+  const [colorSettingsDragState, setColorSettingsDragState] = useState<{
     sourceID: string;
     targetID: string;
     sourceIndex: number;
@@ -3320,7 +4058,9 @@ function ViewSettingsMenu({
   const settingsActiveFilterRef = useRef<HTMLButtonElement | null>(null);
   const settingsAdvancedFilterRef = useRef<HTMLButtonElement | null>(null);
   const settingsAddFilterRef = useRef<HTMLButtonElement | null>(null);
+  const settingsAddColorRef = useRef<HTMLButtonElement | null>(null);
   const filterSettingsDragStateRef = useRef<typeof filterSettingsDragState>(null);
+  const colorSettingsDragStateRef = useRef<typeof colorSettingsDragState>(null);
   const groupOptionDragStateRef = useRef<typeof groupOptionDragState>(null);
   const dragStateRef = useRef<typeof dragState>(null);
   const suppressSettingsFilterClickRef = useRef(false);
@@ -3333,13 +4073,16 @@ function ViewSettingsMenu({
   const settingsFilterEditorRect = useDropdownPosition(!!settingsActiveFilter, settingsActiveFilterRef, settingsActiveFilter ? (isDateFilterColumn(settingsActiveFilterColumn) ? 260 : 282) : 282, settingsActiveFilterID || '');
   const settingsAdvancedRect = useDropdownPosition(settingsAdvancedOpen && !!activeView.advancedFilter, settingsAdvancedFilterRef, 0, 'view-settings-advanced-filter');
   const settingsAddFilterRect = useDropdownPosition(settingsAddFilterOpen, settingsAddFilterRef, 260);
+  const settingsAddColorRect = useDropdownPosition(settingsAddColorOpen, settingsAddColorRef, 260);
   useDropdownOutsideClose(iconOpen, iconButtonRef, () => setIconOpen(false), '.akdb-column-icon-popover');
+  useDropdownOutsideClose(settingsAddColorOpen, settingsAddColorRef, () => setSettingsAddColorOpen(false), '.akdb-filter-menu, .akdb-color-rule-editor, .akdb-color-rule-dropdown-menu');
   const search = query.trim().toLowerCase();
   const visibleSourceIDs = new Set(
     activeView.columns
       .filter((rule) => rule.property && !rule.hidden)
       .map((rule) => rule.property),
   );
+  const conditionalColorCount = activeView.conditionalColors?.length || 0;
   const orderedColumns = useMemo(() => {
     const byID = new Map(columns.map((column) => [column.id, column]));
     const used = new Set<string>();
@@ -3379,10 +4122,14 @@ function ViewSettingsMenu({
   }, [focusNameRequest, pane]);
 
   useEffect(() => {
-    if (pane !== 'filter') {
+    if (pane !== 'filter' && pane !== 'color') {
       setSettingsActiveFilterID(null);
       setSettingsAdvancedOpen(false);
       setSettingsAddFilterOpen(false);
+    }
+    if (pane !== 'color') {
+      setSettingsActiveColorID(null);
+      setSettingsAddColorOpen(false);
     }
   }, [pane]);
 
@@ -3549,6 +4296,80 @@ function ViewSettingsMenu({
     return undefined;
   };
 
+  const beginSettingsColorDrag = (colorID: string, event: ReactPointerEvent<HTMLSpanElement>) => {
+    const colors = activeView.conditionalColors || [];
+    if (event.button !== 0 || colors.length < 2) return;
+    const row = event.currentTarget.closest('.akdb-view-settings-color-block') as HTMLElement | null;
+    const list = event.currentTarget.closest('.akdb-view-settings-color-list') as HTMLDivElement | null;
+    if (!row || !list) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressSettingsFilterClickRef.current = true;
+    setSettingsActiveColorID(null);
+    setSettingsAddColorOpen(false);
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-settings-color-id]'));
+    const sourceIndex = rows.findIndex((item) => item.dataset.settingsColorId === colorID);
+    if (sourceIndex < 0) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRects = rows.map((item) => item.getBoundingClientRect());
+    const rowRect = row.getBoundingClientRect();
+    const itemHeight = rowRect.height;
+    const firstRect = rowRects[0];
+    const lastRect = rowRects[rowRects.length - 1];
+    const baseState = {
+      sourceID: colorID,
+      targetID: colorID,
+      sourceIndex,
+      targetIndex: sourceIndex,
+      initialTop: rowRect.top - listRect.top,
+      currentTop: rowRect.top - listRect.top,
+      itemHeight,
+      pointerOffset: event.clientY - rowRect.top,
+      minTop: firstRect.top - listRect.top,
+      maxTop: lastRect.bottom - listRect.top - itemHeight,
+      centers: rowRects.map((rect) => rect.top - listRect.top + rect.height / 2),
+    };
+    colorSettingsDragStateRef.current = baseState;
+    setColorSettingsDragState(baseState);
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      setColorSettingsDragState((current) => {
+        if (!current) return current;
+        const currentTop = Math.min(current.maxTop, Math.max(current.minTop, moveEvent.clientY - listRect.top - current.pointerOffset));
+        const currentCenter = currentTop + current.itemHeight / 2;
+        const targetIndex = current.centers.findIndex((center) => currentCenter <= center);
+        const nextTargetIndex = targetIndex === -1 ? current.centers.length - 1 : targetIndex;
+        const targetID = rows[nextTargetIndex]?.dataset.settingsColorId || current.targetID;
+        const next = { ...current, currentTop, targetIndex: nextTargetIndex, targetID };
+        colorSettingsDragStateRef.current = next;
+        return next;
+      });
+    };
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      const finalState = colorSettingsDragStateRef.current;
+      colorSettingsDragStateRef.current = null;
+      setColorSettingsDragState(null);
+      window.setTimeout(() => {
+        suppressSettingsFilterClickRef.current = false;
+      }, 0);
+      if (!finalState || finalState.sourceID === finalState.targetID) return;
+      onReorderColors(finalState.sourceID, finalState.targetID);
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const settingsColorDragTransform = (colorID: string, index: number) => {
+    const state = colorSettingsDragState;
+    if (!state) return undefined;
+    if (colorID === state.sourceID) return `translateY(${state.currentTop - state.initialTop}px)`;
+    if (state.sourceIndex < state.targetIndex && index > state.sourceIndex && index <= state.targetIndex) return `translateY(${-state.itemHeight}px)`;
+    if (state.targetIndex < state.sourceIndex && index >= state.targetIndex && index < state.sourceIndex) return `translateY(${state.itemHeight}px)`;
+    return undefined;
+  };
+
   const beginGroupOptionDrag = (optionKey: string, index: number, options: Array<{ key: string; label: string; content?: ReactNode }>, event: ReactPointerEvent<HTMLSpanElement>) => {
     const list = event.currentTarget.closest('.akdb-group-option-list') as HTMLDivElement | null;
     const row = event.currentTarget.closest('.akdb-group-option-item') as HTMLElement | null;
@@ -3680,7 +4501,12 @@ function ViewSettingsMenu({
             onClick={onOpenSort}
           />
           <SettingsMenuItem icon={<Columns3 size={17} />} label="分组" detail={groupColumn?.name} onClick={onOpenGroup} />
-          <SettingsMenuItem icon={<Palette size={17} />} label="条件颜色" />
+          <SettingsMenuItem
+            icon={<Palette size={17} />}
+            label="条件颜色"
+            detail={conditionalColorCount > 0 ? String(conditionalColorCount) : undefined}
+            onClick={onOpenColor}
+          />
           <SettingsMenuItem icon={<Link size={17} />} label="拷贝视图链接" trailing={false} />
         </div>
         <div className="akdb-view-settings-section">
@@ -3891,6 +4717,86 @@ function ViewSettingsMenu({
             onRemove={() => {
               onUpdateAdvancedFilter(undefined);
               setSettingsAdvancedOpen(false);
+            }}
+          />,
+          document.body,
+        )}
+      </div>
+    );
+  }
+
+  if (pane === 'color') {
+    const colors = activeView.conditionalColors || [];
+    return (
+      <div className="akdb-view-settings-menu akdb-view-settings-filter-menu akdb-view-settings-color-menu" role="dialog" aria-label="条件颜色" style={style}>
+        <div className="akdb-column-visibility-head akdb-view-settings-filter-head">
+          <button type="button" aria-label="返回查看设置" onClick={onBack}><ArrowLeft size={17} /></button>
+          <span>条件颜色</span>
+          <button type="button" className="akdb-view-settings-filter-close" aria-label="关闭条件颜色菜单" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className={`akdb-view-settings-filter-list akdb-view-settings-color-list ${colorSettingsDragState ? 'is-filter-dragging' : ''}`}>
+          {colors.length === 0 && <div className="akdb-add-column-empty">还没有颜色规则</div>}
+          {colors.map((rule, index) => {
+            const column = columnByID.get(rule.property);
+            return (
+              <div
+                key={rule.id}
+                className="akdb-view-settings-color-block"
+                data-settings-color-id={rule.id}
+                style={{
+                  transform: settingsColorDragTransform(rule.id, index),
+                  transition: colorSettingsDragState?.sourceID === rule.id ? 'none' : undefined,
+                }}
+              >
+                <span
+                  className="akdb-view-settings-filter-handle akdb-view-settings-color-handle"
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => beginSettingsColorDrag(rule.id, event)}
+                >
+                  <GripVertical size={15} />
+                </span>
+                <ConditionalColorRuleEditor
+                  rule={rule}
+                  column={column}
+                  inline
+                  onUpdate={(patch) => onUpdateColor(rule.id, patch)}
+                  onCommit={onClose}
+                  onRemove={() => {
+                    onRemoveColor(rule.id);
+                  }}
+                />
+              </div>
+            );
+          })}
+          <button
+            ref={settingsAddColorRef}
+            type="button"
+            className={`akdb-view-settings-filter-row akdb-view-settings-filter-add ${settingsAddColorOpen ? 'is-active' : ''}`}
+            aria-haspopup="dialog"
+            aria-expanded={settingsAddColorOpen}
+            onClick={() => {
+              onAddColor();
+              onClearActive();
+              setSettingsActiveColorID(null);
+              setSettingsAddColorOpen((open) => !open);
+            }}
+          >
+            <span className="akdb-view-settings-filter-add-icon"><Plus size={15} /></span>
+            <span className="akdb-view-settings-filter-label">添加条件颜色</span>
+          </button>
+        </div>
+        {settingsAddColorOpen && settingsAddColorRect && createPortal(
+          <FilterPropertyMenu
+            query={colorQuery}
+            columns={colorColumns}
+            style={{ ...settingsAddColorRect, zIndex: 100 }}
+            compact
+            onQueryChange={onColorQueryChange}
+            onPick={(column) => {
+              const pickedID = onPickColor(column);
+              if (pickedID) setSettingsActiveColorID(pickedID);
+              setSettingsAddColorOpen(false);
+              onClearActive();
             }}
           />,
           document.body,
@@ -4123,7 +5029,7 @@ function ViewSettingsMenu({
                         >
                           <GripVertical size={15} />
                         </span>
-                        <span className="akdb-group-property-name">{option.content || option.label}</span>
+                        <span className="akdb-group-property-name">{option.label}</span>
                         <button
                           type="button"
                           className="akdb-group-option-eye"

@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseColumnType, type DatabaseDetail, type DatabaseRow, type DatabaseSummary } from '../../../api/databases';
 import { evalFormula } from '../../../formula/evaluator';
-import { defaultView, type DatabaseViewConfig, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule } from './viewConfig';
+import { defaultView, type DatabaseViewConfig, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule } from './viewConfig';
 import { notionColumnIconOptions, type ColumnIconOption } from './columnIcons';
 import { showToast } from '../../Toast';
 import './database.css';
@@ -141,6 +141,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const columnMenuAnchorRef = useRef<HTMLElement | null>(null);
   const suppressNextHeaderClickRef = useRef(false);
   const activeView = useMemo(() => view || defaultView(schema?.columns || []), [view, schema?.columns]);
+  const schemaColumnByID = useMemo(() => new Map((schema?.columns || []).map((column) => [column.id, column])), [schema?.columns]);
   const addColumnMenuRect = useDropdownPosition(addColumnOpen, addColumnButtonRef, 360);
   const columnMenuRect = useDropdownPosition(columnMenuIndex !== null, columnMenuAnchorRef, 220, 'below', 0, false);
   const showColumnControls = !readonly && columnControls;
@@ -1579,11 +1580,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                         {showColumnControls && <th className="akdb-action-cell" />}
                         {showFillColumn && <th className="akdb-fill-cell" aria-hidden="true" />}
                       </tr>
-                      {group.rows.map(({ row, display, sourceIndex: rowIndex }) => (
+                      {group.rows.map((item) => {
+                        const { row, display, sourceIndex: rowIndex } = item;
+                        const rowColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, undefined, 'row');
+                        return (
                         <tr
                           key={row.uuid}
                           data-akdb-row-id={row.uuid}
                           className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${rowDragState?.targetRowID === row.uuid ? 'is-row-drop-target' : ''}`}
+                          style={rowColorStyle}
                           onMouseEnter={() => setHoveredRowID(row.uuid)}
                           onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
                           onContextMenu={(event) => openRowContextMenu(row, event)}
@@ -1595,6 +1600,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                             const isSelected = !isEditing && cellInRange(coord, fillRange || cellRange);
                             const isFillSelected = !isEditing && cellInRange(coord, fillRange);
                             const cellValue = c.column?.type === 'formula' ? String(display[c.id] ?? '') : String(row.values?.[c.column!.id] ?? '');
+                            const cellColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, c.column, 'cell');
                             return (
                               <EditableCell
                                 key={c.id}
@@ -1651,6 +1657,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                                     event.stopPropagation();
                                   },
                                   style: {
+                                    ...cellColorStyle,
                                     transform: columnDragTransform(index),
                                     transition: columnDragState?.sourceIndex === index ? 'none' : undefined,
                                   },
@@ -1661,7 +1668,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                           {showColumnControls && <td className="akdb-action-cell" />}
                           {showFillColumn && <td className="akdb-fill-cell" aria-hidden="true" />}
                         </tr>
-                      ))}
+                        );
+                      })}
                       {!readonly && (
                         <tr key={`group-add:${group.key}`} className="akdb-add-row akdb-group-add-row">
                           <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
@@ -1674,11 +1682,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 </Fragment>
               );
             })}
-            {visibleColumns.length > 0 && tableGroups.length === 0 && displayRows.map(({ row, display }, rowIndex) => (
+            {visibleColumns.length > 0 && tableGroups.length === 0 && displayRows.map((item, rowIndex) => {
+              const { row, display } = item;
+              const rowColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, undefined, 'row');
+              return (
               <tr
                 key={row.uuid}
                 data-akdb-row-id={row.uuid}
                 className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${rowDragState?.targetRowID === row.uuid ? 'is-row-drop-target' : ''}`}
+                style={rowColorStyle}
                 onMouseEnter={() => setHoveredRowID(row.uuid)}
                 onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
                 onContextMenu={(event) => openRowContextMenu(row, event)}
@@ -1690,6 +1702,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                   const isSelected = !isEditing && cellInRange(coord, fillRange || cellRange);
                   const isFillSelected = !isEditing && cellInRange(coord, fillRange);
                   const cellValue = c.column?.type === 'formula' ? String(display[c.id] ?? '') : String(row.values?.[c.column!.id] ?? '');
+                  const cellColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, c.column, 'cell');
                   return (
                   <EditableCell
                     key={c.id}
@@ -1746,6 +1759,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                         event.stopPropagation();
                       },
                       style: {
+                        ...cellColorStyle,
                         transform: columnDragTransform(index),
                         transition: columnDragState?.sourceIndex === index ? 'none' : undefined,
                       },
@@ -1755,7 +1769,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 {showColumnControls && <td className="akdb-action-cell" />}
                 {showFillColumn && <td className="akdb-fill-cell" aria-hidden="true" />}
               </tr>
-            ))}
+              );
+            })}
             {!readonly && tableGroups.length === 0 && (
               <tr className="akdb-add-row">
                 <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
@@ -2326,6 +2341,34 @@ function applyViewSorts<T extends { row: DatabaseRow; props: Record<string, any>
     }
     return 0;
   });
+}
+
+function resolveConditionalColorStyle(
+  view: DatabaseViewConfig,
+  columnsByID: Map<string, DatabaseColumn>,
+  item: { row: DatabaseRow; props: Record<string, any> },
+  targetColumn?: DatabaseColumn,
+  scope: 'cell' | 'row' = 'row',
+): CSSProperties | undefined {
+  const rules = (view.conditionalColors || []).filter((rule) => (rule.scope || 'cell') === scope && rule.property);
+  if (!rules.length) return undefined;
+  for (const rule of rules) {
+    if (scope === 'cell' && targetColumn?.id !== rule.property) continue;
+    const column = columnsByID.get(rule.property);
+    if (!column) continue;
+    const raw = item.props[rule.property] ?? item.row.values?.[rule.property] ?? '';
+    if (!conditionalColorRuleHasComparableValue(rule)) continue;
+    if (!matchesViewFilter(raw, column, rule.op, rule.value)) continue;
+    const color = resolveConditionalColorTokens(rule, column, raw);
+    return { backgroundColor: color.bg };
+  }
+  return undefined;
+}
+
+function conditionalColorRuleHasComparableValue(rule: ViewConditionalColorRule) {
+  if (rule.op === 'is_empty' || rule.op === 'is_not_empty') return true;
+  if (Array.isArray(rule.value)) return rule.value.some((item) => String(item ?? '').trim());
+  return String(rule.value ?? '').trim().length > 0;
 }
 
 type TableDisplayRow = { row: DatabaseRow; display: Record<string, any>; props: Record<string, any> };
@@ -6423,6 +6466,28 @@ const optionColorChoices = [
   { id: 'pink', label: '粉色' },
   { id: 'red', label: '红色' },
 ];
+
+function resolveConditionalColorTokens(rule: ViewConditionalColorRule, column?: DatabaseColumn, rawValue?: unknown) {
+  const optionColumn = column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select';
+  if (rule.colorSource === 'option' && optionColumn) {
+    const optionID = firstConditionalColorOptionID(rawValue);
+    const options = Array.isArray(column.config?.options) ? column.config.options : [];
+    const option = options.find((item: any) => String(item.id || '') === optionID || String(item.value || '') === optionID);
+    const colorID = String(option?.color || 'gray');
+    return optionColorMap[colorID] || optionColorMap.gray;
+  }
+  return optionColorMap[rule.color || 'gray'] || optionColorMap.gray;
+}
+
+function firstConditionalColorOptionID(value: unknown) {
+  if (value == null) return '';
+  if (Array.isArray(value)) return String(value[0] || '').trim();
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return String(obj.id ?? obj.value ?? '').trim();
+  }
+  return String(value || '').split(',').map((item) => item.trim()).find(Boolean) || '';
+}
 const optionShapeChoices = [
   { id: 'plain', label: '无' },
   { id: 'rounded', label: '圆角' },
