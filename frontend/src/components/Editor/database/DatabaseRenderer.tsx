@@ -113,7 +113,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const [fillRange, setFillRange] = useState<CellRange | null>(null);
   const [hoveredRowID, setHoveredRowID] = useState<string | null>(null);
   const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(() => new Set());
-  const [rowDragState, setRowDragState] = useState<{ sourceRowID: string; targetRowID: string; sourceIndex: number; targetIndex: number; placement: 'before' | 'after' } | null>(null);
+  const [rowDragState, setRowDragState] = useState<{ sourceRowID: string; targetRowID?: string; sourceIndex: number; targetIndex: number; placement: 'before' | 'after'; sourceGroupKey?: string; targetGroupKey?: string; targetInstanceKey?: string } | null>(null);
   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
@@ -458,8 +458,17 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     });
   };
 
-  const reorderRows = async (sourceRowID: string, targetRowID: string, placement: 'before' | 'after' = 'before') => {
-    if (readonly || sourceRowID === targetRowID) return;
+  const reorderRows = async (sourceRowID: string, targetRowID: string | undefined, placement: 'before' | 'after' = 'before', targetGroupKey?: string) => {
+    if (readonly) return;
+    const targetGroup = targetGroupKey ? tableGroups.find((group) => group.key === targetGroupKey) : null;
+    if (targetGroup && Object.keys(targetGroup.defaults).length > 0) {
+      const updated = await databasesApi.updateRow(spaceSlug, dbId, sourceRowID, targetGroup.defaults);
+      setRows((prev) => prev.map((row) => row.uuid === sourceRowID ? updated : row));
+    }
+    if (!targetRowID || sourceRowID === targetRowID) {
+      requestDatabaseImmediateSync();
+      return;
+    }
     const ordered = rows.map((row) => row.uuid);
     const next = ordered.filter((id) => id !== sourceRowID);
     const targetIndex = next.indexOf(targetRowID);
@@ -872,8 +881,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const beginRowDrag = (row: DatabaseRow, index: number, event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || readonly) return;
-    const rowEl = tableWrapRef.current?.querySelector<HTMLTableRowElement>(`tr[data-akdb-row-id="${CSS.escape(row.uuid)}"]`);
+    const matchingRows = Array.from(tableWrapRef.current?.querySelectorAll<HTMLTableRowElement>(`tr[data-akdb-row-id="${CSS.escape(row.uuid)}"]`) || []);
+    const rowEl = matchingRows.find((item) => {
+      const rect = item.getBoundingClientRect();
+      return event.clientY >= rect.top && event.clientY <= rect.bottom;
+    }) || matchingRows[0];
     if (!rowEl) return;
+    const sourceGroupKey = rowEl.dataset.akdbGroupKey || undefined;
     const rowRect = rowEl.getBoundingClientRect();
     const previewCells = Array.from(rowEl.cells).map((cell) => {
       const rect = cell.getBoundingClientRect();
@@ -890,8 +904,9 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const handleMove = (moveEvent: PointerEvent) => {
       if (!hasDragged && Math.abs(moveEvent.clientY - startClientY) > 4) {
         hasDragged = true;
-        setRowDragState({ sourceRowID: row.uuid, targetRowID: row.uuid, sourceIndex: index, targetIndex: index, placement: 'before' });
-        rowDragStateRef.current = { sourceRowID: row.uuid, targetRowID: row.uuid, sourceIndex: index, targetIndex: index, placement: 'before' };
+        const targetInstanceKey = rowEl.dataset.akdbRowInstanceKey || row.uuid;
+        setRowDragState({ sourceRowID: row.uuid, targetRowID: row.uuid, sourceIndex: index, targetIndex: index, placement: 'before', sourceGroupKey, targetGroupKey: sourceGroupKey, targetInstanceKey });
+        rowDragStateRef.current = { sourceRowID: row.uuid, targetRowID: row.uuid, sourceIndex: index, targetIndex: index, placement: 'before', sourceGroupKey, targetGroupKey: sourceGroupKey, targetInstanceKey };
         setRowDragPreview({
           left: rowRect.left,
           top: moveEvent.clientY - pointerOffsetY,
@@ -903,21 +918,24 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       if (!hasDragged) return;
       moveEvent.preventDefault();
       setRowDragPreview((current) => current ? { ...current, top: moveEvent.clientY - pointerOffsetY } : current);
-      const rowsEls = Array.from(tableWrapRef.current?.querySelectorAll<HTMLTableRowElement>('tr[data-akdb-row-id]') || []);
-      let targetIndex = Math.max(0, rowsEls.length - 1);
-      let targetRowID = rowsEls[targetIndex]?.dataset.akdbRowId || row.uuid;
-      let placement: 'before' | 'after' = 'after';
+      const rowsEls = Array.from(tableWrapRef.current?.querySelectorAll<HTMLTableRowElement>('tr[data-akdb-row-drop-key]') || []);
+      let targetIndex = -1;
+      let targetRowID: string | undefined;
+      let targetGroupKey: string | undefined;
+      let targetInstanceKey: string | undefined;
+      let placement: 'before' | 'after' = 'before';
       for (let i = 0; i < rowsEls.length; i++) {
         const rect = rowsEls[i].getBoundingClientRect();
+        if (moveEvent.clientY < rect.top || moveEvent.clientY > rect.bottom) continue;
         const center = rect.top + rect.height / 2;
-        if (moveEvent.clientY <= center) {
-          targetIndex = i;
-          targetRowID = rowsEls[i].dataset.akdbRowId || row.uuid;
-          placement = 'before';
-          break;
-        }
+        targetIndex = i;
+        targetRowID = rowsEls[i].dataset.akdbRowId || undefined;
+        targetGroupKey = rowsEls[i].dataset.akdbDropGroupKey || rowsEls[i].dataset.akdbGroupKey || undefined;
+        targetInstanceKey = rowsEls[i].dataset.akdbRowDropKey || targetRowID;
+        placement = moveEvent.clientY <= center ? 'before' : 'after';
+        break;
       }
-      const next = { sourceRowID: row.uuid, targetRowID, sourceIndex: index, targetIndex, placement };
+      const next = { sourceRowID: row.uuid, targetRowID, sourceIndex: index, targetIndex, placement, sourceGroupKey, targetGroupKey, targetInstanceKey };
       rowDragStateRef.current = next;
       setRowDragState(next);
     };
@@ -928,8 +946,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       rowDragStateRef.current = null;
       setRowDragState(null);
       setRowDragPreview(null);
-      if (hasDragged && final && final.sourceRowID !== final.targetRowID) {
-        await reorderRows(final.sourceRowID, final.targetRowID, final.placement);
+      if (hasDragged && final) {
+        await reorderRows(
+          final.sourceRowID,
+          final.targetRowID,
+          final.placement,
+          final.sourceGroupKey !== final.targetGroupKey ? final.targetGroupKey : undefined,
+        );
       }
       if (!hasDragged) {
         openRowContextMenuAt(row, upEvent.clientX, upEvent.clientY);
@@ -1553,6 +1576,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             >
             {visibleColumns.length > 0 && tableGroups.length > 0 && tableGroups.map((group) => {
               const collapsed = collapsedGroupKeys.has(group.key);
+              const groupAddDropKey = `__group__:${group.key}:add`;
               return (
                 <Fragment key={group.key}>
                   <tr key={`group:${group.key}`} className="akdb-group-row">
@@ -1601,12 +1625,17 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                       {group.rows.map((item) => {
                         const { row, display, sourceIndex: rowIndex } = item;
                         const instanceKey = `${group.key}:${row.uuid}:${rowIndex}`;
+                        const isRowDropTarget = rowDragState?.targetInstanceKey === instanceKey;
                         const rowColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, undefined, 'row');
                         return (
                         <tr
                           key={row.uuid}
                           data-akdb-row-id={row.uuid}
-                          className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${rowDragState?.targetRowID === row.uuid ? 'is-row-drop-target' : ''}`}
+                          data-akdb-group-key={group.key}
+                          data-akdb-row-instance-key={instanceKey}
+                          data-akdb-row-drop-key={instanceKey}
+                          data-akdb-drop-group-key={group.key}
+                          className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${isRowDropTarget ? 'is-row-drop-target' : ''} ${isRowDropTarget && rowDragState?.placement === 'after' ? 'is-row-drop-after' : ''}`}
                           style={rowColorStyle}
                           onMouseEnter={() => setHoveredRowID(row.uuid)}
                           onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
@@ -1692,7 +1721,12 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                         );
                       })}
                       {!readonly && (
-                        <tr key={`group-add:${group.key}`} className="akdb-add-row akdb-group-add-row">
+                        <tr
+                          key={`group-add:${group.key}`}
+                          className={`akdb-add-row akdb-group-add-row ${rowDragState?.targetInstanceKey === groupAddDropKey ? 'is-row-drop-target' : ''}`}
+                          data-akdb-row-drop-key={groupAddDropKey}
+                          data-akdb-drop-group-key={group.key}
+                        >
                           <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
                             <button type="button" onClick={() => void createRowInGroup(group)}><Plus size={15} />新页面</button>
                           </td>
@@ -1705,12 +1739,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             })}
             {visibleColumns.length > 0 && tableGroups.length === 0 && displayRows.map((item, rowIndex) => {
               const { row, display } = item;
+              const isRowDropTarget = rowDragState?.targetInstanceKey === row.uuid;
               const rowColorStyle = resolveConditionalColorStyle(activeView, schemaColumnByID, item, undefined, 'row');
               return (
               <tr
                 key={row.uuid}
                 data-akdb-row-id={row.uuid}
-                className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${rowDragState?.targetRowID === row.uuid ? 'is-row-drop-target' : ''}`}
+                data-akdb-row-instance-key={row.uuid}
+                data-akdb-row-drop-key={row.uuid}
+                className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${isRowDropTarget ? 'is-row-drop-target' : ''} ${isRowDropTarget && rowDragState?.placement === 'after' ? 'is-row-drop-after' : ''}`}
                 style={rowColorStyle}
                 onMouseEnter={() => setHoveredRowID(row.uuid)}
                 onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}

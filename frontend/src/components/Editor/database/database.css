@@ -528,6 +528,10 @@
 .akdb-table tbody tr.is-context-selected td,
 .akdb-table tbody tr.is-row-selected td { background: rgba(35,131,226,.12); }
 .akdb-table tbody tr.is-row-drop-target td { box-shadow: inset 0 2px 0 rgba(35,131,226,.78); }
+.akdb-table tbody tr.is-row-drop-target.is-row-drop-after td { box-shadow: inset 0 -2px 0 rgba(35,131,226,.78); }
+.akdb-table tbody tr.is-row-drop-target th { box-shadow: inset 0 2px 0 rgba(35,131,226,.78); }
+.akdb-table tbody tr.akdb-group-column-head.is-row-drop-target th { box-shadow: none; }
+.akdb-table tbody tr.akdb-group-row.is-row-drop-target td { box-shadow: inset 0 -2px 0 rgba(35,131,226,.78); }
 .akdb-table td { position: relative; }
 .akdb-table td.is-akdb-cell-selected { background: rgba(35,131,226,.08); }
 .akdb-table td.is-akdb-cell-fill-selected { background: rgba(35,131,226,.12); }
@@ -979,7 +983,6 @@
 .akdb-add-row button { display: inline-flex; align-items: center; gap: 8px; width: fit-content; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #9b9a97; cursor: pointer; padding: 0 8px; font: inherit; text-align: left; }
 .akdb-add-row button:hover { background: rgba(55,53,47,.06); color: #37352f; }
 .akdb-group-row td { height: 36px; border: 0 !important; padding: 0 0 0 2px !important; background: #fff; }
-.akdb-group-row + .akdb-group-column-head th { border-top: 1px solid rgba(55,53,47,.10); }
 .akdb-group-toggle { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 28px; border: 0; border-radius: 5px; background: transparent; color: #37352f; cursor: pointer; padding: 0 7px; font: inherit; font-size: 13px; font-weight: 600; line-height: 20px; }
 .akdb-group-toggle:hover { background: rgba(55,53,47,.06); }
 .akdb-group-toggle > svg { flex: 0 0 auto; color: #5f5e5b; transition: transform 120ms ease; }
