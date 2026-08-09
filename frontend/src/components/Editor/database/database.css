@@ -507,6 +507,7 @@
 .akdb-dialog-danger:hover:not(:disabled) { background: #d94444; }
 .akdb-table-shell { position: relative; overflow: visible; }
 .akdb-table-wrap { position: relative; overflow: auto; border-top: 0; padding-left: 0; scrollbar-width: thin; scrollbar-color: #c8c9c5 transparent; user-select: none; -webkit-user-select: none; }
+.akdb-table-wrap.is-groups-collapsed { overflow-x: hidden; }
 .akdb-table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
 .akdb-table-wrap::-webkit-scrollbar-track { background: transparent; }
 .akdb-table-wrap::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background-color: #c8c9c5 !important; background-clip: padding-box; }
@@ -514,6 +515,7 @@
 .akdb-table-wrap::-webkit-scrollbar-thumb:active { background-color: #c8c9c5 !important; background-clip: padding-box; }
 .akdb-table-wrap::-webkit-scrollbar-corner { background: transparent; }
 .akdb-table { border-collapse: collapse; width: 100%; min-width: 700px; font-size: 14px; table-layout: fixed; font-variant-numeric: lining-nums tabular-nums; }
+.akdb-table.is-groups-collapsed { min-width: 0; }
 .akdb-table thead.is-column-dragging,
 .akdb-table tbody.is-column-dragging { overflow: hidden; contain: paint; }
 .akdb-table th, .akdb-table td { border-right: 1px solid rgba(55,53,47,.10); border-bottom: 1px solid rgba(55,53,47,.10); height: 36px; padding: 0 8px; text-align: left; vertical-align: middle; }
@@ -983,10 +985,11 @@
 .akdb-add-row button { display: inline-flex; align-items: center; gap: 8px; width: fit-content; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #9b9a97; cursor: pointer; padding: 0 8px; font: inherit; text-align: left; }
 .akdb-add-row button:hover { background: rgba(55,53,47,.06); color: #37352f; }
 .akdb-group-row td { height: 36px; border: 0 !important; padding: 0 0 0 2px !important; background: #fff; }
-.akdb-group-toggle { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 28px; border: 0; border-radius: 5px; background: transparent; color: #37352f; cursor: pointer; padding: 0 7px; font: inherit; font-size: 13px; font-weight: 600; line-height: 20px; }
-.akdb-group-toggle:hover { background: rgba(55,53,47,.06); }
-.akdb-group-toggle > svg { flex: 0 0 auto; color: #5f5e5b; transition: transform 120ms ease; }
-.akdb-group-toggle > svg.is-collapsed { transform: rotate(-90deg); }
+.akdb-group-toggle { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 28px; border: 0; border-radius: 5px; background: transparent; color: #37352f; cursor: pointer; padding: 0 7px 0 0; font: inherit; font-size: 13px; font-weight: 600; line-height: 20px; }
+.akdb-group-toggle-caret { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 22px; border-radius: 5px; transition: background 120ms ease; }
+.akdb-group-toggle-caret:hover { background: rgba(55,53,47,.08); }
+.akdb-group-toggle-caret::before { content: ""; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid #37352f; transition: transform 120ms ease; }
+.akdb-group-toggle-caret.is-collapsed::before { transform: rotate(-90deg); }
 .akdb-group-label { display: inline-flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .akdb-group-label .akdb-option-tag { max-width: 240px; }
 .akdb-group-count { color: #9b9a97; font-size: 12px; font-weight: 500; }

@@ -1289,6 +1289,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     document.addEventListener('pointerup', handleUp, { once: true });
   };
   const tableMinWidth = visibleColumns.reduce((total, column, index) => total + columnWidth(column, index), showColumnControls ? 64 : 0);
+  const allTableGroupsCollapsed = tableGroups.length > 0 && tableGroups.every((group) => collapsedGroupKeys.has(group.key));
   const columnMenuColumn = columnMenuIndex == null ? undefined : visibleColumns[columnMenuIndex];
   const selectableRowCount = displayRowIDs.length;
   const selectedVisibleRowCount = displayRowIDs.filter((id) => selectedRowIDs.has(id)).length;
@@ -1482,14 +1483,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             })}
           </div>
         )}
-        <div ref={tableWrapRef} className="akdb-table-wrap" tabIndex={-1} onPointerDownCapture={beginCellPointerFromTable}>
+        <div ref={tableWrapRef} className={`akdb-table-wrap ${allTableGroupsCollapsed ? 'is-groups-collapsed' : ''}`} tabIndex={-1} onPointerDownCapture={beginCellPointerFromTable}>
           <table
             className={[
               'akdb-table',
               activeView.showVerticalLines === false ? 'is-hide-vertical-lines' : '',
               activeView.wrapContent ? 'is-wrap-content' : '',
+              allTableGroupsCollapsed ? 'is-groups-collapsed' : '',
             ].filter(Boolean).join(' ')}
-            style={{ minWidth: tableMinWidth }}
+            style={{ minWidth: allTableGroupsCollapsed ? 0 : tableMinWidth }}
           >
             <colgroup>
               {visibleColumns.map((c, index) => <col key={c.id} style={{ width: columnWidth(c, index) }} />)}
@@ -1582,7 +1584,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                   <tr key={`group:${group.key}`} className="akdb-group-row">
                     <td colSpan={visibleColumns.length + (showColumnControls ? 1 : 0) + (showFillColumn ? 1 : 0)}>
                       <button type="button" className="akdb-group-toggle" onClick={() => toggleTableGroup(group.key)}>
-                        <ChevronDown size={14} className={collapsed ? 'is-collapsed' : undefined} />
+                        <span className={`akdb-group-toggle-caret ${collapsed ? 'is-collapsed' : ''}`} aria-hidden="true" />
                         <span className="akdb-group-label">{renderTableGroupLabel(group, tableGroupColumn)}</span>
                         <span className="akdb-group-count">{group.rows.length}</span>
                       </button>
