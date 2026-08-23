@@ -179,10 +179,14 @@ function FileContentComponent({ block, editor, contentRef }: any) {
         // user's manual selection). Overriding it here would clobber the
         // user's choice on every reload (e.g. a .plist the user set to
         // 'xml' would snap back to 'text').
-        editor.updateBlock(block.id, {
-          type: 'fileContent',
-          content: [{ type: 'text', text, styles: {} }],
-        } as any);
+        editor.transact((tr: any) => {
+          tr.setMeta('addToHistory', false);
+          editor.updateBlock(block.id, {
+            type: 'fileContent',
+            content: [{ type: 'text', text, styles: {} }],
+          } as any);
+          return tr;
+        });
         setMissing(false);
       })
       .catch(() => !cancelled && setMissing(true))
