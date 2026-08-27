@@ -18,14 +18,14 @@ func (s *PreferenceService) GetByUserID(userID int) (*model.UserPreferences, err
 }
 
 func (s *PreferenceService) Update(userID int, req *model.UpdatePreferencesRequest) error {
-	if req.LastActiveSpaceSlug != nil || req.SidebarWidth != nil || req.CodeTheme != nil {
-		if err := s.prefRepo.UpsertGlobalPref(userID, req.LastActiveSpaceSlug, req.SidebarWidth, req.CodeTheme); err != nil {
+	if req.LastActiveSpaceSlug != nil || req.SidebarWidth != nil || req.SidebarCollapsed != nil || req.CodeTheme != nil {
+		if err := s.prefRepo.UpsertGlobalPref(userID, req.LastActiveSpaceSlug, req.SidebarWidth, req.SidebarCollapsed, req.CodeTheme); err != nil {
 			return err
 		}
 	}
 
 	if req.SpaceSlug != nil {
-		if err := s.prefRepo.UpsertSpacePref(userID, *req.SpaceSlug, req.LastViewedPageID, req.ExpandedPageIDs); err != nil {
+		if err := s.prefRepo.UpsertSpacePref(userID, *req.SpaceSlug, req.LastViewedPageID, req.ExpandedPageIDs, req.CollapsedSections, req.QuickAccessExpandedIDs); err != nil {
 			return err
 		}
 	}

@@ -17,9 +17,8 @@ export default function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
-  const toggle = () => setSidebarCollapsed(!sidebarCollapsed);
   const { undo, redo } = useUndoStore();
-  const { isLoaded, preferences, setSidebarWidth: saveSidebarWidth } = usePreferenceStore();
+  const { isLoaded, preferences, setSidebarWidth: saveSidebarWidth, setSidebarCollapsed: saveSidebarCollapsed } = usePreferenceStore();
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const sidebarWidthRef = useRef(sidebarWidth);
 
@@ -56,6 +55,16 @@ export default function AppLayout() {
       setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
     }
   }, [isLoaded, preferences.sidebar_width]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    setSidebarCollapsed(preferences.sidebar_collapsed === true);
+  }, [isLoaded, preferences.sidebar_collapsed]);
+
+  const toggle = () => {
+    setSidebarCollapsed(!sidebarCollapsed);
+    saveSidebarCollapsed(!sidebarCollapsed);
+  };
 
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;

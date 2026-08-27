@@ -6,6 +6,7 @@ import PageTreeItem from '../Sidebar/PageTreeItem';
 import SearchOverlay from '../Search/SearchOverlay';
 import { useAuthStore } from '../../stores/authStore';
 import { useSpaceStore } from '../../stores/spaceStore';
+import { usePreferenceStore } from '../../stores/preferenceStore';
 import { usePageStore } from '../../stores/pageStore';
 import { useState, useRef, useEffect } from 'react';
 import { gitApi, GitRepoState } from '../../api/git';
@@ -26,8 +27,10 @@ export default function Sidebar({ onToggle }: SidebarProps) {
   const adminTab = new URLSearchParams(location.search).get('tab') || (isAdminRole ? 'users' : 'profile');
 
   const { starredPages, recentPages } = useSpaceStore();
-  const [sectionsCollapsed, setSectionsCollapsed] = useState<Record<string, boolean>>({});
-  const [sidebarExpandedIds, setSidebarExpandedIds] = useState<Set<string>>(new Set());
+  // 区块折叠 / 最近/最爱区页面展开：从用户偏好派生（按用户、按空间持久化）
+  const { getCollapsedSections, getQuickAccessExpandedIds, setCollapsedSections, setQuickAccessExpandedIds } = usePreferenceStore();
+  const sectionsCollapsed = currentSpace ? getCollapsedSections(currentSpace.slug) : {};
+  const sidebarExpandedIds = new Set(currentSpace ? getQuickAccessExpandedIds(currentSpace.slug) : []);
   const [showAllRecent, setShowAllRecent] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -184,15 +187,18 @@ export default function Sidebar({ onToggle }: SidebarProps) {
   }
 
   const handleSidebarToggleExpand = (pageId: string, expanded: boolean) => {
-    setSidebarExpandedIds(prev => {
-      const next = new Set(prev);
-      if (expanded) next.add(pageId); else next.delete(pageId);
-      return next;
-    });
+    if (!currentSpace) return;
+    const current = getQuickAccessExpandedIds(currentSpace.slug);
+    const next = expanded
+      ? [...current, pageId]
+      : current.filter((id) => id !== pageId);
+    setQuickAccessExpandedIds(currentSpace.slug, next);
   };
 
   const toggleSection = (key: string) => {
-    setSectionsCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
+    if (!currentSpace) return;
+    const current = getCollapsedSections(currentSpace.slug);
+    setCollapsedSections(currentSpace.slug, { ...current, [key]: !current[key] });
   };
 
   const handleNewRootPage = async () => {

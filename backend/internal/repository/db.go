@@ -92,6 +92,7 @@ func (db *DB) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL UNIQUE,
 			last_active_space_slug TEXT,
+			sidebar_collapsed BOOLEAN DEFAULT 0,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
@@ -101,6 +102,8 @@ func (db *DB) migrate() error {
 			space_slug TEXT NOT NULL,
 			last_viewed_page_id TEXT,
 			expanded_page_ids TEXT DEFAULT '[]',
+			collapsed_sections TEXT DEFAULT '{}',
+			quick_access_expanded_ids TEXT DEFAULT '[]',
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			UNIQUE(user_id, space_slug)
@@ -141,6 +144,21 @@ func (db *DB) migrate() error {
 	if _, err := db.Exec(`ALTER TABLE user_global_preferences ADD COLUMN code_theme TEXT`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("failed to migrate user_global_preferences: %w", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE user_global_preferences ADD COLUMN sidebar_collapsed BOOLEAN DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("failed to migrate user_global_preferences: %w", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE user_space_preferences ADD COLUMN collapsed_sections TEXT DEFAULT '{}'`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("failed to migrate user_space_preferences: %w", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE user_space_preferences ADD COLUMN quick_access_expanded_ids TEXT DEFAULT '[]'`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("failed to migrate user_space_preferences: %w", err)
 		}
 	}
 	if _, err := db.Exec(`ALTER TABLE pages ADD COLUMN is_locked BOOLEAN DEFAULT 0`); err != nil {

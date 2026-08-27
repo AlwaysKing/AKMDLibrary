@@ -46,6 +46,21 @@ import { LANGUAGES, languageDisplayName } from './languages';
  * visually but keeps the ref attached.
  */
 
+// fileContent 块异步 hydration 注册表：标记某个块正在从磁盘加载内容。
+// PageEditor.persistFileContentBlocks 据此跳过"加载中"的块（不写文件、
+// 不记 baseline），避免打开页面后在内容加载完成前保存，把空内容/用户
+// 在空白块里输入的片段写回覆盖原文件。
+const hydratingFileContentBlocks = new Set<string>();
+
+export function markFileContentHydrating(blockId: string, hydrating: boolean) {
+  if (hydrating) hydratingFileContentBlocks.add(blockId);
+  else hydratingFileContentBlocks.delete(blockId);
+}
+
+export function isFileContentHydrating(blockId: string) {
+  return hydratingFileContentBlocks.has(blockId);
+}
+
 function inferLangFromPath(path: string): string {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
   const map: Record<string, string> = {
@@ -166,11 +181,24 @@ function FileContentComponent({ block, editor, contentRef }: any) {
     }
     let cancelled = false;
     setLoading(true);
+    // 注册加载状态：期间 persistFileContentBlocks 跳过该块，防止把空
+    // 内容/用户在空白块里的输入写回文件。
+    markFileContentHydrating(block.id, true);
     readSpaceFile(slug, path)
       .then((text) => {
         if (cancelled) return;
         if (text === null || text === undefined) {
           setMissing(true);
+          return;
+        }
+        // 加载期间用户可能已经输入了内容——复查块是否仍为空，非空则
+        // 放弃 hydration，避免覆盖用户输入。
+        const live = editor.getBlock(block.id);
+        const liveText = (live?.content ?? [])
+          .map((c: any) => c?.text ?? '')
+          .join('');
+        if (liveText.length > 0) {
+          setMissing(false);
           return;
         }
         // Hydration fills ONLY content. Leave props (incl. language) alone —
@@ -190,9 +218,13 @@ function FileContentComponent({ block, editor, contentRef }: any) {
         setMissing(false);
       })
       .catch(() => !cancelled && setMissing(true))
-      .finally(() => !cancelled && setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+        markFileContentHydrating(block.id, false);
+      });
     return () => {
       cancelled = true;
+      markFileContentHydrating(block.id, false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, slug]);
@@ -400,9 +432,12 @@ function FileContentComponent({ block, editor, contentRef }: any) {
           </div>
         </div>
       )}
-      {/* contentRef must always be mounted for inline content blocks */}
+      {/* contentRef must always be mounted for inline content blocks.
+          Hidden while loading (display:none) so the not-yet-hydrated empty
+          area is not clickable/editable — prevents partial input from
+          replacing file content on save. */}
       <pre
-        className={`bn-file-content-pre${path ? '' : ' is-hidden'}`}
+        className={`bn-file-content-pre${path && !loading ? '' : ' is-hidden'}`}
         data-language={language}
         ref={contentRef}
         spellCheck={false}

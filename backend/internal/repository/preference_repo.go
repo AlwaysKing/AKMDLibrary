@@ -24,12 +24,13 @@ func (r *PreferenceRepository) GetByUserID(userID int) (*model.UserPreferences, 
 	// Get global preferences
 	var lastSpace sql.NullString
 	var sidebarWidth sql.NullInt64
+	var sidebarCollapsed sql.NullBool
 	var codeTheme sql.NullString
 	var unsplashKey sql.NullString
 	err := r.db.QueryRow(
-		"SELECT last_active_space_slug, sidebar_width, code_theme, unsplash_api_key FROM user_global_preferences WHERE user_id = ?",
+		"SELECT last_active_space_slug, sidebar_width, sidebar_collapsed, code_theme, unsplash_api_key FROM user_global_preferences WHERE user_id = ?",
 		userID,
-	).Scan(&lastSpace, &sidebarWidth, &codeTheme, &unsplashKey)
+	).Scan(&lastSpace, &sidebarWidth, &sidebarCollapsed, &codeTheme, &unsplashKey)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get global preferences: %w", err)
 	}
@@ -40,6 +41,10 @@ func (r *PreferenceRepository) GetByUserID(userID int) (*model.UserPreferences, 
 		width := int(sidebarWidth.Int64)
 		prefs.SidebarWidth = &width
 	}
+	if sidebarCollapsed.Valid {
+		collapsed := sidebarCollapsed.Bool
+		prefs.SidebarCollapsed = &collapsed
+	}
 	if codeTheme.Valid {
 		prefs.CodeTheme = &codeTheme.String
 	}
@@ -47,7 +52,7 @@ func (r *PreferenceRepository) GetByUserID(userID int) (*model.UserPreferences, 
 
 	// Get space preferences
 	rows, err := r.db.Query(
-		"SELECT space_slug, last_viewed_page_id, expanded_page_ids FROM user_space_preferences WHERE user_id = ?",
+		"SELECT space_slug, last_viewed_page_id, expanded_page_ids, collapsed_sections, quick_access_expanded_ids FROM user_space_preferences WHERE user_id = ?",
 		userID,
 	)
 	if err != nil {
@@ -59,7 +64,9 @@ func (r *PreferenceRepository) GetByUserID(userID int) (*model.UserPreferences, 
 		var slug string
 		var pageID sql.NullString
 		var expandedJSON string
-		if err := rows.Scan(&slug, &pageID, &expandedJSON); err != nil {
+		var collapsedSectionsJSON string
+		var quickAccessJSON string
+		if err := rows.Scan(&slug, &pageID, &expandedJSON, &collapsedSectionsJSON, &quickAccessJSON); err != nil {
 			return nil, fmt.Errorf("failed to scan space preference: %w", err)
 		}
 
@@ -70,16 +77,26 @@ func (r *PreferenceRepository) GetByUserID(userID int) (*model.UserPreferences, 
 		if err := json.Unmarshal([]byte(expandedJSON), &sp.ExpandedPageIDs); err != nil {
 			sp.ExpandedPageIDs = []string{}
 		}
+		if err := json.Unmarshal([]byte(collapsedSectionsJSON), &sp.CollapsedSections); err != nil {
+			sp.CollapsedSections = map[string]bool{}
+		}
+		if err := json.Unmarshal([]byte(quickAccessJSON), &sp.QuickAccessExpandedIDs); err != nil {
+			sp.QuickAccessExpandedIDs = []string{}
+		}
 		prefs.SpacePreferences[slug] = sp
 	}
 
 	return prefs, nil
 }
 
-func (r *PreferenceRepository) UpsertGlobalPref(userID int, lastActiveSpaceSlug *string, sidebarWidth *int, codeTheme *string) error {
+func (r *PreferenceRepository) UpsertGlobalPref(userID int, lastActiveSpaceSlug *string, sidebarWidth *int, sidebarCollapsed *bool, codeTheme *string) error {
 	var sidebarValue interface{}
 	if sidebarWidth != nil {
 		sidebarValue = *sidebarWidth
+	}
+	var sidebarCollapsedValue interface{}
+	if sidebarCollapsed != nil {
+		sidebarCollapsedValue = *sidebarCollapsed
 	}
 	var codeThemeValue interface{}
 	if codeTheme != nil {
@@ -87,14 +104,19 @@ func (r *PreferenceRepository) UpsertGlobalPref(userID int, lastActiveSpaceSlug 
 	}
 
 	_, err := r.db.Exec(`
-		INSERT INTO user_global_preferences (user_id, last_active_space_slug, sidebar_width, code_theme, updated_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO user_global_preferences (user_id, last_active_space_slug, sidebar_width, sidebar_collapsed, code_theme, updated_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(user_id) DO UPDATE SET
 			last_active_space_slug = CASE WHEN ? IS NOT NULL THEN ? ELSE user_global_preferences.last_active_space_slug END,
 			sidebar_width = CASE WHEN ? IS NOT NULL THEN ? ELSE user_global_preferences.sidebar_width END,
+			sidebar_collapsed = CASE WHEN ? IS NOT NULL THEN ? ELSE user_global_preferences.sidebar_collapsed END,
 			code_theme = CASE WHEN ? IS NOT NULL THEN ? ELSE user_global_preferences.code_theme END,
 			updated_at = CURRENT_TIMESTAMP
-	`, userID, lastActiveSpaceSlug, sidebarValue, codeThemeValue, lastActiveSpaceSlug, lastActiveSpaceSlug, sidebarValue, sidebarValue, codeThemeValue, codeThemeValue)
+	`, userID, lastActiveSpaceSlug, sidebarValue, sidebarCollapsedValue, codeThemeValue,
+		lastActiveSpaceSlug, lastActiveSpaceSlug,
+		sidebarValue, sidebarValue,
+		sidebarCollapsedValue, sidebarCollapsedValue,
+		codeThemeValue, codeThemeValue)
 	if err != nil {
 		return fmt.Errorf("failed to upsert global preference: %w", err)
 	}
@@ -132,7 +154,7 @@ func (r *PreferenceRepository) GetUnsplashKey(userID int) (string, error) {
 	return key.String, nil
 }
 
-func (r *PreferenceRepository) UpsertSpacePref(userID int, spaceSlug string, lastViewedPageID *string, expandedPageIDs *[]string) error {
+func (r *PreferenceRepository) UpsertSpacePref(userID int, spaceSlug string, lastViewedPageID *string, expandedPageIDs *[]string, collapsedSections *map[string]bool, quickAccessExpandedIDs *[]string) error {
 	var pageID interface{}
 	if lastViewedPageID != nil {
 		pageID = *lastViewedPageID
@@ -154,14 +176,46 @@ func (r *PreferenceRepository) UpsertSpacePref(userID int, spaceSlug string, las
 		expandedCheck = idsJSON
 	}
 
+	sectionsJSON := "{}"
+	if collapsedSections != nil {
+		b, err := json.Marshal(*collapsedSections)
+		if err != nil {
+			return fmt.Errorf("failed to marshal collapsed sections: %w", err)
+		}
+		sectionsJSON = string(b)
+	}
+	var sectionsCheck interface{}
+	if collapsedSections != nil {
+		sectionsCheck = sectionsJSON
+	}
+
+	quickJSON := "[]"
+	if quickAccessExpandedIDs != nil {
+		b, err := json.Marshal(*quickAccessExpandedIDs)
+		if err != nil {
+			return fmt.Errorf("failed to marshal quick access expanded ids: %w", err)
+		}
+		quickJSON = string(b)
+	}
+	var quickCheck interface{}
+	if quickAccessExpandedIDs != nil {
+		quickCheck = quickJSON
+	}
+
 	_, err := r.db.Exec(`
-		INSERT INTO user_space_preferences (user_id, space_slug, last_viewed_page_id, expanded_page_ids, updated_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO user_space_preferences (user_id, space_slug, last_viewed_page_id, expanded_page_ids, collapsed_sections, quick_access_expanded_ids, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(user_id, space_slug) DO UPDATE SET
 			last_viewed_page_id = CASE WHEN ? IS NOT NULL THEN ? ELSE user_space_preferences.last_viewed_page_id END,
 			expanded_page_ids = CASE WHEN ? IS NOT NULL THEN ? ELSE user_space_preferences.expanded_page_ids END,
+			collapsed_sections = CASE WHEN ? IS NOT NULL THEN ? ELSE user_space_preferences.collapsed_sections END,
+			quick_access_expanded_ids = CASE WHEN ? IS NOT NULL THEN ? ELSE user_space_preferences.quick_access_expanded_ids END,
 			updated_at = CURRENT_TIMESTAMP
-	`, userID, spaceSlug, pageID, idsJSON, pageID, pageID, expandedCheck, idsJSON)
+	`, userID, spaceSlug, pageID, idsJSON, sectionsJSON, quickJSON,
+		pageID, pageID,
+		expandedCheck, idsJSON,
+		sectionsCheck, sectionsJSON,
+		quickCheck, quickJSON)
 	if err != nil {
 		return fmt.Errorf("failed to upsert space preference: %w", err)
 	}

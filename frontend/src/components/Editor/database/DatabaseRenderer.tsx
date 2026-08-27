@@ -421,17 +421,28 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     return () => document.removeEventListener('akdb-delete-active-selected-rows', handleDeleteActiveSelectedRows);
   }, [selectedRowIDs, readonly]);
 
+  const createRowValues = (overrides: Record<string, string> = {}) => {
+    const filterDefaults = schema ? createRowDefaultsForViewFilters(schema.columns, activeView) : {};
+    const values = { ...filterDefaults, ...overrides };
+    for (const column of schema?.columns || []) {
+      const empty = !values[column.id] || (column.type === 'multi_select' && !parseMultiSelectValue(values[column.id]).length);
+      if (!empty) continue;
+      const fallback = columnRequiredDefault(column);
+      if (fallback) values[column.id] = fallback;
+    }
+    return values;
+  };
+
   const createRow = async (defaults: Record<string, string> = {}) => {
     if (readonly) return;
-    const filterDefaults = schema ? createRowDefaultsForViewFilters(schema.columns, activeView) : {};
-    const created = await databasesApi.createRow(spaceSlug, dbId, { ...filterDefaults, ...defaults });
+    const created = await databasesApi.createRow(spaceSlug, dbId, createRowValues(defaults));
     setRows((prev) => [...prev, created]);
     requestDatabaseImmediateSync();
   };
 
   const createRowBelow = async (rowID: string) => {
     if (readonly) return;
-    const created = await databasesApi.createRow(spaceSlug, dbId, schema ? createRowDefaultsForViewFilters(schema.columns, activeView) : {});
+    const created = await databasesApi.createRow(spaceSlug, dbId, createRowValues());
     const ordered = rows.map((row) => row.uuid);
     const next = ordered.filter((id) => id !== created.uuid);
     const index = next.indexOf(rowID);
@@ -503,6 +514,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
 
   const updateCell = async (rowId: string, col: DatabaseColumn | undefined, value: string) => {
     if (readonly || !col || col.readonly || col.type === 'formula') return;
+    value = requiredCellValue(col, value);
     await databasesApi.updateRow(spaceSlug, dbId, rowId, { [col.id]: value });
     setRows((prev) => prev.map((r) => r.uuid === rowId ? { ...r, values: { ...r.values, [col.id]: value } } : r));
     requestDatabaseImmediateSync();
@@ -577,7 +589,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const rowPatches = new Map<string, Record<string, string>>();
     for (const patch of patches) {
       if (patch.column.readonly || patch.column.type === 'formula') continue;
-      rowPatches.set(patch.rowID, { ...(rowPatches.get(patch.rowID) || {}), [patch.column.id]: patch.value });
+      const value = requiredCellValue(patch.column, patch.value);
+      rowPatches.set(patch.rowID, { ...(rowPatches.get(patch.rowID) || {}), [patch.column.id]: value });
     }
     if (!rowPatches.size) return;
     await Promise.all(Array.from(rowPatches.entries()).map(([rowID, values]) => databasesApi.updateRow(spaceSlug, dbId, rowID, values)));
@@ -1014,12 +1027,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
         : col.config?.groups,
     };
     const nextSchema = await databasesApi.updateColumn(spaceSlug, dbId, col.id, { config: nextConfig });
+    const requiredFallback = columnRequiredDefault({ ...col, config: nextConfig });
     const affectedRows = rows.filter((row) => row.values?.[col.id] === optionID);
-    await Promise.all(affectedRows.map((row) => databasesApi.updateRow(spaceSlug, dbId, row.uuid, { [col.id]: '' })));
+    await Promise.all(affectedRows.map((row) => databasesApi.updateRow(spaceSlug, dbId, row.uuid, { [col.id]: requiredFallback })));
     applySchema(nextSchema);
     if (affectedRows.length) {
       const affectedIDs = new Set(affectedRows.map((row) => row.uuid));
-      setRows((prev) => prev.map((row) => affectedIDs.has(row.uuid) ? { ...row, values: { ...row.values, [col.id]: '' } } : row));
+      setRows((prev) => prev.map((row) => affectedIDs.has(row.uuid) ? { ...row, values: { ...row.values, [col.id]: requiredFallback } } : row));
     }
     requestDatabaseImmediateSync();
   };
@@ -2737,6 +2751,25 @@ function parseMultiSelectValue(value: string) {
   return [];
 }
 
+function columnRequiredDefault(column: DatabaseColumn | undefined): string {
+  if (!column || !column.config?.required) return '';
+  if (column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status') return '';
+  const options = Array.isArray(column.config?.options) ? column.config.options : [];
+  const optionIDs = options.map((option: any) => String(option?.id || '')).filter(Boolean);
+  if (!optionIDs.length) return '';
+  const defaultID = String(column.default || '');
+  const fallbackID = optionIDs.includes(defaultID) ? defaultID : optionIDs[0];
+  return column.type === 'multi_select' ? JSON.stringify([fallbackID]) : fallbackID;
+}
+
+function requiredCellValue(column: DatabaseColumn | undefined, value: string): string {
+  if (!value || (column?.type === 'multi_select' && !parseMultiSelectValue(value).length)) {
+    const fallback = columnRequiredDefault(column);
+    if (fallback) return fallback;
+  }
+  return value;
+}
+
 function displayValueForColumn(column: DatabaseColumn | undefined, row: DatabaseRow, props: Record<string, any>) {
   if (!column) return '';
   if (column.type === 'formula') return props[column.id] ?? '';
@@ -3233,6 +3266,7 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
   const statusVisibleOptionIDs = statusFlatOptionIDs.filter((id: string) => statusOptionByID.has(id));
   const firstStatusOptionID = statusVisibleOptionIDs[0] || options[0]?.id || '';
   const defaultStatusOptionID = String(column.default || firstStatusOptionID || '');
+  const defaultOptionID = String(column.default || options[0]?.id || '');
   const editingStatusGroup = statusGroups.find((group: any, index: number) => String(group.id || group.name || `status-group-${index}`) === editingStatusGroupID);
   useEffect(() => {
     setTextMaxLengthDraft(textMaxLengthEnabled ? String(textMaxLength) : '');
@@ -3275,6 +3309,21 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
         document.body,
       )}
     </>
+  );
+  const renderRequiredControl = () => (
+    <button
+      type="button"
+      className="akdb-column-property-switch-row"
+      role="switch"
+      aria-checked={!!config.required}
+      onMouseEnter={() => setPropertyFlyout(null)}
+      onClick={() => onUpdateConfig({ required: !config.required })}
+    >
+      <span>非空</span>
+      <span className={`akdb-column-property-switch ${config.required ? 'is-active' : ''}`} aria-hidden="true">
+        <span />
+      </span>
+    </button>
   );
   const renderCheckboxStyleControl = () => (
     <>
@@ -3838,6 +3887,8 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
               option={editingOption}
               config={config}
               inline
+              isDefault={editingOption.id === defaultOptionID}
+              onSetDefault={() => onUpdateDefault(editingOption.id)}
               onBack={() => setEditingOptionID(null)}
               onUpdate={(patch) => onUpdateOption(editingOption.id, patch)}
               onDelete={() => {
@@ -3848,6 +3899,7 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
           ) : (
             <>
               {renderAlignControl()}
+              {renderRequiredControl()}
               <div className="akdb-column-property-options-head akdb-menu-caption" onMouseEnter={() => setPropertyFlyout(null)}>
                 <span>选项</span>
                 <button ref={optionAddButtonRef} type="button" aria-label="添加选项" onClick={createPropertyOption}>
@@ -3882,6 +3934,7 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
                     >
                       <GripVertical size={16} className="akdb-column-property-option-handle" onPointerDown={(event) => beginPropertyOptionDrag(option.id, event)} />
                       <span className="akdb-column-property-option-tag"><OptionTag option={option} config={config} /></span>
+                      <span className="akdb-status-property-default">{option.id === defaultOptionID ? '默认' : ''}</span>
                       <ChevronRight size={15} />
                     </button>
                   );
@@ -3918,6 +3971,7 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
           ) : (
             <>
               {renderAlignControl()}
+              {renderRequiredControl()}
               <div className="akdb-column-property-divider" />
               <div ref={optionListRef} className="akdb-status-property-groups" onMouseEnter={() => setPropertyFlyout(null)}>
                 {statusGroups.map((group: any, groupIndex: number) => {
@@ -4760,8 +4814,9 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
             if (cellRef.current) onEditProperty(cellRef.current);
           } : undefined}
           onChange={(next) => {
-            setLocal(next);
-            onChange(next);
+            const effective = requiredCellValue(column, next);
+            setLocal(effective);
+            onChange(effective);
           }}
         />
         {cellChrome}
@@ -4775,8 +4830,9 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
     const changeIDs = (nextIDs: string[]) => {
       const next = Array.from(new Set(nextIDs.filter(Boolean)));
       const raw = JSON.stringify(next);
-      setLocal(raw);
-      onChange(raw);
+      const effective = requiredCellValue(column, raw);
+      setLocal(effective);
+      onChange(effective);
     };
     return (
       <td {...tdProps('akdb-choice-cell')} ref={cellRef}>
@@ -4875,6 +4931,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
           setFocusRect(null);
         }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             event.stopPropagation();

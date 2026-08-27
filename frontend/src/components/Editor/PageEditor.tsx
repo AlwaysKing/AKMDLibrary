@@ -24,7 +24,7 @@ import { BookmarkBlockSpec } from './BookmarkBlock';
 import { SubpageBlockSpec } from './SubpageBlock';
 import { ColumnListBlockSpec, ColumnBlockSpec, redistributeColumnRatios, redistributeColumnRatiosFromWidths, updateColumnListRatios } from './ColumnListBlock';
 import { MarkBlockSpec } from './MarkBlock';
-import { FileContentBlockSpec } from './FileContentBlock';
+import { FileContentBlockSpec, isFileContentHydrating } from './FileContentBlock';
 import { DatabaseBlockSpec } from './DatabaseBlock';
 import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves, isPageChangeSuppressed } from './SyncedBlock';
 import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
@@ -5277,6 +5277,11 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         blocks
           .filter((b) => b?.type === 'fileContent' && b?.props?.path)
           .map(async (b) => {
+            // 正在从磁盘加载内容的块：跳过（不写文件、不记 baseline）。
+            // 否则加载完成前的保存会以空内容记录 baseline，加载完成后
+            // 的自动保存再把全文冗余写回；用户在空白块里的输入也会
+            // 覆盖原文件。加载结束后按"首次见到"规则重新走 baseline。
+            if (isFileContentHydrating(b.id)) return;
             const text = (b.content ?? [])
               .map((c: any) => c?.text ?? '')
               .join('');
