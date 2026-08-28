@@ -11,6 +11,14 @@ import { usePageStore } from '../../stores/pageStore';
 import { useState, useRef, useEffect } from 'react';
 import { gitApi, GitRepoState } from '../../api/git';
 
+// 版本号：取编译时刻，格式 YYYY.MM.DD.xxxx（xxxx 为当天 0 点起的总分钟数）
+const buildVersion = (() => {
+  const d = new Date(__BUILD_TIME__);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}.${minutes}`;
+})();
+
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
@@ -182,6 +190,9 @@ export default function Sidebar({ onToggle }: SidebarProps) {
             <span>资源管理</span>
           </button>
         </nav>
+        <div className="mt-auto px-4 py-3 text-[11px] text-notion-sidebarSecHeader select-none">
+          v{buildVersion}
+        </div>
       </aside>
     );
   }
