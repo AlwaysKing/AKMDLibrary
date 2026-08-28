@@ -7,7 +7,14 @@ import { Fragment as PMFragment } from 'prosemirror-model';
 import CustomLinkToolbar from './CustomLinkToolbar';
 import TableCellMenu from './TableCellMenu';
 import LinkPreviewCard from './LinkPreviewCard';
-import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec, blockToNode } from '@blocknote/core';
+import {
+  BlockNoteSchema,
+  defaultBlockSpecs,
+  createCodeBlockSpec,
+  blockToNode,
+  updateBlock as updateBlockInTr,
+  insertBlocks as insertBlocksInTr,
+} from '@blocknote/core';
 import { getDefaultReactSlashMenuItems } from '@blocknote/react';
 import { zh } from '@blocknote/core/locales';
 import '@blocknote/react/style.css';
@@ -15,6 +22,7 @@ import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
 import { blockNoteComponents, setBlockSelection, getSelectedBlockIds, normalizeSelectedBlockIds, isDragMenuOpen, setSyntheticDragHandleTarget, GROUP_ORDER, ColorListContent, findBlockDeep, SLASH_MENU_ENGLISH } from './BlockNoteComponents';
 import { removeBlocksEnhanced } from './blockHelpers';
 import { PageReferenceBlockSpec } from './PageReferenceBlock';
+import { ControlledHeadingBlockSpec, ControlledToggleListItemBlockSpec } from './ControlledToggleBlocks';
 import { TextSelection, NodeSelection } from '@tiptap/pm/state';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -115,6 +123,9 @@ function createEditorSchema(codeTheme: CodeThemeValue) {
   return BlockNoteSchema.create({
     blockSpecs: {
       ...defaultBlockSpecs,
+      // 展开状态受控为 block 属性（props.expanded），替代默认的 localStorage 视图旁路
+      heading: ControlledHeadingBlockSpec,
+      toggleListItem: ControlledToggleListItemBlockSpec,
       codeBlock: codeBlockSpec as any,
       pageReference: PageReferenceBlockSpec(),
       bookmark: BookmarkBlockSpec(),
@@ -188,47 +199,6 @@ function isToggleBlock(block: any): boolean {
 
 function isListItemBlock(block: any): boolean {
   return block?.type === 'bulletListItem' || block?.type === 'numberedListItem';
-}
-
-function collectToggleExpandedStatesFromBlocks(blocks: any[]): Array<boolean | undefined> {
-  const states: Array<boolean | undefined> = [];
-  const visit = (items: any[]) => {
-    for (const block of items || []) {
-      if (isToggleBlock(block)) {
-        states.push(typeof block.props?.expanded === 'boolean' ? block.props.expanded : undefined);
-      }
-      if (Array.isArray(block.children) && block.children.length > 0) {
-        visit(block.children);
-      }
-    }
-  };
-  visit(blocks);
-  return states;
-}
-
-function collectToggleExpandedStatesFromDom(container: HTMLElement | null): boolean[] {
-  if (!container) return [];
-  return Array.from(container.querySelectorAll('.bn-toggle-wrapper'))
-    .map((wrapper) => wrapper.getAttribute('data-show-children') !== 'false');
-}
-
-function getToggleWrapperBlockId(wrapper: Element): string | null {
-  const blockOuter = wrapper.closest('.bn-block-outer');
-  return blockOuter?.querySelector('[data-id]')?.getAttribute('data-id') || null;
-}
-
-function applyToggleExpandedStatesToDom(container: HTMLElement | null, states: Array<boolean | undefined>) {
-  if (!container || states.length === 0) return;
-  const wrappers = Array.from(container.querySelectorAll('.bn-toggle-wrapper'));
-  wrappers.forEach((wrapper, index) => {
-    const expanded = states[index];
-    if (typeof expanded !== 'boolean') return;
-    wrapper.setAttribute('data-show-children', expanded ? 'true' : 'false');
-    const blockId = getToggleWrapperBlockId(wrapper);
-    if (blockId) {
-      window.localStorage.setItem(`toggle-${blockId}`, expanded ? 'true' : 'false');
-    }
-  });
 }
 
 function getInlinePlainText(content: any): string {
@@ -2705,11 +2675,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   const resolvedCodeTheme = normalizeCodeTheme(codeTheme);
   const schema = useMemo(() => createEditorSchema(resolvedCodeTheme), [resolvedCodeTheme]);
   const initialBlocks = useMemo(() => markdownToBlocks(initialContent) as any[], [initialContent]);
-  const initialToggleExpandedStates = useMemo(
-    () => collectToggleExpandedStatesFromBlocks(initialBlocks),
-    [initialBlocks],
-  );
-  const applyingInitialToggleStateRef = useRef(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editor = useCreateBlockNote({
@@ -2730,21 +2695,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   useEffect(() => {
     bnEditorRef.current = editor;
   }, [editor]);
-
-  useEffect(() => {
-    if (initialToggleExpandedStates.length === 0) return;
-    const container = editorRef.current;
-    if (!container) return;
-
-    applyingInitialToggleStateRef.current = true;
-    const restore = () => {
-      applyToggleExpandedStatesToDom(container, initialToggleExpandedStates);
-      requestAnimationFrame(() => {
-        applyingInitialToggleStateRef.current = false;
-      });
-    };
-    requestAnimationFrame(restore);
-  }, [initialToggleExpandedStates]);
 
   // Find & Replace panel state
   const [findReplace, setFindReplace] = useState<{ open: boolean; mode: 'find' | 'replace' }>({
@@ -5308,9 +5258,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   );
 
   const serializeEditorMarkdown = useCallback((blocks: any[] = editor.document) => {
-    return blocksToMarkdown(blocks, {
-      toggleExpandedStates: collectToggleExpandedStatesFromDom(editorRef.current),
-    });
+    return blocksToMarkdown(blocks);
   }, [editor]);
 
   // Write mirror to IndexedDB — fast, local, no network
@@ -5329,41 +5277,6 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     hasChangesRef.current = false;
     onSyncStatusChangeRef.current?.('syncing');
   }, [editor, persistFileContentBlocks, serializeEditorMarkdown]);
-
-  useEffect(() => {
-    if (readOnly) return;
-    const container = editorRef.current;
-    if (!container) return;
-
-    const observer = new MutationObserver((records) => {
-      if (applyingInitialToggleStateRef.current) return;
-      const changed = records.some(
-        (record) => record.type === 'attributes' && record.attributeName === 'data-show-children',
-      );
-      if (!changed) return;
-
-      hasChangesRef.current = true;
-      onSyncStatusChangeRef.current?.('unsaved');
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      saveTimeoutRef.current = setTimeout(() => {
-        triggerMirror().catch((err) => {
-          hasChangesRef.current = true;
-          onSyncStatusChangeRef.current?.('unsaved');
-          console.error('[PageEditor] Toggle state save failed:', err);
-        });
-      }, 1000);
-    });
-
-    observer.observe(container, {
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['data-show-children'],
-    });
-
-    return () => observer.disconnect();
-  }, [readOnly, triggerMirror]);
 
   // Cmd+S / Ctrl+S: immediate mirror + flush sync
   useEffect(() => {
@@ -6272,6 +6185,36 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
                 editor.setTextCursorPosition(newChild.id as any, 'start');
               } catch {
                 // The inserted child may have been changed by a concurrent editor transaction.
+              }
+            });
+          }
+          return;
+        }
+
+        if (
+          currentBlock &&
+          selection?.empty &&
+          isToggleBlock(currentBlock) &&
+          !isToggleExpandedInDom(container, currentBlock)
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+
+          // 折叠态：模拟普通文本块回车——title 按光标切分，在 toggle 下方插入兄弟块，
+          // children 保持不动。BlockNote 默认的 depth-2 split 会把整个 blockGroup（children）
+          // 挤到新块里，所以这里必须拦截后自己实现。
+          const split = splitInlineContentAtOffset(currentBlock.content, selection.$head.parentOffset);
+          const inserted = editor.transact((tr) => {
+            updateBlockInTr(tr, currentBlock.id, { content: split.before } as any);
+            return insertBlocksInTr(tr, [{ type: 'paragraph', content: split.after } as any], currentBlock.id, 'after');
+          });
+          if (inserted.length > 0) {
+            editor.focus();
+            requestAnimationFrame(() => {
+              try {
+                editor.setTextCursorPosition(inserted[0].id as any, 'start');
+              } catch {
+                // The inserted block may have been changed by a concurrent editor transaction.
               }
             });
           }

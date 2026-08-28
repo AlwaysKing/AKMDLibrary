@@ -884,16 +884,6 @@ function serializeToggleExpandedAttribute(expanded: boolean | undefined): string
   return ` expanded="${expanded ? '1' : '0'}"`;
 }
 
-function resolveToggleExpanded(
-  block: any,
-  context: { toggleExpandedStates?: Array<boolean | undefined>; toggleIndex: number },
-): boolean | undefined {
-  const index = context.toggleIndex++;
-  const fromContext = context.toggleExpandedStates?.[index];
-  if (typeof fromContext === 'boolean') return fromContext;
-  return typeof block.props?.expanded === 'boolean' ? block.props.expanded : undefined;
-}
-
 function parseSyncedQuoted(text: string): Array<{ pageId: string; syncId: string }> {
   const quoted: Array<{ pageId: string; syncId: string }> = [];
   const qRegex = /<q\s+page-id="([^"]+)"\s+sync-id="([^"]+)"\s*\/>/g;
@@ -1048,16 +1038,12 @@ function parseInlineFormatting(text: string): any[] {
 /**
  * Convert BlockNote blocks to markdown
  */
-export function blocksToMarkdown(
-  blocks: any[],
-  options: { toggleExpandedStates?: Array<boolean | undefined> } = {},
-): string {
+export function blocksToMarkdown(blocks: any[]): string {
   // 用 '\n\n' 拼接符合标准 markdown 段落分隔。
   // 之前用单 '\n' 会让外部消费者（Notion、BlockNote 默认 paste handler 等）
   // 把多个 paragraph 当成同一段内的软换行，从而塌成 1 个 block。
   // markdownToBlocks 解析时空行被跳过，对单 '\n' 和 '\n\n' 都兼容，无回环风险。
-  const context = { toggleExpandedStates: options.toggleExpandedStates, toggleIndex: 0 };
-  return blocks.map(block => serializeBlock(block, 0, 0, context)).join('\n\n');
+  return blocks.map(block => serializeBlock(block, 0, 0)).join('\n\n');
 }
 
 /**
@@ -1094,7 +1080,6 @@ function serializeBlock(
   block: any,
   indentLevel = 0,
   listDepth = 0,
-  context: { toggleExpandedStates?: Array<boolean | undefined>; toggleIndex: number } = { toggleIndex: 0 },
 ): string {
   const withIndent = (markdown: string) => {
     if (!markdown || indentLevel <= 0) return markdown;
@@ -1114,7 +1099,7 @@ function serializeBlock(
 
   // Children inherit listDepth: increment only when this block is itself a list item.
   const childListDepth = isListTypeBlock(block) ? listDepth + 1 : 0;
-  const serializeContainedChild = (c: any) => serializeBlock(c, 0, childListDepth, context);
+  const serializeContainedChild = (c: any) => serializeBlock(c, 0, childListDepth);
 
   if (block.type === 'syncedBlockSource') {
     const syncId = block.props?.syncId || '';
@@ -1144,7 +1129,7 @@ function serializeBlock(
     const childrenMd = columns.map((col: any) => {
       const ratio = col.props?.widthRatio || 50;
       // Column children are not list items; reset listDepth to 0 for them.
-      const colContent = (col.children || []).map((c: any) => serializeBlock(c, 0, 0, context)).join('\n');
+      const colContent = (col.children || []).map((c: any) => serializeBlock(c, 0, 0)).join('\n');
       return `<column ratio="${ratio}">\n${colContent}\n</column>`;
     }).join('\n');
     return finalizeBlock(`<column-list ratios="${ratios}">\n${childrenMd}\n</column-list>`);
@@ -1157,7 +1142,7 @@ function serializeBlock(
     const childrenMd = block.children?.length
       ? block.children.map(serializeContainedChild).join('\n')
       : '';
-    const expandedAttr = serializeToggleExpandedAttribute(resolveToggleExpanded(block, context));
+    const expandedAttr = serializeToggleExpandedAttribute(block.props?.expanded);
     return finalizeBlock(`<toggle-h level="${level}"${expandedAttr}>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-h>`);
   }
 
@@ -1167,7 +1152,7 @@ function serializeBlock(
     const childrenMd = block.children?.length
       ? block.children.map(serializeContainedChild).join('\n')
       : '';
-    const expandedAttr = serializeToggleExpandedAttribute(resolveToggleExpanded(block, context));
+    const expandedAttr = serializeToggleExpandedAttribute(block.props?.expanded);
     return finalizeBlock(`<toggle-list${expandedAttr}>\n<title>${title}</title>\n<content>${childrenMd ? '\n' + childrenMd + '\n' : ''}</content>\n</toggle-list>`);
   }
 

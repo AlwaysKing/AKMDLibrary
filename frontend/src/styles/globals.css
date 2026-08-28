@@ -691,6 +691,17 @@ h4[contenteditable],
   content: none !important;
 }
 
+/* Toggle 块的 placeholder：:after 是 .bn-block-content(flex 容器) 的 flex item，
+   排在 toggle 包裹 div 之后，会被其中较宽的"空的切换区"add-block 按钮撑开挤到右侧。
+   改为绝对定位，固定在折叠箭头按钮（18px svg + 2×3px padding）之后。 */
+.bn-editor .bn-block-content:has(> div > .bn-toggle-wrapper) {
+  position: relative;
+}
+.bn-editor .bn-block-content:has(> div > .bn-toggle-wrapper)::after {
+  position: absolute;
+  left: 24px;
+}
+
 /* Selection — semi-transparent blue like Notion (rgba 35,131,226 0.28) */
 .bn-editor ::selection {
   background: rgba(35, 131, 226, 0.28);
