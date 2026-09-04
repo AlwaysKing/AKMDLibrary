@@ -13,6 +13,7 @@ export interface AuthResponse {
 
 export interface User {
   id: number;
+  uuid: string;
   username: string;
   display_name: string;
   avatar_url?: string;

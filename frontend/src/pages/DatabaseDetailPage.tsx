@@ -1,14 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronDown, GripVertical, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, GripVertical, Plus, Trash2 } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseColumnType, type DatabaseDetail, type DatabaseSummary } from '../api/databases';
-import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover } from '../components/Editor/database/DatabaseRenderer';
+import DatabaseRenderer, { ChoiceSubmenu, ColumnIconGlyph, ColumnIconPopover } from '../components/Editor/database/DatabaseRenderer';
 import { defaultView } from '../components/Editor/database/viewConfig';
 
 type DraftColumnType = DatabaseColumnType | 'secret';
 
-const columnTypes: DraftColumnType[] = ['text', 'secret', 'number', 'select', 'multi_select', 'date', 'checkbox', 'url', 'status', 'formula', 'relation'];
+const columnTypes: DraftColumnType[] = ['text', 'secret', 'number', 'select', 'multi_select', 'date', 'checkbox', 'url', 'status', 'formula', 'relation', 'person'];
 const columnTypeLabels: Record<DraftColumnType, string> = {
   text: '文本',
   secret: '密文',
@@ -21,6 +21,7 @@ const columnTypeLabels: Record<DraftColumnType, string> = {
   status: '状态',
   formula: '公式',
   relation: '关联',
+  person: '人员',
   created_time: '创建时间',
   last_edited_time: '最后编辑时间',
   last_edited_user: '最后编辑人',
@@ -393,6 +394,7 @@ function defaultConfig(type: DraftColumnType) {
   if (type === 'secret') return { max_length: 0, secret: true };
   if (type === 'select' || type === 'multi_select') return { options: [] };
   if (type === 'status') return { groups: [], options: [] };
+  if (type === 'person') return { align: 'left', multiple: false, display_style: 'icon_name' };
   if (type === 'number') return { sign_mode: 'both', precision: -1, unit: '', min: '', max: '' };
   if (type === 'date') return { date_format: 'chinese', time_format: 'none', timezone: 'GMT+8', date_content: 'date', include_time: false, hour12: false };
   if (type === 'formula') return { formula: '""' };
@@ -471,6 +473,57 @@ function CustomSelect({
             );
           })}
         </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function SettingChoiceMenu({
+  label,
+  value,
+  choices,
+  onChange,
+  width = 220,
+}: {
+  label: string;
+  value: string;
+  choices: Array<{ id: string; label: string }>;
+  onChange: (value: string) => void;
+  width?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuStyle = useMetadataDropdownPosition(open, buttonRef, width);
+  useMetadataDropdownOutsideClose(open, buttonRef, null, () => setOpen(false), '.akdb-column-number-submenu');
+  const selected = choices.find((choice) => choice.id === value) || choices[0];
+  return (
+    <div className="space-y-1">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((next) => !next)}
+        className="akdb-column-property-nav"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <span>{label}</span>
+        <span>{selected?.label || label}</span>
+        <ChevronRight size={15} />
+      </button>
+      {open && menuStyle && createPortal(
+        <ChoiceSubmenu
+          value={value}
+          style={{ ...menuStyle, zIndex: 90 }}
+          ariaLabel={label}
+          choices={choices}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => undefined}
+          onChange={(next) => {
+            onChange(next);
+            setOpen(false);
+          }}
+        />,
         document.body,
       )}
     </div>
@@ -647,6 +700,42 @@ function ColumnConfigEditor({
   }
   if (column.type === 'status') {
     return <StatusEditor config={config} setConfig={setConfig} />;
+  }
+  if (column.type === 'person') {
+    return (
+      <ConfigSection title="人员设置">
+        <div className="grid grid-cols-1 gap-0">
+          <SettingChoiceMenu
+            label="对齐方式"
+            value={config.align || 'left'}
+            choices={[
+              { id: 'left', label: '左对齐' },
+              { id: 'right', label: '右对齐' },
+            ]}
+            onChange={(value) => patchConfig({ align: value })}
+          />
+          <SettingChoiceMenu
+            label="选择方式"
+            value={config.multiple ? 'multiple' : 'single'}
+            choices={[
+              { id: 'single', label: '单选' },
+              { id: 'multiple', label: '多选' },
+            ]}
+            onChange={(value) => patchConfig({ multiple: value === 'multiple' })}
+          />
+          <SettingChoiceMenu
+            label="显示样式"
+            value={config.display_style || 'icon_name'}
+            choices={[
+              { id: 'icon', label: '图标' },
+              { id: 'name', label: '名字' },
+              { id: 'icon_name', label: '图标 + 名字' },
+            ]}
+            onChange={(value) => patchConfig({ display_style: value })}
+          />
+        </div>
+      </ConfigSection>
+    );
   }
   if (column.type === 'text') {
     return (

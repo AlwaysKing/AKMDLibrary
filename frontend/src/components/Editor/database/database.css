@@ -1093,7 +1093,7 @@
 .akdb-table td.akdb-align-right .akdb-option-select-btn { justify-content: flex-end; }
 .akdb-cell-popup-mask { position: fixed; inset: 0; z-index: 129; background: transparent; cursor: default; }
 .akdb-option-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 130; width: 300px; min-width: 300px; max-width: 300px; max-height: 70vh; overflow: auto; border: 1px solid rgba(55,53,47,.12); border-radius: 6px; background: #fff; box-shadow: 0 8px 24px rgba(15,23,42,.14); padding: 0; }
-.akdb-option-select-menu { display: flex; flex-direction: column; overflow: visible; padding-bottom: 8px; }
+.akdb-option-select-menu { display: flex; flex-direction: column; overflow: auto; padding-bottom: 8px; }
 .akdb-option-combobox { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; height: 38px; box-sizing: border-box; margin: 0; border-radius: 6px; background: #faf9f8; cursor: text; overflow: hidden; padding: 4px 12px; font-size: 14px; line-height: 20px; }
 .akdb-option-combobox .akdb-option-tag { flex: 0 1 auto; min-height: 22px; height: 22px; overflow: hidden; }
 .akdb-option-combobox input { flex: 1 1 60px; min-width: 60px; width: auto; height: 20px; border: 0; outline: none; background: transparent; color: #37352f; font: inherit; line-height: 20px; padding: 0; }

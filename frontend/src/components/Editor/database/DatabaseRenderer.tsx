@@ -32,8 +32,11 @@ import {
   EyeOff,
   FileText,
   Copy,
+  X,
 } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseColumnType, type DatabaseDetail, type DatabaseRow, type DatabaseSummary } from '../../../api/databases';
+import { usersApi } from '../../../api/users';
+import { type User } from '../../../api/auth';
 import { evalFormula } from '../../../formula/evaluator';
 import { defaultView, type DatabaseViewConfig, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule } from './viewConfig';
 import { notionColumnIconOptions, type ColumnIconOption } from './columnIcons';
@@ -117,6 +120,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
+  const [users, setUsers] = useState<User[]>([]);
   const [columnDragState, setColumnDragState] = useState<{
     sourceIndex: number;
     targetIndex: number;
@@ -143,6 +147,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const suppressNextHeaderClickRef = useRef(false);
   const activeView = useMemo(() => view || defaultView(schema?.columns || []), [view, schema?.columns]);
   const schemaColumnByID = useMemo(() => new Map((schema?.columns || []).map((column) => [column.id, column])), [schema?.columns]);
+  const usersByUUID = useMemo(() => new Map(users.map((user) => [user.uuid, user])), [users]);
   const addColumnMenuRect = useDropdownPosition(addColumnOpen, addColumnButtonRef, 360);
   const columnMenuRect = useDropdownPosition(columnMenuIndex !== null, columnMenuAnchorRef, 220, 'below', 0, false);
   const showColumnControls = !readonly && columnControls;
@@ -162,6 +167,17 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   }, []);
   useEffect(() => () => {
     suppressNextCellClickRef.current?.();
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    usersApi.list().then((next: User[]) => {
+      if (alive) setUsers(next || []);
+    }).catch(() => {
+      if (alive) setUsers([]);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
   const applySchema = (nextSchema: DatabaseDetail | null) => {
     setSchema(nextSchema);
@@ -223,12 +239,12 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const tableGroupColumn = useMemo(() => schema?.columns.find((column) => column.id === activeView.groupBy), [activeView.groupBy, schema?.columns]);
   const tableGroups = useMemo(() => {
     if (!schema || !tableGroupColumn || activeView.type !== 'table') return [];
-    return buildTableGroups(displayRows, tableGroupColumn, activeView);
-  }, [activeView, displayRows, schema, tableGroupColumn]);
+    return buildTableGroups(displayRows, tableGroupColumn, activeView, usersByUUID);
+  }, [activeView, displayRows, schema, tableGroupColumn, usersByUUID]);
   const tableGroupOptions = useMemo(() => {
     if (!schema || !tableGroupColumn || activeView.type !== 'table') return [];
-    return buildTableGroups(displayRows, tableGroupColumn, { ...activeView, hiddenGroups: [] }).map((group) => ({ key: group.key, label: group.label }));
-  }, [activeView, displayRows, schema, tableGroupColumn]);
+    return buildTableGroups(displayRows, tableGroupColumn, { ...activeView, hiddenGroups: [] }, usersByUUID).map((group) => ({ key: group.key, label: group.label }));
+  }, [activeView, displayRows, schema, tableGroupColumn, usersByUUID]);
 
   useEffect(() => {
     onGroupOptionsChange?.(tableGroupOptions);
@@ -425,7 +441,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     const filterDefaults = schema ? createRowDefaultsForViewFilters(schema.columns, activeView) : {};
     const values = { ...filterDefaults, ...overrides };
     for (const column of schema?.columns || []) {
-      const empty = !values[column.id] || (column.type === 'multi_select' && !parseMultiSelectValue(values[column.id]).length);
+      const empty = !values[column.id] || ((column.type === 'multi_select' || column.type === 'person') && !parseMultiSelectValue(values[column.id]).length);
       if (!empty) continue;
       const fallback = columnRequiredDefault(column);
       if (fallback) values[column.id] = fallback;
@@ -1512,7 +1528,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                     onClick={() => toggleTableGroup(group.key)}
                   >
                     <span className={`akdb-group-toggle-caret ${collapsed ? 'is-collapsed' : ''}`} aria-hidden="true" />
-                    <span className="akdb-group-label">{renderTableGroupLabel(group, tableGroupColumn)}</span>
+                    <span className="akdb-group-label">{renderTableGroupLabel(group, tableGroupColumn, usersByUUID)}</span>
                     <span className="akdb-group-count">{group.rows.length}</span>
                   </button>
                   {!readonly && !collapsed && (
@@ -1703,6 +1719,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                                 value={cellValue}
                                 column={c.column}
                                 align={c.rule.align}
+                                usersByUUID={usersByUUID}
                                 readonly={readonly || c.column?.type === 'formula' || !!c.rule.readonly}
                                 active={isActive}
                                 editingActive={isEditing}
@@ -1813,6 +1830,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                     value={cellValue}
                     column={c.column}
                     align={c.rule.align}
+                    usersByUUID={usersByUUID}
                     readonly={readonly || c.column?.type === 'formula' || !!c.rule.readonly}
                     active={isActive}
                     editingActive={isEditing}
@@ -2063,6 +2081,7 @@ export function defaultColumnIconID(column?: DatabaseColumn) {
   if (column.type === 'status') return 'type_status';
   if (column.type === 'date' || column.type === 'created_time' || column.type === 'last_edited_time') return 'type_date';
   if (column.type === 'last_edited_user') return 'type_user';
+  if (column.type === 'person') return 'type_user';
   if (column.type === 'checkbox') return 'type_checkbox';
   if (column.type === 'url') return 'type_url';
   if (column.type === 'formula') return 'type_formula';
@@ -2189,6 +2208,15 @@ function createRowValueForFilter(column: DatabaseColumn, op: string, value: unkn
     const values = filterOptionValues(value);
     return values.length ? JSON.stringify(values) : undefined;
   }
+  if (column.type === 'person') {
+    if (personColumnMultiple(column)) {
+      if (op !== 'contains') return undefined;
+      const values = filterOptionValues(value);
+      return values.length ? JSON.stringify(values) : undefined;
+    }
+    if (op !== 'equals') return undefined;
+    return firstFilterOptionValue(value);
+  }
   const text = String(value ?? '').trim();
   if (!text) return undefined;
   if (op === 'equals' || op === 'contains' || op === 'starts_with' || op === 'ends_with') return text;
@@ -2225,6 +2253,9 @@ function nonEmptyCreateRowValue(column: DatabaseColumn): string | undefined {
     const option = firstColumnOption(column);
     return option ? JSON.stringify([option]) : undefined;
   }
+  if (column.type === 'person') {
+    return undefined;
+  }
   if (column.type === 'select' || column.type === 'status') return firstColumnOption(column);
   if (column.type === 'date') return formatCreateRowDate(new Date());
   return '1';
@@ -2233,6 +2264,26 @@ function nonEmptyCreateRowValue(column: DatabaseColumn): string | undefined {
 function firstColumnOption(column: DatabaseColumn) {
   const options = Array.isArray(column.config?.options) ? column.config.options : [];
   return options[0]?.id ? String(options[0].id) : undefined;
+}
+
+function personColumnMultiple(column: DatabaseColumn) {
+  return !!column.config?.multiple;
+}
+
+function personValueIDs(raw: string) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(String).map((item) => item.trim()).filter(Boolean);
+  } catch {
+    return [raw.trim()].filter(Boolean);
+  }
+  return [raw.trim()].filter(Boolean);
+}
+
+function personLabel(uuid: string, userMap?: Map<string, User>) {
+  const user = userMap?.get(uuid);
+  return user?.display_name || user?.username || uuid;
 }
 
 function firstFilterOptionValue(value: unknown): string | undefined {
@@ -2299,6 +2350,13 @@ function matchesViewFilter(raw: unknown, column: DatabaseColumn | undefined, op:
     const selected = Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean);
     if (!selected.length) return true;
     const values = parseMultiSelectValue(text);
+    const matched = selected.some((id) => values.includes(id));
+    return op === 'not_contains' || op === 'not_equals' ? !matched : matched;
+  }
+  if (column?.type === 'person') {
+    const selected = Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean);
+    if (!selected.length) return true;
+    const values = personValueIDs(text);
     const matched = selected.some((id) => values.includes(id));
     return op === 'not_contains' || op === 'not_equals' ? !matched : matched;
   }
@@ -2488,7 +2546,7 @@ type TableGroup = {
   defaults: Record<string, string>;
 };
 
-function buildTableGroups(items: TableDisplayRow[], column: DatabaseColumn, view: DatabaseViewConfig): TableGroup[] {
+function buildTableGroups(items: TableDisplayRow[], column: DatabaseColumn, view: DatabaseViewConfig, userMap: Map<string, User>): TableGroup[] {
   const hidden = new Set(view.hiddenGroups || []);
   const byKey = new Map<string, TableGroup>();
   const ensure = (key: string, label: string, defaults: Record<string, string> = {}, value?: string) => {
@@ -2496,10 +2554,10 @@ function buildTableGroups(items: TableDisplayRow[], column: DatabaseColumn, view
     return byKey.get(key)!;
   };
 
-  for (const preset of presetTableGroups(column, view)) ensure(preset.key, preset.label, preset.defaults, preset.value);
+  for (const preset of presetTableGroups(column, view, userMap)) ensure(preset.key, preset.label, preset.defaults, preset.value);
 
   items.forEach((item, sourceIndex) => {
-    const keys = tableGroupKeysForRow(item, column, view);
+    const keys = tableGroupKeysForRow(item, column, view, userMap);
     keys.forEach((group) => {
       ensure(group.key, group.label, group.defaults, group.value).rows.push({ ...item, sourceIndex });
     });
@@ -2508,7 +2566,7 @@ function buildTableGroups(items: TableDisplayRow[], column: DatabaseColumn, view
   let groups = Array.from(byKey.values()).filter((group) => {
     if (hidden.has(group.key)) return false;
     if (view.hideEmptyGroups && isEmptyTableGroup(group)) return false;
-    return group.rows.length > 0 || hasPresetTableGroup(column, group.key, view);
+    return group.rows.length > 0 || hasPresetTableGroup(column, group.key, view, userMap);
   });
 
   const sort = view.groupSort || 'manual';
@@ -2531,7 +2589,7 @@ function buildTableGroups(items: TableDisplayRow[], column: DatabaseColumn, view
   return groups;
 }
 
-function presetTableGroups(column: DatabaseColumn, view?: DatabaseViewConfig): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
+function presetTableGroups(column: DatabaseColumn, view?: DatabaseViewConfig, userMap?: Map<string, User>): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
   if (column.type === 'status' && view?.groupStatusMode === 'group') return statusGroupTablePresets(column);
   if (column.type === 'select' || column.type === 'status' || column.type === 'multi_select') {
     const options = Array.isArray(column.config?.options) ? column.config.options : [];
@@ -2545,6 +2603,18 @@ function presetTableGroups(column: DatabaseColumn, view?: DatabaseViewConfig): A
       { key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') },
     ];
   }
+  if (column.type === 'person') {
+    const users = userMap ? Array.from(userMap.values()) : [];
+    return [
+      ...users.map((user) => ({
+        key: user.uuid,
+        label: user.display_name || user.username || user.uuid,
+        value: user.uuid,
+        defaults: groupCreateDefaults(column, user.uuid),
+      })),
+      { key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') },
+    ];
+  }
   if (column.type === 'checkbox') {
     return [
       { key: 'checked', label: '已勾选', value: 'true', defaults: groupCreateDefaults(column, 'true') },
@@ -2554,16 +2624,26 @@ function presetTableGroups(column: DatabaseColumn, view?: DatabaseViewConfig): A
   return [];
 }
 
-function hasPresetTableGroup(column: DatabaseColumn, key: string, view?: DatabaseViewConfig) {
-  return presetTableGroups(column, view).some((group) => group.key === key);
+function hasPresetTableGroup(column: DatabaseColumn, key: string, view?: DatabaseViewConfig, userMap?: Map<string, User>) {
+  return presetTableGroups(column, view, userMap).some((group) => group.key === key);
 }
 
-function tableGroupKeysForRow(item: TableDisplayRow, column: DatabaseColumn, view?: DatabaseViewConfig): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
+function tableGroupKeysForRow(item: TableDisplayRow, column: DatabaseColumn, view?: DatabaseViewConfig, userMap?: Map<string, User>): Array<{ key: string; label: string; value?: string; defaults: Record<string, string> }> {
   const raw = String(item.props[column.id] ?? item.row.values[column.id] ?? '').trim();
   if (column.type === 'multi_select') {
     const values = parseMultiSelectValue(raw);
     if (!values.length) return [{ key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') }];
     return values.map((value) => optionTableGroup(column, value));
+  }
+  if (column.type === 'person') {
+    const values = personValueIDs(raw);
+    if (!values.length) return [{ key: '__empty__', label: '空白', value: '', defaults: groupCreateDefaults(column, '') }];
+    return values.map((value) => ({
+      key: value,
+      label: personLabel(value, userMap),
+      value,
+      defaults: groupCreateDefaults(column, value),
+    }));
   }
   if (column.type === 'status' && view?.groupStatusMode === 'group') {
     return [statusGroupForOption(column, raw)];
@@ -2673,6 +2753,7 @@ function optionTableGroup(column: DatabaseColumn, value: string) {
 function groupCreateDefaults(column: DatabaseColumn, value: string): Record<string, string> {
   if (column.readonly || column.type === 'formula' || column.type === 'linked' || column.type === 'created_time' || column.type === 'last_edited_time' || column.type === 'last_edited_user') return {};
   if (column.type === 'multi_select') return value ? { [column.id]: JSON.stringify([value]) } : { [column.id]: '[]' };
+  if (column.type === 'person') return personColumnMultiple(column) ? (value ? { [column.id]: JSON.stringify([value]) } : { [column.id]: '[]' }) : { [column.id]: value };
   return { [column.id]: value };
 }
 
@@ -2680,7 +2761,7 @@ function isEmptyTableGroup(group: TableGroup) {
   return group.key === '__empty__' || group.value === '';
 }
 
-function renderTableGroupLabel(group: TableGroup, column?: DatabaseColumn): ReactNode {
+function renderTableGroupLabel(group: TableGroup, column?: DatabaseColumn, userMap?: Map<string, User>): ReactNode {
   if (!column) return group.label;
   if ((column.type === 'select' || column.type === 'status') && group.value) {
     const option = (column.config?.options || []).find((item: any) => String(item.id || '') === group.value);
@@ -2689,6 +2770,9 @@ function renderTableGroupLabel(group: TableGroup, column?: DatabaseColumn): Reac
   if (column.type === 'multi_select' && group.value) {
     const option = (column.config?.options || []).find((item: any) => String(item.id || '') === group.value);
     if (option) return <OptionTag option={option} config={column.config || {}} />;
+  }
+  if (column.type === 'person' && group.value) {
+    return <PersonTag value={group.value} user={userMap?.get(group.value)} displayStyle={column.config?.display_style || 'icon_name'} />;
   }
   if (column.type === 'checkbox') {
     return (
@@ -3193,7 +3277,7 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
   const [editingStatusGroupID, setEditingStatusGroupID] = useState<string | null>(null);
   const [textMaxLengthDraft, setTextMaxLengthDraft] = useState(textMaxLengthEnabled ? String(textMaxLength) : '');
-  const [propertyFlyout, setPropertyFlyout] = useState<'textDisplay' | 'align' | 'checkboxStyle' | 'numberFormat' | 'numberColor' | 'precision' | 'dateDisplayFormat' | 'timeDisplayFormat' | 'timezone' | null>(null);
+  const [propertyFlyout, setPropertyFlyout] = useState<'textDisplay' | 'align' | 'checkboxStyle' | 'numberFormat' | 'numberColor' | 'precision' | 'dateDisplayFormat' | 'timeDisplayFormat' | 'timezone' | 'personMode' | 'personDisplay' | null>(null);
   const [optionDragState, setOptionDragState] = useState<{
     sourceID: string;
     targetID: string;
@@ -3233,6 +3317,8 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
   const dateContentButtonRef = useRef<HTMLButtonElement | null>(null);
   const dateFormatButtonRef = useRef<HTMLButtonElement | null>(null);
   const timezoneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const personModeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const personDisplayButtonRef = useRef<HTMLButtonElement | null>(null);
   const optionAddButtonRef = useRef<HTMLButtonElement | null>(null);
   const optionListRef = useRef<HTMLDivElement | null>(null);
   const optionDragStateRef = useRef<typeof optionDragState>(null);
@@ -3248,6 +3334,8 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
   const dateContentOpen = propertyFlyout === 'dateDisplayFormat';
   const dateFormatOpen = propertyFlyout === 'timeDisplayFormat';
   const timezoneOpen = propertyFlyout === 'timezone';
+  const personModeOpen = propertyFlyout === 'personMode';
+  const personDisplayOpen = propertyFlyout === 'personDisplay';
   const textDisplayRect = useSubmenuPosition(textDisplayOpen, textDisplayButtonRef, 220, 180);
   const alignRect = useSubmenuPosition(alignOpen, alignButtonRef, 220, 180);
   const checkboxStyleRect = useSubmenuPosition(checkboxStyleOpen, checkboxStyleButtonRef, 220, 180);
@@ -3257,6 +3345,8 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
   const dateContentRect = useSubmenuPosition(dateContentOpen, dateContentButtonRef, 220, 220);
   const dateFormatRect = useSubmenuPosition(dateFormatOpen, dateFormatButtonRef, 220, 180);
   const timezoneRect = useSubmenuPosition(timezoneOpen, timezoneButtonRef, 220, 320);
+  const personModeRect = useSubmenuPosition(personModeOpen, personModeButtonRef, 220, 180);
+  const personDisplayRect = useSubmenuPosition(personDisplayOpen, personDisplayButtonRef, 220, 220);
   const editingOption = options.find((option: any) => option.id === editingOptionID);
   const statusGroups = Array.isArray(config.groups) && config.groups.length
     ? config.groups
@@ -3881,6 +3971,81 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
           </>
         )}
 
+        {column.type === 'person' && (
+          <>
+            {renderAlignControl()}
+            <button
+              ref={personModeButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${personModeOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('personMode');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('personMode');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={personModeOpen}
+            >
+              <span>选择方式</span>
+              <span>{config.multiple ? '多选' : '单选'}</span>
+              <ChevronRight size={15} />
+            </button>
+            {personModeOpen && personModeRect && createPortal(
+              <ChoiceSubmenu
+                value={config.multiple ? 'multiple' : 'single'}
+                style={personModeRect}
+                ariaLabel="选择方式"
+                choices={[
+                  { id: 'single', label: '单选' },
+                  { id: 'multiple', label: '多选' },
+                ]}
+                onMouseEnter={() => setPropertyFlyout('personMode')}
+                onMouseLeave={() => undefined}
+                onChange={(value) => onUpdateConfig({ multiple: value === 'multiple' })}
+              />,
+              document.body,
+            )}
+            <button
+              ref={personDisplayButtonRef}
+              type="button"
+              className={`akdb-column-property-nav ${personDisplayOpen ? 'is-active' : ''}`}
+              onMouseEnter={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('personDisplay');
+              }}
+              onFocus={() => {
+                setEditingOptionID(null);
+                setPropertyFlyout('personDisplay');
+              }}
+              aria-haspopup="menu"
+              aria-expanded={personDisplayOpen}
+            >
+              <span>显示样式</span>
+              <span>{personDisplayStyleLabel(config.display_style)}</span>
+              <ChevronRight size={15} />
+            </button>
+            {personDisplayOpen && personDisplayRect && createPortal(
+              <ChoiceSubmenu
+                value={config.display_style || 'icon_name'}
+                style={personDisplayRect}
+                ariaLabel="显示样式"
+                choices={[
+                  { id: 'icon', label: '图标' },
+                  { id: 'name', label: '名字' },
+                  { id: 'icon_name', label: '图标 + 名字' },
+                ]}
+                onMouseEnter={() => setPropertyFlyout('personDisplay')}
+                onMouseLeave={() => undefined}
+                onChange={(value) => onUpdateConfig({ display_style: value })}
+              />,
+              document.body,
+            )}
+          </>
+        )}
+
         {(column.type === 'select' || column.type === 'multi_select') && (
           editingOption ? (
             <OptionEditMenu
@@ -4073,7 +4238,7 @@ export function ColumnPropertySubmenu({ column, align, style, onMouseEnter, onCr
           )
         )}
 
-        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && !isSystemDateColumn(column) && column.type !== 'checkbox' && renderAlignControl()}
+        {column.type !== 'number' && column.type !== 'select' && column.type !== 'multi_select' && column.type !== 'status' && column.type !== 'date' && !isSystemDateColumn(column) && column.type !== 'checkbox' && column.type !== 'person' && renderAlignControl()}
 
         {column.type === 'text' && (
           <div className="akdb-column-property-limit">
@@ -4243,6 +4408,12 @@ function alignLabel(value: ViewColumnRule['align']) {
   return '左';
 }
 
+function personDisplayStyleLabel(value: unknown) {
+  if (value === 'icon') return '图标';
+  if (value === 'name') return '名字';
+  return '图标 + 名字';
+}
+
 function TextDisplaySubmenu({ secret, style, onMouseEnter, onMouseLeave, onChange }: { secret: boolean; style: CSSProperties; onMouseEnter: () => void; onMouseLeave: () => void; onChange: (secret: boolean) => void }) {
   const choices = [
     { id: 'plain', label: '明文', secret: false },
@@ -4309,6 +4480,56 @@ function AlignSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }: { 
               onClick={() => onChange(choice.id)}
             >
               <span>{choice.icon}</span>
+              <span>{choice.label}</span>
+              {active && <Check size={16} className="akdb-column-type-check" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function ChoiceSubmenu({
+  value,
+  style,
+  ariaLabel,
+  choices,
+  onMouseEnter,
+  onMouseLeave,
+  onChange,
+}: {
+  value: string;
+  style: CSSProperties;
+  ariaLabel: string;
+  choices: Array<{ id: string; label: string; icon?: ReactNode }>;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div
+      className="akdb-column-number-submenu"
+      role="menu"
+      aria-label={ariaLabel}
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="akdb-column-property-list">
+        {choices.map((choice) => {
+          const active = value === choice.id;
+          return (
+            <button
+              key={choice.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={active}
+              className={`akdb-column-type-item akdb-column-property-choice-item ${choice.icon ? 'has-leading-visual' : ''} ${active ? 'is-active' : ''}`}
+              onClick={() => onChange(choice.id)}
+            >
+              {choice.icon ? <span>{choice.icon}</span> : null}
               <span>{choice.label}</span>
               {active && <Check size={16} className="akdb-column-type-check" />}
             </button>
@@ -4622,7 +4843,7 @@ function PrecisionSubmenu({ value, style, onMouseEnter, onMouseLeave, onChange }
   );
 }
 
-function EditableCell({ value, column, align, readonly, active, editingActive, rangeSelected, fillSelected, onChange, onEditStateChange, onFillPointerDown, onCreateOption, onReorderOption, onUpdateOption, onDeleteOption, onUpdateColumnConfig, onEditProperty, cellProps }: { value: string; column?: DatabaseColumn; align?: ViewColumnRule['align']; readonly?: boolean; active?: boolean; editingActive?: boolean; rangeSelected?: boolean; fillSelected?: boolean; onChange: (value: string) => void; onEditStateChange?: (editing: boolean) => void; onFillPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void; onCreateOption?: (label: string) => Promise<any | null>; onReorderOption?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateColumnConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: (anchor: HTMLElement) => void; cellProps?: TdHTMLAttributes<HTMLTableCellElement> }) {
+function EditableCell({ value, column, align, usersByUUID, readonly, active, editingActive, rangeSelected, fillSelected, onChange, onEditStateChange, onFillPointerDown, onCreateOption, onReorderOption, onUpdateOption, onDeleteOption, onUpdateColumnConfig, onEditProperty, cellProps }: { value: string; column?: DatabaseColumn; align?: ViewColumnRule['align']; usersByUUID?: Map<string, User>; readonly?: boolean; active?: boolean; editingActive?: boolean; rangeSelected?: boolean; fillSelected?: boolean; onChange: (value: string) => void; onEditStateChange?: (editing: boolean) => void; onFillPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void; onCreateOption?: (label: string) => Promise<any | null>; onReorderOption?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onUpdateColumnConfig?: (patch: Record<string, any>) => Promise<void>; onEditProperty?: (anchor: HTMLElement) => void; cellProps?: TdHTMLAttributes<HTMLTableCellElement> }) {
   const [local, setLocal] = useState(value);
   const [editing, setEditing] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -4648,7 +4869,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
   const datePickerRect = useDropdownPosition(datePickerOpen, dateButtonRef, 280, 'below', -8);
   useEffect(() => setLocal(value), [value]);
   useEffect(() => {
-    if (editingActive && !editing && column && column.type !== 'checkbox' && column.type !== 'select' && column.type !== 'status' && column.type !== 'multi_select' && column.type !== 'date') {
+    if (editingActive && !editing && column && column.type !== 'checkbox' && column.type !== 'select' && column.type !== 'status' && column.type !== 'multi_select' && column.type !== 'date' && column.type !== 'person') {
       setEditing(true);
       requestAnimationFrame(() => {
         if (column.type === 'text' && !column.config?.secret) {
@@ -4675,6 +4896,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
     textEditorFocusedRef.current = true;
   }, [editing, focusRect, column?.type, column?.config?.secret]);
   useDropdownOutsideClose(datePickerOpen, dateButtonRef, () => { setDatePickerOpen(false); setFocusRect(null); }, '.akdb-date-picker, .akdb-column-number-submenu');
+  const effectiveAlign = align || column?.config?.align || 'left';
   const updateFocusRect = () => {
     const rect = cellRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -4759,7 +4981,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
   const isCellEditing = editing || !!editingActive;
   const tdProps = (className?: string): TdHTMLAttributes<HTMLTableCellElement> => ({
     ...cellProps,
-    className: [cellProps?.className, className, columnAlignClass({ align }), isCellEditing ? 'is-akdb-cell-editing' : '', !isCellEditing && rangeSelected ? 'is-akdb-cell-selected' : '', !isCellEditing && fillSelected ? 'is-akdb-cell-fill-selected' : '', active && !isCellEditing ? 'is-akdb-cell-active' : ''].filter(Boolean).join(' ') || undefined,
+    className: [cellProps?.className, className, columnAlignClass({ align: effectiveAlign }), isCellEditing ? 'is-akdb-cell-editing' : '', !isCellEditing && rangeSelected ? 'is-akdb-cell-selected' : '', !isCellEditing && fillSelected ? 'is-akdb-cell-fill-selected' : '', active && !isCellEditing ? 'is-akdb-cell-active' : ''].filter(Boolean).join(' ') || undefined,
   });
   const focusOverlay = focusRect && column?.type !== 'date' ? createPortal(<div className="akdb-cell-focus-overlay" style={focusRect} />, document.body) : null;
   const cellChrome = active && !isCellEditing && !readonly ? (
@@ -4769,7 +4991,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
       onPointerDown={onFillPointerDown}
     />
   ) : null;
-  if (!column) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}</td>;
+  if (!column) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column, usersByUUID)}</td>;
   if (column.type === 'checkbox') {
     const disabled = readonly || column.readonly;
     const checked = local === 'true';
@@ -4794,7 +5016,7 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
       </td>
     );
   }
-  if (readonly || column.readonly) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column)}{cellChrome}</td>;
+  if (readonly || column.readonly) return <td {...tdProps('akdb-readonly')}>{formatValue(value, column, usersByUUID)}{cellChrome}</td>;
   if (column.type === 'select' || column.type === 'status') {
     const options = (column.config?.options || []) as Array<{ id: string; value: string }>;
     return (
@@ -4847,6 +5069,31 @@ function EditableCell({ value, column, align, readonly, active, editingActive, r
           onDeleteOption={onDeleteOption}
           onOpenChange={(open) => onEditStateChange?.(open)}
           onChange={changeIDs}
+        />
+        {cellChrome}
+      </td>
+    );
+  }
+  if (column.type === 'person') {
+    const multiple = personColumnMultiple(column);
+    const ids = personValueIDs(local);
+    const changeIDs = (nextIDs: string[]) => {
+      const next = Array.from(new Set(nextIDs.filter(Boolean)));
+      const raw = multiple ? JSON.stringify(next) : (next[0] || '');
+      setLocal(raw);
+      onChange(raw);
+    };
+    return (
+      <td {...tdProps('akdb-choice-cell')} ref={cellRef}>
+        <PersonSelect
+          value={multiple ? '' : (ids[0] || '')}
+          ids={ids}
+          userMap={usersByUUID || new Map()}
+          multiple={multiple}
+          displayStyle={column.config?.display_style || 'icon_name'}
+          anchorRef={cellRef}
+          onChange={changeIDs}
+          onEditStateChange={(open) => onEditStateChange?.(open)}
         />
         {cellChrome}
       </td>
@@ -5046,7 +5293,7 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
   const suppressOptionClickRef = useRef(false);
   const onOpenChangeRef = useRef(onOpenChange);
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
-  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, !isStatus);
+  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, !isStatus, true);
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
   useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu');
   useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-column-icon-popover');
@@ -5330,7 +5577,7 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
   const suppressOptionClickRef = useRef(false);
   const onOpenChangeRef = useRef(onOpenChange);
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
-  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay');
+  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, true, true);
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
   useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu');
   useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-column-icon-popover');
@@ -5574,6 +5821,122 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
             document.body,
           )}
         </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function PersonSelect({
+  value,
+  ids,
+  userMap,
+  multiple,
+  displayStyle,
+  anchorRef,
+  onChange,
+  onEditStateChange,
+}: {
+  value: string;
+  ids: string[];
+  userMap: Map<string, User>;
+  multiple: boolean;
+  displayStyle: 'icon' | 'name' | 'icon_name';
+  anchorRef?: RefObject<HTMLElement>;
+  onChange: (ids: string[]) => void;
+  onEditStateChange?: (open: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 320, 'overlay', 0, true, true);
+  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu');
+  useEffect(() => { onEditStateChange?.(open); }, [open, onEditStateChange]);
+  useEffect(() => {
+    if (!open) return;
+    setQuery('');
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [open]);
+  const users = Array.from(userMap.values());
+  const filteredUsers = query.trim()
+    ? users.filter((user) => `${user.display_name || ''} ${user.username || ''} ${user.uuid}`.toLowerCase().includes(query.trim().toLowerCase()))
+    : users;
+  const selectedUsers = multiple ? ids.map((id) => userMap.get(id)).filter(Boolean) as User[] : (value ? [userMap.get(value)].filter(Boolean) as User[] : []);
+  const toggleUser = (uuid: string) => {
+    if (!multiple) {
+      onChange([uuid]);
+      setOpen(false);
+      return;
+    }
+    if (ids.includes(uuid)) onChange(ids.filter((id) => id !== uuid));
+    else onChange([...ids, uuid]);
+  };
+  const renderButtonContent = () => {
+    if (!selectedUsers.length) return <span className="akdb-option-select-empty" aria-hidden="true" />;
+    if (!multiple) return <PersonTag user={selectedUsers[0]} value={selectedUsers[0].uuid} displayStyle={displayStyle} />;
+    return <span className="akdb-tag-list">{selectedUsers.map((user) => <PersonTag key={user.uuid} user={user} value={user.uuid} displayStyle={displayStyle} />)}</span>;
+  };
+  return (
+    <div className="akdb-option-select">
+      <button ref={buttonRef} type="button" className={`akdb-option-select-btn ${selectedUsers.length ? 'has-value' : 'is-empty'}`} onClick={() => setOpen((next) => !next)} aria-haspopup="listbox" aria-expanded={open}>
+        {renderButtonContent()}
+      </button>
+      {open && menuRect && createPortal(
+        <>
+          <CellPopupMask onClose={() => setOpen(false)} />
+          <div className="akdb-option-menu akdb-option-select-menu" role="dialog" tabIndex={-1} style={menuRect}>
+            <div className="akdb-option-combobox" role="combobox" aria-expanded="true" aria-haspopup="listbox">
+              {!query && multiple && selectedUsers.map((user) => (
+                <PersonTag
+                  key={user.uuid}
+                  user={user}
+                  value={user.uuid}
+                  displayStyle={displayStyle}
+                  removable
+                  onRemove={() => onChange(ids.filter((id) => id !== user.uuid))}
+                />
+              ))}
+              <input
+                ref={inputRef}
+                value={query}
+                placeholder={multiple ? '搜索人员' : '选择人员'}
+                aria-label={multiple ? '搜索或选择多个人员' : '选择人员'}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && filteredUsers[0]) toggleUser(filteredUsers[0].uuid);
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setOpen(false);
+                  }
+                }}
+              />
+            </div>
+            <div className="akdb-option-menu-title akdb-menu-caption">{multiple ? '选择人员' : '选择人员'}</div>
+            <div className="akdb-option-list" role="listbox" aria-multiselectable={multiple || undefined}>
+              {!filteredUsers.length && <div className="akdb-option-menu-empty">没有匹配的人员</div>}
+              {filteredUsers.map((user) => {
+                const active = multiple ? ids.includes(user.uuid) : value === user.uuid;
+                return (
+                  <button
+                    key={user.uuid}
+                    type="button"
+                    className={`akdb-option-menu-item ${active ? 'is-active' : ''}`}
+                    role="option"
+                    aria-selected={active}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => toggleUser(user.uuid)}
+                  >
+                    {multiple && <span className="akdb-option-drag" aria-hidden="true" />}
+                    <PersonTag user={user} value={user.uuid} displayStyle={displayStyle} />
+                    {active && <Check size={16} className="akdb-column-type-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </>,
         document.body,
       )}
@@ -5967,7 +6330,7 @@ function datePickerSubmenuRect(pickerStyle: CSSProperties, submenuStyle: CSSProp
   return { ...submenuStyle, left, width, ...(maxHeight ? { maxHeight } : {}) };
 }
 
-function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0, matchAnchorWidth = true) {
+function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0, matchAnchorWidth = true, fitViewport = false) {
   const [rect, setRect] = useState<CSSProperties | null>(null);
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) {
@@ -5981,11 +6344,18 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       const dropdownWidth = matchAnchorWidth ? Math.max(minWidth, buttonRect.width) : minWidth;
       const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding);
       const left = Math.min(Math.max(buttonRect.left + offsetLeft, viewportPadding), maxLeft);
+      const anchorTop = placement === 'overlay' ? buttonRect.top : buttonRect.bottom + 4;
+      const openUpOffset = placement === 'overlay' ? 0 : 4;
+      const spaceBelow = Math.max(0, window.innerHeight - viewportPadding - anchorTop);
+      const spaceAbove = Math.max(0, buttonRect.top - viewportPadding - openUpOffset);
+      const openUp = fitViewport && spaceAbove > spaceBelow;
+      const maxHeight = fitViewport ? Math.max(0, openUp ? spaceAbove : spaceBelow) : undefined;
       setRect({
         position: 'fixed',
         left,
-        top: placement === 'overlay' ? buttonRect.top : buttonRect.bottom + 4,
+        top: openUp ? Math.max(viewportPadding, buttonRect.top - openUpOffset - (maxHeight || 0)) : anchorTop,
         minWidth: dropdownWidth,
+        ...(maxHeight !== undefined ? { maxHeight } : {}),
       });
     };
     update();
@@ -5995,7 +6365,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('resize', update);
     };
-  }, [open, buttonRef, minWidth, placement, offsetLeft, matchAnchorWidth]);
+  }, [open, buttonRef, minWidth, placement, offsetLeft, matchAnchorWidth, fitViewport]);
   return rect;
 }
 
@@ -6065,7 +6435,7 @@ function getGroupedOptions(options: any[], config: Record<string, any>): Array<{
   return grouped.length ? grouped : [{ key: 'all', label: '', options }];
 }
 
-function formatValue(value: string, column?: DatabaseColumn) {
+function formatValue(value: string, column?: DatabaseColumn, userMap?: Map<string, User>) {
   if (!column) return value;
   if (column.type === 'text' && column.config?.secret && value) return '••••••';
   if (column.type === 'number') {
@@ -6086,6 +6456,12 @@ function formatValue(value: string, column?: DatabaseColumn) {
         return option ? <OptionTag key={id} option={option} config={column.config || {}} /> : <span key={id}>{id}</span>;
       })}</span>;
     } catch { return value; }
+  }
+  if (column.type === 'person') {
+    const ids = personValueIDs(value);
+    if (!ids.length) return '';
+    const displayStyle = column.config?.display_style || 'icon_name';
+    return <span className="akdb-tag-list">{ids.map((id) => <PersonTag key={id} value={id} user={userMap?.get(id)} displayStyle={displayStyle} />)}</span>;
   }
   return value;
 }
@@ -6592,6 +6968,7 @@ const sourceColumnTypes: Array<{ type: DatabaseColumnType; label: string; icon: 
   { type: 'date', label: '日期', icon: 'type_date' },
   { type: 'checkbox', label: '复选框', icon: 'type_checkbox' },
   { type: 'url', label: '网址', icon: 'type_url' },
+  { type: 'person', label: '人员', icon: 'type_user' },
   { type: 'formula', label: '公式', icon: 'type_formula' },
   { type: 'relation', label: '关联关系', icon: 'type_relation' },
 ];
@@ -6605,6 +6982,7 @@ const columnTypeMenuItems: Array<{ id: string; type: DatabaseColumnType; label: 
   { id: 'date', type: 'date', label: '日期', icon: 'type_date', help: true },
   { id: 'checkbox', type: 'checkbox', label: '复选框', icon: 'type_checkbox' },
   { id: 'url', type: 'url', label: '网址', icon: 'type_url' },
+  { id: 'person', type: 'person', label: '人员', icon: 'type_user' },
   { id: 'formula', type: 'formula', label: '公式', icon: 'type_formula' },
   { id: 'relation', type: 'relation', label: '关联关系', icon: 'type_relation' },
 ];
@@ -6616,6 +6994,7 @@ function defaultColumnName(type: DatabaseColumnType) {
 function defaultSourceColumnConfig(type: DatabaseColumnType) {
   if (type === 'formula') return { formula: '""' };
   if (type === 'date') return { date_format: 'chinese', time_format: 'none', timezone: 'GMT+8', date_content: 'date', include_time: false, hour12: false };
+  if (type === 'person') return { align: 'left', multiple: false, display_style: 'icon_name' };
   return undefined;
 }
 
@@ -6733,6 +7112,50 @@ export function OptionTag({ option, config, removable, onRemove }: { option: any
           <svg aria-hidden="true" viewBox="0 0 20 20">
             <path d="M15.692 5.192a.625.625 0 1 0-.884-.884L10 9.116 5.192 4.308a.625.625 0 1 0-.884.884L9.116 10l-4.808 4.808a.625.625 0 1 0 .884.884L10 10.884l4.808 4.808a.625.625 0 1 0 .884-.884L10.884 10z" />
           </svg>
+        </button>
+      )}
+    </span>
+  );
+}
+
+export function PersonTag({
+  user,
+  value,
+  displayStyle,
+  removable,
+  onRemove,
+}: {
+  user?: User | null;
+  value: string;
+  displayStyle: 'icon' | 'name' | 'icon_name';
+  removable?: boolean;
+  onRemove?: () => void;
+}) {
+  const label = user?.display_name || user?.username || value;
+  const avatar = user?.avatar_url || '';
+  const showIcon = displayStyle !== 'name';
+  const showName = displayStyle !== 'icon';
+  const isImageAvatar = /^https?:\/\//i.test(avatar) || avatar.startsWith('data:') || avatar.startsWith('/');
+  return (
+    <span className="akdb-person-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%' }}>
+      {showIcon && (
+        <span className="akdb-person-avatar" aria-hidden="true" style={{ width: 18, height: 18, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: '#f1f1ef', color: '#5f5e5b', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, lineHeight: 1 }}>
+          {isImageAvatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (avatar || label).slice(0, 1)}
+        </span>
+      )}
+      {showName && <span className="akdb-person-name" style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
+      {removable && (
+        <button
+          type="button"
+          aria-label="移除人员"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove?.();
+          }}
+          style={{ border: 0, background: 'transparent', padding: 0, marginLeft: 2, color: '#8c8b87', cursor: 'pointer', lineHeight: 1 }}
+        >
+          <X size={11} />
         </button>
       )}
     </span>

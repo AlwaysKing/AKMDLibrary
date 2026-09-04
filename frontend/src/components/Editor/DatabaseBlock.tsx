@@ -4,9 +4,11 @@ import { createPortal } from 'react-dom';
 import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
+import { usersApi } from '../../api/users';
+import { type User } from '../../api/auth';
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
-import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
+import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, PersonTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
 import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
 
@@ -50,6 +52,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [draftTitle, setDraftTitle] = useState(title);
   const [sourceAvailable, setSourceAvailable] = useState(false);
   const [schemaColumns, setSchemaColumns] = useState<DatabaseColumn[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [runtimeGroupOptions, setRuntimeGroupOptions] = useState<Array<{ key: string; label: string }>>([]);
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
@@ -134,6 +137,22 @@ function DatabaseBlockComponent({ block, editor }: any) {
       .then((detail) => setSchemaColumns(detail.columns || []))
       .catch(() => setSchemaColumns([]));
   }, [slug, activeSource]);
+
+  useEffect(() => {
+    let alive = true;
+    usersApi.list()
+      .then((next) => {
+        if (alive) setUsers(next || []);
+      })
+      .catch(() => {
+        if (alive) setUsers([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const usersByUUID = useMemo(() => new Map(users.map((user) => [user.uuid, user])), [users]);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -877,6 +896,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
           currentSourceId={activeSource}
           canChangeSource={canChangeSource}
           columns={schemaColumns}
+          userMap={usersByUUID}
           runtimeGroupOptions={runtimeGroupOptions}
           activeView={activeView}
           pane={viewSettingsPane}
@@ -1092,6 +1112,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
         <ViewRuleBar
           view={activeView}
           columns={schemaColumns}
+          userMap={usersByUUID}
           filterQuery={filterQuery}
           filterColumns={filterColumns}
           activeFilterId={activeFilterId}
@@ -1503,6 +1524,7 @@ function FilterPropertyMenu({
 function ViewRuleBar({
   view,
   columns,
+  userMap,
   filterQuery,
   filterColumns,
   activeFilterId,
@@ -1530,6 +1552,7 @@ function ViewRuleBar({
 }: {
   view: DatabaseViewConfig;
   columns: DatabaseColumn[];
+  userMap?: Map<string, User>;
   filterQuery: string;
   filterColumns: DatabaseColumn[];
   activeFilterId: string | null;
@@ -1745,7 +1768,7 @@ function ViewRuleBar({
         )}
         {(view.filters || []).map((filter) => {
           const column = byID.get(filter.property);
-          const valueLabel = filterValueLabel(filter, column);
+          const valueLabel = filterValueLabel(filter, column, userMap);
           const effective = isEffectiveFilter(filter, column);
           const active = activeFilterId === filter.id;
           const index = (view.filters || []).findIndex((item) => item.id === filter.id);
@@ -1831,6 +1854,7 @@ function ViewRuleBar({
         <FilterRuleEditor
           filter={activeFilter}
           column={byID.get(activeFilter.property)}
+          userMap={userMap}
           style={editorRect}
           onUpdate={(patch) => onUpdateFilter(activeFilter.id, patch)}
           onCommit={onClearActive}
@@ -1843,6 +1867,7 @@ function ViewRuleBar({
         <AdvancedFilterEditor
           group={view.advancedFilter}
           columns={columns}
+          userMap={userMap}
           style={advancedRect}
           onChange={onUpdateAdvancedFilter}
           onRemove={() => onUpdateAdvancedFilter(undefined)}
@@ -2148,7 +2173,7 @@ function sortDirectionLabel(sort: ViewSortRule, column?: DatabaseColumn) {
   return sort.dir === 'asc' ? '升序排列' : '降序排列';
 }
 
-function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove, onMergeToAdvanced }: { filter: ViewFilterRule; column?: DatabaseColumn; style?: CSSProperties; onUpdate: (patch: Partial<ViewFilterRule>) => void; onCommit: () => void; onRemove: () => void; onMergeToAdvanced?: () => void }) {
+function FilterRuleEditor({ filter, column, userMap, style, onUpdate, onCommit, onRemove, onMergeToAdvanced }: { filter: ViewFilterRule; column?: DatabaseColumn; userMap?: Map<string, User>; style?: CSSProperties; onUpdate: (patch: Partial<ViewFilterRule>) => void; onCommit: () => void; onRemove: () => void; onMergeToAdvanced?: () => void }) {
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -2164,10 +2189,18 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove,
   const operators = filterOperatorsForColumn(column);
   const valueDisabled = filter.op === 'is_empty' || filter.op === 'is_not_empty';
   const isOptionColumn = column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select';
+  const isPersonColumn = column?.type === 'person';
+  const choiceUsers = useMemo(() => Array.from(userMap?.values() || []), [userMap]);
+  const choiceUsersByID = useMemo(() => new Map(choiceUsers.map((user) => [user.uuid, user])), [choiceUsers]);
+  const selectedUsers = selected.map((id) => choiceUsersByID.get(id)).filter(Boolean) as User[];
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredUsers = normalizedQuery
+    ? choiceUsers.filter((user) => `${user.display_name || ''} ${user.username || ''} ${user.uuid}`.toLowerCase().includes(normalizedQuery))
+    : choiceUsers;
   useEffect(() => {
-    if (!isOptionColumn || valueDisabled) return;
+    if ((!isOptionColumn && !isPersonColumn) || valueDisabled) return;
     window.setTimeout(() => inputRef.current?.focus(), 0);
-  }, [isOptionColumn, valueDisabled]);
+  }, [isOptionColumn, isPersonColumn, valueDisabled]);
   const toggleOption = (optionID: string) => {
     const next = selectedSet.has(optionID)
       ? selected.filter((id) => id !== optionID)
@@ -2188,6 +2221,12 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove,
     onUpdate({ value: [] });
     setQuery('');
     window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+  const toggleUser = (userID: string) => {
+    const next = selectedSet.has(userID)
+      ? selected.filter((id) => id !== userID)
+      : [...selected, userID];
+    onUpdate({ value: next });
   };
   return (
     <div className={`akdb-view-rule-editor ${isDateFilterColumn(column) ? 'is-date' : ''}`} role="dialog" aria-label="筛选条件" style={style}>
@@ -2320,6 +2359,63 @@ function FilterRuleEditor({ filter, column, style, onUpdate, onCommit, onRemove,
               })}
             </div>
           ))}
+          {!valueDisabled && selected.length > 0 && <button type="button" className="akdb-view-rule-clear" onClick={clearSelected}>清除选择</button>}
+        </div>
+      ) : isPersonColumn ? (
+        <div className="akdb-view-rule-options">
+          <div className={`akdb-filter-value-combobox ${valueDisabled ? 'is-disabled' : ''} ${selectedUsers.length ? 'has-value' : ''}`} onClick={() => inputRef.current?.focus()}>
+            {!valueDisabled && selectedUsers.map((user) => (
+              <PersonTag
+                key={user.uuid}
+                user={user}
+                value={user.uuid}
+                displayStyle="icon_name"
+                removable
+                onRemove={() => onUpdate({ value: selected.filter((id) => id !== user.uuid) })}
+              />
+            ))}
+            <input
+              ref={inputRef}
+              value={query}
+              disabled={valueDisabled}
+              placeholder={valueDisabled ? '无需选择人员' : selectedUsers.length ? '' : '选择人员...'}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onCommit();
+                }
+                if (event.key === 'Backspace' && !query && selected.length) {
+                  onUpdate({ value: selected.slice(0, -1) });
+                }
+                if (event.key === 'Enter' && filteredUsers[0]) {
+                  event.preventDefault();
+                  toggleUser(filteredUsers[0].uuid);
+                }
+              }}
+            />
+            {!valueDisabled && (selected.length > 0 || query) && (
+              <button type="button" className="akdb-filter-value-clear" aria-label="清除筛选值" onClick={clearSelected}>
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          {!valueDisabled && filteredUsers.length === 0 && <div className="akdb-filter-empty">没有匹配的人员</div>}
+          {!valueDisabled && filteredUsers.map((user) => {
+            const checked = selectedSet.has(user.uuid);
+            return (
+              <button
+                key={user.uuid}
+                type="button"
+                className={`akdb-view-rule-option ${checked ? 'is-active' : ''}`}
+                onClick={() => toggleUser(user.uuid)}
+              >
+                <span className="akdb-view-rule-check">{checked ? <Check size={13} strokeWidth={2.4} /> : null}</span>
+                <PersonTag user={user} value={user.uuid} displayStyle="icon_name" />
+              </button>
+            );
+          })}
           {!valueDisabled && selected.length > 0 && <button type="button" className="akdb-view-rule-clear" onClick={clearSelected}>清除选择</button>}
         </div>
       ) : isDateFilterColumn(column) ? (
@@ -2955,7 +3051,7 @@ function ConditionalColorPalette({ value, onChange, disabled = false }: { value:
   );
 }
 
-function AdvancedFilterEditor({ group, columns, style, onChange, onRemove }: { group: ViewAdvancedFilterGroup; columns: DatabaseColumn[]; style?: CSSProperties; onChange: (group: ViewAdvancedFilterGroup) => void; onRemove: () => void }) {
+function AdvancedFilterEditor({ group, columns, userMap, style, onChange, onRemove }: { group: ViewAdvancedFilterGroup; columns: DatabaseColumn[]; userMap?: Map<string, User>; style?: CSSProperties; onChange: (group: ViewAdvancedFilterGroup) => void; onRemove: () => void }) {
   const filterableColumns = columns.filter((column) => !column.readonly && column.type !== 'linked');
   const byID = new Map(columns.map((column) => [column.id, column]));
   const updateAtPath = (path: number[], updater: (node: ViewAdvancedFilterNode) => ViewAdvancedFilterNode | null) => {
@@ -3019,6 +3115,7 @@ function AdvancedFilterEditor({ group, columns, style, onChange, onRemove }: { g
         path={[]}
         level={0}
         columns={filterableColumns}
+        userMap={userMap}
         byID={byID}
         onUpdateRule={(path, patch) => updateAtPath(path, (node) => node.type === 'rule' ? { ...node, rule: { ...node.rule, ...patch } } : node)}
         onToggleGroupOp={(path, op) => updateGroupAtPath(path, (target) => ({ ...target, op }))}
@@ -3043,6 +3140,7 @@ function AdvancedFilterGroupEditor({
   path,
   level,
   columns,
+  userMap,
   byID,
   onUpdateRule,
   onToggleGroupOp,
@@ -3058,6 +3156,7 @@ function AdvancedFilterGroupEditor({
   path: number[];
   level: number;
   columns: DatabaseColumn[];
+  userMap?: Map<string, User>;
   byID: Map<string, DatabaseColumn>;
   onUpdateRule: (path: number[], patch: Partial<ViewFilterRule>) => void;
   onToggleGroupOp: (path: number[], op: 'and' | 'or') => void;
@@ -3101,6 +3200,7 @@ function AdvancedFilterGroupEditor({
                   path={nodePath}
                   level={level + 1}
                   columns={columns}
+                  userMap={userMap}
                   byID={byID}
                   onUpdateRule={onUpdateRule}
                   onToggleGroupOp={onToggleGroupOp}
@@ -3133,6 +3233,7 @@ function AdvancedFilterGroupEditor({
               rule={node.rule}
               columns={columns}
               column={byID.get(node.rule.property)}
+              userMap={userMap}
               onUpdate={(patch) => onUpdateRule(nodePath, patch)}
             />
             <AdvancedFilterMoreButton
@@ -3241,16 +3342,18 @@ function AdvancedFilterMoreButton({
   );
 }
 
-function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule: ViewFilterRule; columns: DatabaseColumn[]; column?: DatabaseColumn; onUpdate: (patch: Partial<ViewFilterRule>) => void }) {
+function AdvancedFilterRuleControls({ rule, columns, column, userMap, onUpdate }: { rule: ViewFilterRule; columns: DatabaseColumn[]; column?: DatabaseColumn; userMap?: Map<string, User>; onUpdate: (patch: Partial<ViewFilterRule>) => void }) {
   const [propertyOpen, setPropertyOpen] = useState(false);
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [valueOpen, setValueOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const propertyRef = useRef<HTMLButtonElement | null>(null);
   const operatorRef = useRef<HTMLButtonElement | null>(null);
   const valueRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const propertyRect = useDropdownPosition(propertyOpen, propertyRef, 220, `advanced-property:${rule.id}`);
   const operatorRect = useDropdownPosition(operatorOpen, operatorRef, 160, `advanced-operator:${rule.id}`);
-  const valueRect = useDropdownPosition(valueOpen, valueRef, isDateFilterColumn(column) ? 260 : 240, `advanced-value:${rule.id}`);
+  const valueRect = useDropdownPosition(valueOpen, valueRef, isDateFilterColumn(column) || column?.type === 'person' ? 260 : 240, `advanced-value:${rule.id}`);
   const operators = filterOperatorsForColumn(column);
   const valueDisabled = rule.op === 'is_empty' || rule.op === 'is_not_empty';
   const options = (column?.config?.options || []) as Array<{ id: string; value: string; color?: string }>;
@@ -3258,11 +3361,23 @@ function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule:
   const selectedSet = new Set(selected);
   const selectedOptions = selected.map((id) => options.find((option) => option.id === id)).filter(Boolean);
   const isOptionColumn = column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select';
+  const isPersonColumn = column?.type === 'person';
+  const choiceUsers = useMemo(() => Array.from(userMap?.values() || []), [userMap]);
+  const choiceUsersByID = useMemo(() => new Map(choiceUsers.map((user) => [user.uuid, user])), [choiceUsers]);
+  const selectedUsers = selected.map((id) => choiceUsersByID.get(id)).filter(Boolean) as User[];
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredUsers = normalizedQuery
+    ? choiceUsers.filter((user) => `${user.display_name || ''} ${user.username || ''} ${user.uuid}`.toLowerCase().includes(normalizedQuery))
+    : choiceUsers;
   const optionGroups = groupedFilterOptions(column, options);
   const dropdownSelector = '.akdb-view-rule-dropdown-menu, .akdb-advanced-date-picker-menu, .akdb-date-shortcut-menu';
   useDropdownOutsideClose(propertyOpen, propertyRef, () => setPropertyOpen(false), '.akdb-view-rule-dropdown-menu');
   useDropdownOutsideClose(operatorOpen, operatorRef, () => setOperatorOpen(false), '.akdb-view-rule-dropdown-menu');
   useDropdownOutsideClose(valueOpen, valueRef, () => setValueOpen(false), dropdownSelector);
+  useEffect(() => {
+    if (!valueOpen || !isPersonColumn) return;
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [valueOpen, isPersonColumn]);
   const updateProperty = (property: string) => {
     const nextColumn = columns.find((item) => item.id === property);
     if (!nextColumn) return;
@@ -3282,6 +3397,7 @@ function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule:
   const valueLabel = (() => {
     if (valueDisabled) return '无需填写';
     if (isOptionColumn) return selectedOptions.length ? selectedOptions.map((option: any) => option.value).join(', ') : '选择选项';
+    if (isPersonColumn) return selectedUsers.length ? selectedUsers.map((user) => user.display_name || user.username || user.uuid).join(', ') : '选择人员';
     if (column?.type === 'checkbox') return rule.value === false ? '未勾选' : '已勾选';
     if (isDateFilterColumn(column) && rule.op === 'relative_to_today') return dateRelativeLabel(String(rule.value || 'this_week'));
     return String(rule.value || '') || '值';
@@ -3380,6 +3496,75 @@ function AdvancedFilterRuleControls({ rule, columns, column, onUpdate }: { rule:
                 </div>
               ))}
               {!options.length && <div className="akdb-filter-empty">暂无选项</div>}
+            </div>,
+            document.body,
+          )}
+        </>
+      ) : !valueDisabled && isPersonColumn ? (
+        <>
+          <button ref={valueRef} type="button" className={`akdb-advanced-filter-control is-value ${selectedUsers.length ? 'has-value' : ''}`} aria-haspopup="menu" aria-expanded={valueOpen} onClick={() => { setValueOpen((open) => !open); setPropertyOpen(false); setOperatorOpen(false); }}>
+            {selectedUsers.length ? (
+              <span className="akdb-advanced-filter-tags">
+                {selectedUsers.map((user) => (
+                  <PersonTag key={user.uuid} user={user} value={user.uuid} displayStyle="icon_name" />
+                ))}
+              </span>
+            ) : (
+              <span>{valueLabel}</span>
+            )}
+            <ChevronDown size={13} />
+          </button>
+          {valueOpen && valueRect && createPortal(
+            <div className="akdb-view-rule-dropdown-menu akdb-advanced-filter-dropdown is-value" role="menu" style={valueRect}>
+              <div className={`akdb-filter-value-combobox akdb-advanced-filter-value-combobox ${selectedUsers.length ? 'has-value' : ''}`}>
+                {selectedUsers.map((user) => (
+                  <PersonTag
+                    key={user.uuid}
+                    user={user}
+                    value={user.uuid}
+                    displayStyle="icon_name"
+                    removable
+                    onRemove={() => onUpdate({ value: selected.filter((id) => id !== user.uuid) })}
+                  />
+                ))}
+                {!selectedUsers.length && <span className="akdb-advanced-filter-value-placeholder">选择人员</span>}
+                <input
+                  ref={inputRef}
+                  value={query}
+                  placeholder="搜索人员"
+                  aria-label="搜索人员"
+                  onChange={(event) => setQuery(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setValueOpen(false);
+                    }
+                    if (event.key === 'Backspace' && !query && selected.length) {
+                      onUpdate({ value: selected.slice(0, -1) });
+                    }
+                    if (event.key === 'Enter' && filteredUsers[0]) {
+                      event.preventDefault();
+                      onUpdate({ value: selectedSet.has(filteredUsers[0].uuid) ? selected.filter((id) => id !== filteredUsers[0].uuid) : [...selected, filteredUsers[0].uuid] });
+                    }
+                  }}
+                />
+                {selectedUsers.length > 0 && (
+                  <button type="button" className="akdb-filter-value-clear" aria-label="清除筛选值" onClick={clearSelectedOptions}>
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {filteredUsers.map((user) => {
+                const checked = selectedSet.has(user.uuid);
+                return (
+                  <button key={user.uuid} type="button" className={`akdb-view-rule-option ${checked ? 'is-active' : ''}`} onClick={() => onUpdate({ value: checked ? selected.filter((id) => id !== user.uuid) : [...selected, user.uuid] })}>
+                    <span className="akdb-view-rule-check">{checked ? <Check size={13} strokeWidth={2.4} /> : null}</span>
+                    <PersonTag user={user} value={user.uuid} displayStyle="icon_name" />
+                  </button>
+                );
+              })}
+              {!filteredUsers.length && <div className="akdb-filter-empty">没有匹配的人员</div>}
             </div>,
             document.body,
           )}
@@ -3533,6 +3718,7 @@ function advancedDateValueLabel(rule: ViewFilterRule) {
 function defaultFilterOperator(column: DatabaseColumn) {
   if (isDateFilterColumn(column)) return 'relative_to_today';
   if (column.type === 'multi_select') return 'contains';
+  if (column.type === 'person') return column.config?.multiple ? 'contains' : 'equals';
   if (column.type === 'select' || column.type === 'status' || column.type === 'checkbox') return 'equals';
   return 'contains';
 }
@@ -3540,6 +3726,7 @@ function defaultFilterOperator(column: DatabaseColumn) {
 function defaultFilterValue(column: DatabaseColumn) {
   if (isDateFilterColumn(column)) return 'this_week';
   if (column.type === 'select' || column.type === 'status' || column.type === 'multi_select') return [];
+  if (column.type === 'person') return [];
   if (column.type === 'checkbox') return true;
   return '';
 }
@@ -3568,7 +3755,7 @@ function isEffectiveFilter(filter: ViewFilterRule, column?: DatabaseColumn) {
   return String(filter.value ?? '').trim().length > 0;
 }
 
-function filterValueLabel(filter: ViewFilterRule, column?: DatabaseColumn) {
+function filterValueLabel(filter: ViewFilterRule, column?: DatabaseColumn, userMap?: Map<string, User>) {
   if (filter.op === 'is_empty') return '为空白';
   if (filter.op === 'is_not_empty') return '不为空白';
   if (filter.op === 'relative_to_today' && isDateFilterColumn(column)) return dateRelativeLabel(String(filter.value || 'this_week'));
@@ -3583,6 +3770,9 @@ function filterValueLabel(filter: ViewFilterRule, column?: DatabaseColumn) {
   const values = Array.isArray(filter.value) ? filter.value : String(filter.value || '').split(',').filter(Boolean);
   if (column?.type === 'select' || column?.type === 'status' || column?.type === 'multi_select') {
     return values.map((id) => optionByID.get(String(id)) || String(id)).join(', ');
+  }
+  if (column?.type === 'person') {
+    return values.map((id) => userMap?.get(String(id))?.display_name || userMap?.get(String(id))?.username || String(id)).join(', ');
   }
   return String(filter.value ?? '');
 }
@@ -3601,6 +3791,14 @@ function filterOperatorsForColumn(column?: DatabaseColumn): Array<{ op: ViewFilt
     { op: 'is_not_empty', label: '不为空白' },
   ];
   if (column?.type === 'multi_select') return [
+    { op: 'contains', label: '包含' },
+    { op: 'not_contains', label: '不包含' },
+    { op: 'is_empty', label: '为空白' },
+    { op: 'is_not_empty', label: '不为空白' },
+  ];
+  if (column?.type === 'person') return [
+    { op: 'equals', label: '是' },
+    { op: 'not_equals', label: '不是' },
     { op: 'contains', label: '包含' },
     { op: 'not_contains', label: '不包含' },
     { op: 'is_empty', label: '为空白' },
@@ -4175,6 +4373,7 @@ function ViewSettingsMenu({
   currentSourceId,
   canChangeSource,
   columns,
+  userMap,
   runtimeGroupOptions,
   activeView,
   pane,
@@ -4241,6 +4440,7 @@ function ViewSettingsMenu({
   currentSourceId: string;
   canChangeSource: boolean;
   columns: DatabaseColumn[];
+  userMap?: Map<string, User>;
   runtimeGroupOptions: Array<{ key: string; label: string }>;
   activeView: DatabaseViewConfig;
   pane: 'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' | 'properties';
@@ -5141,7 +5341,7 @@ function ViewSettingsMenu({
           )}
           {filters.map((filter, index) => {
             const column = columnByID.get(filter.property);
-            const valueLabel = filterValueLabel(filter, column);
+            const valueLabel = filterValueLabel(filter, column, userMap);
             const effective = isEffectiveFilter(filter, column);
             const active = settingsActiveFilterID === filter.id;
             return (
@@ -5242,6 +5442,7 @@ function ViewSettingsMenu({
           <FilterRuleEditor
             filter={settingsActiveFilter}
             column={settingsActiveFilterColumn}
+            userMap={userMap}
             style={{ ...settingsFilterEditorRect, zIndex: 100 }}
             onUpdate={(patch) => onUpdateFilter(settingsActiveFilter.id, patch)}
             onCommit={() => setSettingsActiveFilterID(null)}

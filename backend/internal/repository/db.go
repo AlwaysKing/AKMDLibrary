@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/google/uuid"
 )
 
 type DB struct {
@@ -44,6 +45,7 @@ func (db *DB) migrate() error {
 	schemas := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			uuid TEXT UNIQUE NOT NULL,
 			username TEXT UNIQUE NOT NULL,
 			password_hash TEXT NOT NULL,
 			display_name TEXT,
@@ -130,6 +132,10 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	if err := ensureUserUUIDs(db.DB); err != nil {
+		return err
+	}
+
 	// Incremental migrations: SQLite 不支持 ADD COLUMN IF NOT EXISTS，所以尝试执行并忽略 "duplicate column" 错误
 	if _, err := db.Exec(`ALTER TABLE user_global_preferences ADD COLUMN unsplash_api_key TEXT`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column") {
@@ -175,6 +181,40 @@ func (db *DB) migrate() error {
 	return nil
 }
 
+func ensureUserUUIDs(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN uuid TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("failed to migrate users.uuid: %w", err)
+	}
+	rows, err := db.Query(`SELECT id FROM users WHERE uuid IS NULL OR uuid = ''`)
+	if err != nil {
+		return fmt.Errorf("failed to query users for uuid migration: %w", err)
+	}
+	ids := make([]int, 0)
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan user id for uuid migration: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close user uuid migration rows: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate users for uuid migration: %w", err)
+	}
+	for _, id := range ids {
+		if _, err := db.Exec(`UPDATE users SET uuid = ? WHERE id = ?`, uuid.NewString(), id); err != nil {
+			return fmt.Errorf("failed to backfill user uuid: %w", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)`); err != nil {
+		return fmt.Errorf("failed to create users uuid index: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) seedAdmin() error {
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE username = 'admin'").Scan(&count); err != nil {
@@ -186,9 +226,9 @@ func (db *DB) seedAdmin() error {
 	}
 
 	_, err := db.Exec(`
-		INSERT INTO users (username, password_hash, display_name, role)
-		VALUES ('admin', '$2a$10$LBJML4PwvM12AVd.qPS/Z.MjEUE.UGFThWrMdEVj.poS5ZC3qwypm', 'Admin', 'admin')
-	`)
+		INSERT INTO users (uuid, username, password_hash, display_name, role)
+		VALUES (?, 'admin', '$2a$10$LBJML4PwvM12AVd.qPS/Z.MjEUE.UGFThWrMdEVj.poS5ZC3qwypm', 'Admin', 'admin')
+	`, uuid.NewString())
 	if err != nil {
 		return fmt.Errorf("failed to create admin user: %w", err)
 	}

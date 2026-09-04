@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
+	"github.com/google/uuid"
 )
 
 type UserRepository struct {
@@ -18,11 +19,12 @@ func NewUserRepository(db *DB) *UserRepository {
 
 func (r *UserRepository) Create(user *model.CreateUserRequest, passwordHash string) (*model.User, error) {
 	query := `
-		INSERT INTO users (username, password_hash, display_name, avatar_url, role)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO users (uuid, username, password_hash, display_name, avatar_url, role)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
-	result, err := r.db.Exec(query, user.Username, passwordHash, user.DisplayName, user.AvatarURL, user.Role)
+	userUUID := uuid.NewString()
+	result, err := r.db.Exec(query, userUUID, user.Username, passwordHash, user.DisplayName, user.AvatarURL, user.Role)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -37,14 +39,14 @@ func (r *UserRepository) Create(user *model.CreateUserRequest, passwordHash stri
 
 func (r *UserRepository) GetByID(id int) (*model.User, error) {
 	query := `
-		SELECT id, username, password_hash, display_name, avatar_url, role, created_at, updated_at
+		SELECT id, uuid, username, password_hash, display_name, avatar_url, role, created_at, updated_at
 		FROM users WHERE id = ?
 	`
 
 	var user model.User
 	var avatarURL sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
-		&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
+		&user.ID, &user.UUID, &user.Username, &user.PasswordHash, &user.DisplayName,
 		&avatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 	)
 
@@ -64,14 +66,14 @@ func (r *UserRepository) GetByID(id int) (*model.User, error) {
 
 func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 	query := `
-		SELECT id, username, password_hash, display_name, avatar_url, role, created_at, updated_at
+		SELECT id, uuid, username, password_hash, display_name, avatar_url, role, created_at, updated_at
 		FROM users WHERE username = ?
 	`
 
 	var user model.User
 	var avatarURL sql.NullString
 	err := r.db.QueryRow(query, username).Scan(
-		&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
+		&user.ID, &user.UUID, &user.Username, &user.PasswordHash, &user.DisplayName,
 		&avatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 	)
 
@@ -91,7 +93,7 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 
 func (r *UserRepository) List() ([]*model.User, error) {
 	query := `
-		SELECT id, username, password_hash, display_name, avatar_url, role, created_at, updated_at
+		SELECT id, uuid, username, password_hash, display_name, avatar_url, role, created_at, updated_at
 		FROM users ORDER BY created_at DESC
 	`
 
@@ -106,7 +108,7 @@ func (r *UserRepository) List() ([]*model.User, error) {
 		var user model.User
 		var avatarURL sql.NullString
 		if err := rows.Scan(
-			&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName,
+			&user.ID, &user.UUID, &user.Username, &user.PasswordHash, &user.DisplayName,
 			&avatarURL, &user.Role, &user.CreatedAt, &user.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)

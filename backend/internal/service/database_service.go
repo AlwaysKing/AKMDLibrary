@@ -19,7 +19,7 @@ import (
 
 var validDatabaseColumnTypes = map[string]bool{
 	"text": true, "number": true, "select": true, "multi_select": true, "date": true,
-	"checkbox": true, "url": true, "status": true, "formula": true, "relation": true,
+	"checkbox": true, "url": true, "status": true, "formula": true, "relation": true, "person": true,
 	"created_time": true, "last_edited_time": true, "last_edited_user": true, "linked": true,
 }
 
@@ -1034,7 +1034,7 @@ func detailFromConfig(cfg model.DatabaseConfig, dir string, rows int) model.Data
 }
 
 func defaultCell(c model.DatabaseColumn) string {
-	if c.Type == "multi_select" || c.Type == "linked" {
+	if c.Type == "multi_select" || c.Type == "linked" || (c.Type == "person" && personColumnMultiple(c)) {
 		return "[]"
 	}
 	if c.Type == "checkbox" {
@@ -1044,6 +1044,17 @@ func defaultCell(c model.DatabaseColumn) string {
 		return fmt.Sprint(c.Default)
 	}
 	return ""
+}
+
+func personColumnMultiple(column model.DatabaseColumn) bool {
+	if column.Type != "person" {
+		return false
+	}
+	if column.Config == nil {
+		return false
+	}
+	multiple, _ := column.Config["multiple"].(bool)
+	return multiple
 }
 
 func unixTimestampString(t time.Time) string {

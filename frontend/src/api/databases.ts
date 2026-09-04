@@ -2,7 +2,7 @@ import apiClient from './client';
 
 export type DatabaseColumnType =
   | 'text' | 'number' | 'select' | 'multi_select' | 'date' | 'checkbox' | 'url'
-  | 'status' | 'formula' | 'relation' | 'created_time' | 'last_edited_time' | 'last_edited_user' | 'linked';
+  | 'status' | 'formula' | 'relation' | 'person' | 'created_time' | 'last_edited_time' | 'last_edited_user' | 'linked';
 
 export interface DatabaseColumn {
   id: string;
