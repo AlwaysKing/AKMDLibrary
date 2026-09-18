@@ -131,12 +131,15 @@ func (s *Scanner) scanDirectory(dirPath string, pathPrefix string) ([]*model.Pag
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
 			title := strings.TrimSuffix(entry.Name(), ".md")
 			relPath := pathPrefix + "/" + entry.Name()
-			nodeID := readOrCreatePageID(filepath.Join(dirPath, entry.Name()))
+			nodeID, fm := readPageMeta(filepath.Join(dirPath, entry.Name()))
 
 			node := &model.PageNode{
 				ID:        nodeID,
 				Title:     title,
-				Icon:      "",
+				Icon:      fm.Icon,
+				FullPage:  fm.FullPage,
+				IsLocked:  fm.Locked,
+				IsStarred: fm.Starred,
 				SortOrder: 0,
 				FilePath:  relPath,
 				Children:  nil,
@@ -167,19 +170,22 @@ func generateSlug(name string) string {
 	return name
 }
 
-// readOrCreatePageID reads the frontmatter from a .md file to get its ID.
-// If no ID exists in frontmatter, generates a new UUID (but does NOT write it —
-// writing is done later by ensurePageUUID in page_service.go during DB enrichment).
-func readOrCreatePageID(absPath string) string {
+// readPageMeta reads a .md file's frontmatter. If no ID exists in frontmatter,
+// generates a new UUID (but does NOT write it — writing is done later by
+// ensurePageUUID in page_service.go during DB enrichment). The parsed
+// frontmatter is returned as well, so callers can build the page cache from it
+// without reading the file a second time.
+func readPageMeta(absPath string) (string, frontmatter.FrontmatterData) {
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
-		return uuidutil.NewPageID()
+		return uuidutil.NewPageID(), frontmatter.FrontmatterData{}
 	}
 
 	fm, _, _ := frontmatter.Parse(raw)
 	if fm.ID != "" {
-		return fm.ID
+		return fm.ID, fm
 	}
 
-	return uuidutil.NewPageID()
+	fm.ID = uuidutil.NewPageID()
+	return fm.ID, fm
 }

@@ -231,6 +231,10 @@ func (s *PageService) rebuildNodes(nodes []*model.PageNode, repo *repository.Pag
 				ID:        pageID,
 				Title:     node.Title,
 				FilePath:  node.FilePath,
+				Icon:      node.Icon,
+				FullPage:  boolValue(node.FullPage),
+				IsLocked:  boolValue(node.IsLocked),
+				IsStarred: boolValue(node.IsStarred),
 				SortOrder: float64(time.Now().UnixNano()),
 			})
 			if err == nil {
@@ -382,6 +386,9 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 	for _, node := range nodes {
 		if node.FilePath != "" {
 			if page, ok := pathMap[node.FilePath]; ok {
+				// frontmatter 是元数据的真相源，扫描时已经读到，这里把差异回填到缓存行
+				page = s.syncPageMetaFromNode(repo, page, node)
+				pathMap[node.FilePath] = page
 				node.ID = page.ID
 				if page.Icon != "" {
 					node.Icon = page.Icon
@@ -392,6 +399,7 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 				if page.Title != "" {
 					node.Title = page.Title
 				}
+				applyPageMetaToNode(node, page)
 			} else {
 				// Ensure the .md file has a UUID in frontmatter
 				pageID := s.ensurePageUUID(node.FilePath)
@@ -400,11 +408,16 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 					ID:        pageID,
 					Title:     node.Title,
 					FilePath:  node.FilePath,
+					Icon:      node.Icon,
+					FullPage:  boolValue(node.FullPage),
+					IsLocked:  boolValue(node.IsLocked),
+					IsStarred: boolValue(node.IsStarred),
 					SortOrder: float64(time.Now().UnixNano()),
 				})
 				if err == nil {
 					node.ID = created.ID
 					pathMap[node.FilePath] = created
+					applyPageMetaToNode(node, created)
 				}
 			}
 		}
@@ -413,6 +426,75 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 			s.enrichNodes(spaceSlug, node.Children, pathMap, repo)
 		}
 	}
+}
+
+// syncPageMetaFromNode pushes the frontmatter values that the file explicitly
+// declares onto the cached page row, and returns the refreshed row. Only fields
+// present in the file are applied, so a row whose value has no frontmatter
+// counterpart is left untouched; when nothing differs no write happens.
+func (s *PageService) syncPageMetaFromNode(repo *repository.PageRepository, page *model.Page, node *model.PageNode) *model.Page {
+	req := &model.UpdatePageMetaRequest{}
+	changed := false
+	if node.Icon != "" && node.Icon != page.Icon {
+		icon := node.Icon
+		req.Icon = &icon
+		changed = true
+	}
+	if node.FullPage != nil && *node.FullPage != page.FullPage {
+		req.FullPage = node.FullPage
+		changed = true
+	}
+	if node.IsLocked != nil && *node.IsLocked != page.IsLocked {
+		req.IsLocked = node.IsLocked
+		changed = true
+	}
+	if node.IsStarred != nil && *node.IsStarred != page.IsStarred {
+		req.IsStarred = node.IsStarred
+		changed = true
+	}
+	if !changed {
+		return page
+	}
+
+	updated, err := repo.UpdateMeta(page.ID, req)
+	if err != nil {
+		log.Printf("Warning: failed to sync page meta from frontmatter: %v", err)
+		return page
+	}
+	return updated
+}
+
+// applyPageMetaToNode writes the cached page row's metadata onto a tree node, so
+// the tree carries the same flags (star / lock / full page) as the row.
+func applyPageMetaToNode(node *model.PageNode, page *model.Page) {
+	fullPage := page.FullPage
+	node.FullPage = &fullPage
+	isLocked := page.IsLocked
+	node.IsLocked = &isLocked
+	isStarred := page.IsStarred
+	node.IsStarred = &isStarred
+}
+
+// boolValue dereferences an optional frontmatter flag.
+func boolValue(v *bool) bool {
+	return v != nil && *v
+}
+
+// seedPageMetaFromFile fills a cache row with the metadata its page file
+// declares. frontmatter is the source of truth and the cache row is a derived
+// copy, so every insert path backed by a file (重建缓存、恢复回收站、复制文档)
+// must fill these the same way — otherwise the rebuilt cache silently drops the
+// flags and the star list goes empty.
+func (s *PageService) seedPageMetaFromFile(page *model.Page, relPath string) {
+	raw, err := diagReadFile("seedPageMetaFromFile", filepath.Join(s.docsDir, relPath))
+	if err != nil {
+		return
+	}
+	fm, _, _ := frontmatter.Parse(raw)
+	page.Icon = fm.Icon
+	page.FullPage = boolValue(fm.FullPage)
+	page.IsLocked = boolValue(fm.Locked)
+	page.IsStarred = boolValue(fm.Starred)
 }
 
 // sortNodesByOrder recursively sorts page nodes by sort_order ASC.
@@ -1161,6 +1243,7 @@ func (s *PageService) RestoreFromTrash(spaceSlug string, trashRelPath string, sp
 		FilePath:  targetRelPath,
 		SortOrder: maxSort + 1,
 	}
+	s.seedPageMetaFromFile(page, targetRelPath)
 	return repo.Create(page)
 }
 
@@ -1318,13 +1401,14 @@ func (s *PageService) Duplicate(spaceSlug string, pageID string, targetParentID 
 
 	// Insert new page into cache directly (like Create does), no full RebuildCache
 	maxSort, _ := repo.MaxSortOrder()
-	created, err := repo.Create(&model.Page{
+	duplicate := &model.Page{
 		ID:        newPageID,
 		Title:     newTitle,
 		FilePath:  newRelPath,
-		Icon:      fm.Icon,
 		SortOrder: maxSort + 1,
-	})
+	}
+	s.seedPageMetaFromFile(duplicate, newRelPath)
+	created, err := repo.Create(duplicate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cache entry: %w", err)
 	}
@@ -1362,12 +1446,14 @@ func (s *PageService) registerChildPages(repo *repository.PageRepository, absDir
 		childRelPath := filepath.Join(relBase, entry.Name())
 		pageID := s.ensurePageUUID(childRelPath)
 		title := strings.TrimSuffix(entry.Name(), ".md")
-		repo.Create(&model.Page{
+		childPage := &model.Page{
 			ID:        pageID,
 			Title:     title,
 			FilePath:  childRelPath,
 			SortOrder: float64(sortOrder),
-		})
+		}
+		s.seedPageMetaFromFile(childPage, childRelPath)
+		repo.Create(childPage)
 		sortOrder++
 	}
 }

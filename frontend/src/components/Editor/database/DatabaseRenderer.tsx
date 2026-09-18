@@ -6353,7 +6353,12 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
       setRect({
         position: 'fixed',
         left,
-        top: openUp ? Math.max(viewportPadding, buttonRect.top - openUpOffset - (maxHeight || 0)) : anchorTop,
+        // Opening upward anchors the bottom edge to the trigger so the menu grows
+        // above its anchor; `top: auto` is required because `.akdb-option-menu`
+        // carries a fallback `top: calc(100% + 4px)`.
+        ...(openUp
+          ? { top: 'auto', bottom: window.innerHeight - buttonRect.top + openUpOffset }
+          : { top: anchorTop }),
         minWidth: dropdownWidth,
         ...(maxHeight !== undefined ? { maxHeight } : {}),
       });

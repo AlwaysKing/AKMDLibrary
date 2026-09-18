@@ -47,12 +47,12 @@ func scanPage(scanner interface{ Scan(...interface{}) error }) (*model.Page, err
 
 func (r *PageRepository) Create(page *model.Page) (*model.Page, error) {
 	query := `
-		INSERT INTO pages (id, title, file_path, icon, cover_url, is_locked, sort_order)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO pages (id, title, file_path, icon, cover_url, full_page, is_locked, sort_order, is_starred)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := r.db.Exec(query, page.ID, page.Title, page.FilePath,
-		page.Icon, page.CoverURL, page.IsLocked, page.SortOrder)
+		page.Icon, page.CoverURL, page.FullPage, page.IsLocked, page.SortOrder, page.IsStarred)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create page: %w", err)
 	}

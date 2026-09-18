@@ -61,6 +61,7 @@ export interface DatabaseViewConfig {
   showVerticalLines?: boolean;
   showPageIcon?: boolean;
   wrapContent?: boolean;
+  hideFilterBar?: boolean;
   openMode?: 'peek' | 'full' | 'center';
   columns: ViewColumnRule[];
   filters?: ViewFilterRule[];
@@ -133,6 +134,7 @@ export function parseDatabaseMarkdown(markdown = ''): { views: DatabaseViewConfi
       showVerticalLines: optionalBooleanAttr(attrs['show-vertical-lines']),
       showPageIcon: optionalBooleanAttr(attrs['show-page-icon']),
       wrapContent: optionalBooleanAttr(attrs['wrap-content']),
+      hideFilterBar: optionalBooleanAttr(attrs['hide-filter-bar']),
       openMode: normalizeOpenMode(attrs['open-mode']),
       columns,
       filters,
@@ -214,6 +216,7 @@ export function serializeDatabaseMarkdown(views: DatabaseViewConfig[]): string {
       v.showVerticalLines === false ? 'show-vertical-lines="false"' : '',
       v.showPageIcon === false ? 'show-page-icon="false"' : '',
       v.wrapContent ? 'wrap-content="true"' : '',
+      v.hideFilterBar ? 'hide-filter-bar="true"' : '',
       v.openMode && v.openMode !== 'peek' ? `open-mode="${esc(v.openMode)}"` : '',
     ].filter(Boolean).join(' ');
     return `  <view ${viewAttrs}>\n    <column>\n${cols}\n    </column>${extra ? `\n${extra}` : ''}\n  </view>`;

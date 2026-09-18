@@ -426,6 +426,10 @@
 .akdb-view-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 28px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: #787774; cursor: pointer; padding: 0 8px; font-size: 13px; }
 .akdb-view-tabs button:hover, .akdb-view-tabs button.is-active { background: rgba(55,53,47,.08); color: #37352f; }
 .akdb-view-tabs button:disabled:hover { background: transparent; color: #787774; }
+.akdb-view-tabs button[data-view-tab-id]:not(:disabled) { touch-action: none; cursor: grab; }
+.akdb-view-tabs button[data-view-tab-id]:not(:disabled):active { cursor: grabbing; }
+.akdb-view-tabs.is-view-dragging button[data-view-tab-id] { transition: transform 140ms ease; }
+.akdb-view-tabs button[data-view-tab-id].is-dragging { position: relative; z-index: 2; background: #fff; box-shadow: 0 6px 14px rgba(15,23,42,.14); opacity: .96; transition: none !important; }
 .akdb-view-tab-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; color: currentColor; }
 .akdb-view-tab-icon .akdb-column-icon-svg { width: 16px; height: 16px; }
 .akdb-view-tab-context-menu { position: fixed; z-index: 125; box-sizing: border-box; width: 224px; max-width: calc(100vw - 16px); border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: var(--akdb-menu-padding); color: var(--akdb-menu-text); font-family: inherit; font-size: var(--akdb-menu-font-size); font-weight: 400; }

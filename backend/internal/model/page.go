@@ -26,6 +26,9 @@ type PageNode struct {
 	ID        string      `json:"id"`
 	Title     string      `json:"title"`
 	Icon      string      `json:"icon"`
+	FullPage  *bool       `json:"full_page,omitempty"`
+	IsLocked  *bool       `json:"is_locked,omitempty"`
+	IsStarred *bool       `json:"is_starred,omitempty"`
 	SortOrder float64     `json:"sort_order"`
 	FilePath  string      `json:"file_path"`
 	Children  []*PageNode `json:"children,omitempty"`

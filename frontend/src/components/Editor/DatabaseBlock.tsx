@@ -62,7 +62,6 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [activeFilterId, setActiveFilterId] = useState<string | null>(null);
   const [, setActiveSortId] = useState<string | null>(null);
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
-  const [filterBarHidden, setFilterBarHidden] = useState(false);
   const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
   const [viewSettingsPane, setViewSettingsPane] = useState<'main' | 'visibility' | 'layout' | 'filter' | 'sort' | 'group' | 'color' | 'source' | 'properties'>('main');
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
@@ -72,6 +71,20 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [viewContextMenu, setViewContextMenu] = useState<{ viewId: string; top: number; left: number; pane: 'main' | 'source' } | null>(null);
   const [createViewMenu, setCreateViewMenu] = useState<{ top: number; left: number; step: 'type' | 'source'; type?: DatabaseViewType; showAll?: boolean; query?: string } | null>(null);
   const [viewNameFocusRequest, setViewNameFocusRequest] = useState(0);
+  const [viewTabDragState, setViewTabDragState] = useState<{
+    sourceID: string;
+    targetID: string;
+    sourceIndex: number;
+    targetIndex: number;
+    pointerOffset: number;
+    minLeft: number;
+    maxLeft: number;
+    initialLeft: number;
+    currentLeft: number;
+    step: number;
+    centers: number[];
+    dragging: boolean;
+  } | null>(null);
   const filterRef = useRef<HTMLDivElement | null>(null);
   const sortRef = useRef<HTMLDivElement | null>(null);
   const filterButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -79,6 +92,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const viewSettingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const viewContextMenuRef = useRef<HTMLDivElement | null>(null);
   const createViewMenuRef = useRef<HTMLDivElement | null>(null);
+  const viewTabsRef = useRef<HTMLDivElement | null>(null);
+  const viewTabDragStateRef = useRef<typeof viewTabDragState>(null);
+  const suppressViewTabClickRef = useRef(false);
   const filterMenuRect = useDropdownPosition(filterOpen, filterButtonRef, 290);
   const sortMenuRect = useDropdownPosition(sortOpen, sortButtonRef, 292, '', { edge: 'right' });
   const viewSettingsRect = useDropdownPosition(viewSettingsOpen, viewSettingsButtonRef, 292, viewSettingsPane, viewSettingsPane === 'sort' ? { edge: 'right' } : undefined);
@@ -317,6 +333,96 @@ function DatabaseBlockComponent({ block, editor }: any) {
     requestDatabaseImmediateSync();
   };
 
+  const reorderViews = (sourceID: string, targetID: string) => {
+    const sourceIndex = parsed.views.findIndex((view) => view.id === sourceID);
+    const targetIndex = parsed.views.findIndex((view) => view.id === targetID);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const nextViews = [...parsed.views];
+    const [moved] = nextViews.splice(sourceIndex, 1);
+    nextViews.splice(targetIndex, 0, moved);
+    editor.updateBlock(block.id, { props: { ...block.props, views: serializeDatabaseMarkdown(nextViews) } } as any);
+    requestDatabaseImmediateSync();
+  };
+
+  const beginViewTabDrag = (viewID: string, event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || parsed.views.length < 2) return;
+    const tabs = viewTabsRef.current;
+    const tab = event.currentTarget;
+    if (!tabs) return;
+    const items = Array.from(tabs.querySelectorAll<HTMLElement>('[data-view-tab-id]'));
+    const sourceIndex = items.findIndex((item) => item.dataset.viewTabId === viewID);
+    if (sourceIndex < 0) return;
+    const tabsRect = tabs.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const itemRects = items.map((item) => item.getBoundingClientRect());
+    const gap = itemRects.length > 1 ? Math.max(0, itemRects[1].left - itemRects[0].right) : 0;
+    const tabLeft = tabRect.left - tabsRect.left + tabs.scrollLeft;
+    const tabWidth = tabRect.width;
+    const baseState = {
+      sourceID: viewID,
+      targetID: viewID,
+      sourceIndex,
+      targetIndex: sourceIndex,
+      pointerOffset: event.clientX - tabRect.left,
+      minLeft: Math.max(0, itemRects[0].left - tabsRect.left + tabs.scrollLeft),
+      maxLeft: Math.max(0, itemRects[itemRects.length - 1].right - tabsRect.left + tabs.scrollLeft - tabWidth),
+      initialLeft: tabLeft,
+      currentLeft: tabLeft,
+      step: tabWidth + gap,
+      centers: itemRects.map((rect) => rect.left - tabsRect.left + tabs.scrollLeft + rect.width / 2),
+      dragging: false,
+    };
+    viewTabDragStateRef.current = baseState;
+    const updateTarget = (clientX: number) => {
+      setViewTabDragState((current) => {
+        const state = current || viewTabDragStateRef.current;
+        if (!state) return current;
+        const currentLeft = Math.min(state.maxLeft, Math.max(state.minLeft, clientX - tabsRect.left + tabs.scrollLeft - state.pointerOffset));
+        const moved = Math.abs(currentLeft - state.initialLeft);
+        const movingRight = currentLeft >= state.initialLeft;
+        const leadingEdge = movingRight ? currentLeft + tabWidth : currentLeft;
+        const targetIndex = movingRight
+          ? state.centers.reduce((target, center, index) => leadingEdge >= center ? index : target, 0)
+          : state.centers.findIndex((center) => leadingEdge <= center);
+        const nextTargetIndex = targetIndex === -1 ? state.centers.length - 1 : targetIndex;
+        const targetID = items[nextTargetIndex]?.dataset.viewTabId || state.targetID;
+        const next = {
+          ...state,
+          currentLeft,
+          targetIndex: nextTargetIndex,
+          targetID,
+          dragging: state.dragging || moved > 4,
+        };
+        viewTabDragStateRef.current = next;
+        return next.dragging ? next : current;
+      });
+    };
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      updateTarget(moveEvent.clientX);
+      if (viewTabDragStateRef.current?.dragging) moveEvent.preventDefault();
+    };
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      const finalState = viewTabDragStateRef.current;
+      viewTabDragStateRef.current = null;
+      setViewTabDragState(null);
+      if (finalState?.dragging) {
+        suppressViewTabClickRef.current = true;
+        window.setTimeout(() => { suppressViewTabClickRef.current = false; }, 0);
+        if (finalState.sourceID !== finalState.targetID) reorderViews(finalState.sourceID, finalState.targetID);
+      }
+      try {
+        tab.releasePointerCapture(upEvent.pointerId);
+      } catch {
+        // Pointer capture may already be released if the drag ends outside the tab.
+      }
+    };
+    tab.setPointerCapture(event.pointerId);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+  };
+
   const updateView = (nextView: DatabaseViewConfig) => {
     const views = parsed.views.length ? parsed.views : [nextView];
     const nextViews = views.map((view) => view.id === nextView.id ? nextView : view);
@@ -411,10 +517,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
       op: defaultFilterOperator(column),
       value: defaultFilterValue(column),
     };
-    updateView({ ...activeView, filters: [...(activeView.filters || []), nextFilter] });
+    updateView({ ...activeView, filters: [...(activeView.filters || []), nextFilter], hideFilterBar: false });
     setFilterOpen(false);
     setFilterQuery('');
-    setFilterBarHidden(false);
     setActiveFilterId(nextFilter.id);
     setActiveSortId(null);
     return nextFilter.id;
@@ -436,10 +541,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const ensureAdvancedFilter = () => {
     if (!activeView) return;
     const advancedFilter = activeView.advancedFilter || createAdvancedFilterGroup(schemaColumns);
-    updateView({ ...activeView, advancedFilter });
+    updateView({ ...activeView, advancedFilter, hideFilterBar: false });
     setFilterOpen(false);
     setSortOpen(false);
-    setFilterBarHidden(false);
     setActiveFilterId(null);
     setActiveSortId(null);
     setAdvancedFilterOpen(true);
@@ -518,10 +622,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const addConditionalColor = (column: DatabaseColumn) => {
     if (!activeView) return;
     const nextRule = createConditionalColorRule(column);
-    updateView({ ...activeView, conditionalColors: [...(activeView.conditionalColors || []), nextRule] });
+    updateView({ ...activeView, conditionalColors: [...(activeView.conditionalColors || []), nextRule], hideFilterBar: false });
     setFilterOpen(false);
     setSortOpen(false);
-    setFilterBarHidden(false);
     setActiveFilterId(null);
     setActiveSortId(null);
     return nextRule.id;
@@ -730,7 +833,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   }, [activeView?.filters, schemaColumns]);
   const hasFilterRules = (activeView?.filters || []).length > 0 || !!activeView?.advancedFilter;
   const hasViewRules = hasFilterRules || (activeView?.sorts || []).length > 0;
-  const showRuleBar = !!activeView && hasViewRules && !sourceControlsDisabled && !filterBarHidden;
+  const showRuleBar = !!activeView && hasViewRules && !sourceControlsDisabled && !activeView.hideFilterBar;
   const contextView = viewContextMenu ? parsed.views.find((view) => view.id === viewContextMenu.viewId) : null;
   const sourceName = sources.find((source) => source.id === activeSource)?.name || '未选择';
   const canChangeSource = true;
@@ -792,17 +895,18 @@ function DatabaseBlockComponent({ block, editor }: any) {
           aria-expanded={filterOpen}
           disabled={controlsDisabled}
           onClick={() => {
+            if (!activeView) return;
             setSortOpen(false);
             setViewSettingsOpen(false);
             if (hasFilterRules) {
               setFilterOpen(false);
-              setFilterBarHidden((hidden) => !hidden);
+              updateView({ ...activeView, hideFilterBar: !activeView.hideFilterBar });
               setActiveFilterId(null);
               setActiveSortId(null);
               setAdvancedFilterOpen(false);
               return;
             }
-            setFilterBarHidden(false);
+            if (activeView.hideFilterBar) updateView({ ...activeView, hideFilterBar: false });
             setFilterOpen((open) => !open);
             setFilterQuery('');
           }}
@@ -1087,20 +1191,35 @@ function DatabaseBlockComponent({ block, editor }: any) {
       {showViewTabs && (
         <div className={`akdb-view-row ${!showDatabaseTitle && parsed.views.length <= 1 ? 'is-title-replacement' : ''}`}>
           {rowSelectionToolbar || (
-            <div className="akdb-view-tabs">
-              {parsed.views.map((v) => (
-                <button
-                  key={v.id}
-                  type="button"
-                  disabled={!slug}
-                  onClick={() => switchView(v.id)}
-                  onContextMenu={(event) => openViewTabContextMenu(v, event)}
-                  className={v.id === activeView?.id ? 'is-active' : ''}
-                >
-                  {v.icon && <span className="akdb-view-tab-icon"><ColumnIconGlyph icon={v.icon} /></span>}
-                  <span>{v.name}</span>
-                </button>
-              ))}
+            <div ref={viewTabsRef} className={`akdb-view-tabs ${viewTabDragState ? 'is-view-dragging' : ''}`}>
+              {parsed.views.map((v, index) => {
+                const isDragging = viewTabDragState?.sourceID === v.id;
+                let translateX = 0;
+                if (viewTabDragState) {
+                  if (isDragging) translateX = viewTabDragState.currentLeft - viewTabDragState.initialLeft;
+                  else if (viewTabDragState.sourceIndex < viewTabDragState.targetIndex && index > viewTabDragState.sourceIndex && index <= viewTabDragState.targetIndex) translateX = -viewTabDragState.step;
+                  else if (viewTabDragState.targetIndex < viewTabDragState.sourceIndex && index >= viewTabDragState.targetIndex && index < viewTabDragState.sourceIndex) translateX = viewTabDragState.step;
+                }
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    data-view-tab-id={v.id}
+                    disabled={!slug}
+                    className={`${v.id === activeView?.id ? 'is-active' : ''} ${isDragging ? 'is-dragging' : ''}`}
+                    style={{ transform: translateX ? `translateX(${translateX}px)` : undefined }}
+                    onPointerDown={(event) => beginViewTabDrag(v.id, event)}
+                    onClick={() => {
+                      if (suppressViewTabClickRef.current) return;
+                      switchView(v.id);
+                    }}
+                    onContextMenu={(event) => openViewTabContextMenu(v, event)}
+                  >
+                    {v.icon && <span className="akdb-view-tab-icon"><ColumnIconGlyph icon={v.icon} /></span>}
+                    <span>{v.name}</span>
+                  </button>
+                );
+              })}
               <button type="button" disabled={createViewDisabled} onClick={openCreateViewMenu}><Plus size={15} /></button>
             </div>
           )}
