@@ -384,6 +384,8 @@ export default function PageViewPage() {
       return;
     }
     if (e.key === 'Enter') {
+      // 输入法组合态的回车（选词/上屏）不视为确认，避免拼音选词被误当成完成
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
       e.preventDefault();
       titleRef.current?.blur();
       // 通知编辑器在顶部插入空 block 并聚焦（用户在标题按回车 = 想直接开始写正文）

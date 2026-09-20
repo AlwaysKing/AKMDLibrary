@@ -404,7 +404,39 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 				// Ensure the .md file has a UUID in frontmatter
 				pageID := s.ensurePageUUID(node.FilePath)
 
-				created, err := repo.Create(&model.Page{
+				if stale, err := repo.GetByID(pageID); err == nil {
+					// 缓存行还在但路径对不上：文件被外部改名/移动了（git 同步、Finder 改名）。
+					// 旧路径的文件已不在磁盘上，就把行修正到真实文件上，否则该页读到不存在的
+					// 文件会一直 404；旧路径的文件仍在，说明这是另一份同 ID 的副本，保持原行不动。
+					if _, statErr := os.Stat(filepath.Join(s.docsDir, stale.FilePath)); os.IsNotExist(statErr) {
+						oldPath := stale.FilePath
+						title := node.Title
+						if err := repo.UpdateFilePath(pageID, node.FilePath); err != nil {
+							log.Printf("warning: failed to heal page path %s (%s -> %s): %v", pageID, oldPath, node.FilePath, err)
+						} else {
+							if updated, err := repo.UpdateMeta(pageID, &model.UpdatePageMetaRequest{Title: &title}); err == nil {
+								stale = updated
+							} else {
+								// UpdateMeta 失败时只改内存态路径，元数据等下次拉树回填
+								stale.FilePath = node.FilePath
+							}
+							node.ID = pageID
+							if stale.Icon != "" {
+								node.Icon = stale.Icon
+							}
+							if stale.SortOrder != 0 {
+								node.SortOrder = stale.SortOrder
+							}
+							pathMap[node.FilePath] = stale
+							applyPageMetaToNode(node, stale)
+							log.Printf("healed stale page path %s: %s -> %s", pageID, oldPath, node.FilePath)
+						}
+					} else {
+						// 两份文件带同一个 frontmatter id（应用外复制），保留已有行，不抢占
+						node.ID = pageID
+						log.Printf("warning: duplicate page id %s: cache row keeps %s, file %s shares the same id", pageID, stale.FilePath, node.FilePath)
+					}
+				} else if created, err := repo.Create(&model.Page{
 					ID:        pageID,
 					Title:     node.Title,
 					FilePath:  node.FilePath,
@@ -413,8 +445,7 @@ func (s *PageService) enrichNodes(spaceSlug string, nodes []*model.PageNode, pat
 					IsLocked:  boolValue(node.IsLocked),
 					IsStarred: boolValue(node.IsStarred),
 					SortOrder: float64(time.Now().UnixNano()),
-				})
-				if err == nil {
+				}); err == nil {
 					node.ID = created.ID
 					pathMap[node.FilePath] = created
 					applyPageMetaToNode(node, created)

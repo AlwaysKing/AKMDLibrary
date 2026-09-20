@@ -1034,7 +1034,7 @@ export default function AdminPage() {
                             setEditingDisplayNameUserId(null);
                           }}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                            if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) { (e.target as HTMLInputElement).blur(); }
                             if (e.key === 'Escape') { setEditingDisplayNameUserId(null); }
                           }}
                           className="flex-1 font-medium text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1 -mx-2 -my-1"
@@ -1099,7 +1099,7 @@ export default function AdminPage() {
                                 placeholder="新密码"
                                 className="flex-1 px-2 py-1 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 autoFocus
-                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleResetUserPassword(); } }}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); handleResetUserPassword(); } }}
                               />
                               <button onClick={handleResetUserPassword} disabled={!userNewPassword.trim()} className="p-0.5 text-notion-textSecondary hover:text-notion-text transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="确认">
                                 <Check className="w-4 h-4" />
@@ -1409,7 +1409,7 @@ export default function AdminPage() {
                               setEditingSpaceNameSlug(null);
                             }}
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) { (e.target as HTMLInputElement).blur(); }
                               if (e.key === 'Escape') { setEditingSpaceNameSlug(null); }
                             }}
                             className="flex-1 min-w-0 font-medium text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1 -mx-2 -my-1"
@@ -1441,7 +1441,7 @@ export default function AdminPage() {
                             setEditingSpaceDescSlug(null);
                           }}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                            if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) { (e.target as HTMLInputElement).blur(); }
                             if (e.key === 'Escape') { setEditingSpaceDescSlug(null); }
                           }}
                           className="w-full text-notion-textSecondary bg-transparent outline-none border border-blue-300 rounded px-2 py-1 min-w-0"
@@ -1620,7 +1620,7 @@ export default function AdminPage() {
                         type="text"
                         value={renameValue}
                         onChange={e => setRenameValue(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') handleConfirmRename(); if (e.key === 'Escape') setRenamingItem(null); }}
+                        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) handleConfirmRename(); if (e.key === 'Escape') setRenamingItem(null); }}
                         className="flex-1 px-1 py-0.5 text-xs border border-notion-border rounded focus:outline-none focus:ring-1 focus:ring-blue-400"
                         autoFocus
                       />
@@ -1666,7 +1666,7 @@ export default function AdminPage() {
                         type="text"
                         value={renameValue}
                         onChange={e => setRenameValue(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') handleConfirmRename(); if (e.key === 'Escape') setRenamingItem(null); }}
+                        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) handleConfirmRename(); if (e.key === 'Escape') setRenamingItem(null); }}
                         className="flex-1 px-1 py-0.5 text-xs border border-notion-border rounded focus:outline-none focus:ring-1 focus:ring-blue-400"
                         autoFocus
                       />
@@ -1877,7 +1877,7 @@ export default function AdminPage() {
                       }
                     }}
                     onKeyDown={e => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) (e.target as HTMLInputElement).blur();
                       if (e.key === 'Escape') { setEditingSiteName(false); setEditingSiteNameValue(siteSettings.site_name || ''); }
                     }}
                     autoFocus
@@ -2209,7 +2209,7 @@ export default function AdminPage() {
                       }
                       setIsEditingDisplayName(false);
                     }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } if (e.key === 'Escape') setIsEditingDisplayName(false); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) { (e.target as HTMLInputElement).blur(); } if (e.key === 'Escape') setIsEditingDisplayName(false); }}
                     className="w-64 min-w-0 text-sm text-notion-text bg-transparent outline-none border border-blue-300 rounded px-2 py-1"
                     autoFocus
                   />

@@ -232,7 +232,8 @@ const CustomLinkToolbar: React.FC = () => {
   }, [linkInfo]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    // 输入法组合态的回车（选词/上屏）不视为确认，避免中文链接文字被误保存
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       handleSave();
     } else if (e.key === 'Escape') {

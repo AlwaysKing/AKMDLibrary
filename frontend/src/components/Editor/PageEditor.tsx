@@ -3397,7 +3397,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             });
             caption.addEventListener('keydown', (event) => {
               event.stopPropagation();
-              if (event.key === 'Enter') {
+              if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) {
                 event.preventDefault();
                 (event.currentTarget as HTMLInputElement).blur();
               }
@@ -6149,6 +6149,8 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       if (
         e.key === 'Enter' &&
+        !e.isComposing &&
+        e.keyCode !== 229 &&
         !e.altKey &&
         !e.shiftKey &&
         !e.metaKey &&

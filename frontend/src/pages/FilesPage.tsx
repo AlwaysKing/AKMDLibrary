@@ -314,7 +314,7 @@ export default function FilesPage() {
                         value={renameValue}
                         onChange={(e) => setRenameValue(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') confirmRename();
+                          if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) confirmRename();
                           if (e.key === 'Escape') setRenaming(null);
                         }}
                         onBlur={() => {

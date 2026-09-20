@@ -756,7 +756,7 @@ function ColumnListComponent({ block, editor }: any) {
   // handler doesn't know about children and corrupts the structure.
   // We intercept Enter here and manually insert a new block into the column.
   const handleEnterInColumn = useCallback((e: KeyboardEvent) => {
-    if (e.key !== 'Enter' || e.shiftKey) return;
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
 
     const sel = window.getSelection();
     if (!sel || !sel.isCollapsed) return;

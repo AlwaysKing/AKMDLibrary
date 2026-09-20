@@ -94,7 +94,7 @@ export default function LinkPasteMenu({ url, position, onInsertLink, onInsertBoo
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onInsertLink(url, title || url);
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) onInsertLink(url, title || url);
               if (e.key === 'Escape') onClose();
             }}
             className="w-full text-sm text-notion-text bg-white border border-notion-border rounded px-2 py-1.5 focus:outline-none focus:border-blue-400 mb-1.5"

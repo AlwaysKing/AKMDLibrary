@@ -3129,7 +3129,7 @@ function ColumnHeaderMenu({
           onChange={(event) => setName(event.currentTarget.value)}
           onBlur={commitName}
           onKeyDown={(event) => {
-            if (event.key === 'Enter') {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
               event.currentTarget.blur();
             } else if (event.key === 'Escape') {
               setName(column.name);
@@ -6007,7 +6007,7 @@ function OptionEditMenu({ option, config, style, inline = false, isDefault, onBa
             onChange={(event) => setName(event.currentTarget.value)}
             onBlur={commitName}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) (event.currentTarget as HTMLInputElement).blur();
               if (event.key === 'Escape') setName(String(option.value || option.id || ''));
             }}
             autoFocus
@@ -7192,7 +7192,7 @@ function StatusGroupEditMenu({ group, style, inline = false, onBack, onRename, o
           onChange={(event) => setName(event.currentTarget.value)}
           onBlur={commitName}
           onKeyDown={(event) => {
-            if (event.key === 'Enter') (event.currentTarget as HTMLInputElement).blur();
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) (event.currentTarget as HTMLInputElement).blur();
             if (event.key === 'Escape') setName(String(group.name || '未命名分组'));
           }}
           autoFocus

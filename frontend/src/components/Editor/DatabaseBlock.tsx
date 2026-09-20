@@ -1174,7 +1174,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
                   onChange={(event) => setDraftTitle(event.currentTarget.value)}
                   onBlur={(event) => renameTitle(event.currentTarget.value)}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
+                    if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
                       event.preventDefault();
                       event.currentTarget.blur();
                     }
@@ -2551,7 +2551,7 @@ function FilterRuleEditor({ filter, column, userMap, style, onUpdate, onCommit, 
           value={String(filter.value || '')}
           onChange={(event) => onUpdate({ value: event.currentTarget.value })}
           onKeyDown={(event) => {
-            if (event.key !== 'Enter') return;
+            if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return;
             event.preventDefault();
             event.stopPropagation();
             onCommit();
@@ -2799,7 +2799,7 @@ function ConditionalColorRuleEditor({ rule, column, style, inline = false, onUpd
           value={String(rule.value || '')}
           onChange={(event) => onUpdate({ value: event.currentTarget.value })}
           onKeyDown={(event) => {
-            if (event.key !== 'Enter') return;
+            if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return;
             event.preventDefault();
             event.stopPropagation();
             onCommit();
@@ -5198,7 +5198,7 @@ function ViewSettingsMenu({
             onChange={(event) => setNameDraft(event.currentTarget.value)}
             onBlur={commitName}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
                 event.preventDefault();
                 event.currentTarget.blur();
               }

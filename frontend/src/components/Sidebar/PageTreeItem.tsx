@@ -403,7 +403,7 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
                 onChange={(e) => setRenameTitle(e.target.value)}
                 onBlur={handleRenameBlur}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleRenameSubmit();
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) handleRenameSubmit();
                   if (e.key === 'Escape') { setRenameTitle(page.title); setShowRenamePanel(false); }
                 }}
                 className="flex-1 text-sm text-notion-text bg-white border border-notion-border rounded px-2 py-1.5 focus:outline-none focus:border-blue-400 min-w-0"

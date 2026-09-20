@@ -329,13 +329,20 @@ func (r *PageRepository) UpdateSortOrders(updates []SortOrderUpdate) error {
 	return nil
 }
 
-// UpdateFilePathPrefix updates all file_path values that start with oldPrefix to start with newPrefix.
-// Used when moving a page (and its children) to a new directory without rebuilding the entire cache.
+// UpdateFilePathPrefix 把旧页面自身（oldPrefix.md）和它的子页面（oldPrefix/...）
+// 的 file_path 前缀替换为 newPrefix，用于移动页面及其子树时同步缓存行。
+//
+// 前缀判定用 substr 精确比较，不能用 LIKE concat(oldPrefix, '%')：LIKE 里 % 和 _
+// 是通配符、对 ASCII 大小写不敏感，且模式串来自用户可控的页面标题，
+// 会把同前缀的兄弟行（重命名"版本说明"命中"版本说明2.md"、标题含 _ 或 % 时命中别的目录）
+// 改到不存在的路径上，使这些页面永远 404。
 func (r *PageRepository) UpdateFilePathPrefix(oldPrefix string, newPrefix string) error {
-	_, err := r.db.Exec(
-		"UPDATE pages SET file_path = REPLACE(file_path, ?, ?) WHERE file_path LIKE ?",
-		oldPrefix, newPrefix, oldPrefix+"%",
-	)
+	query := `
+		UPDATE pages SET file_path = ? || substr(file_path, length(?) + 1)
+		WHERE file_path = ? || '.md'
+			OR substr(file_path, 1, length(?) + 1) = ? || '/'
+	`
+	_, err := r.db.Exec(query, newPrefix, oldPrefix, oldPrefix, oldPrefix, oldPrefix)
 	return err
 }
 
