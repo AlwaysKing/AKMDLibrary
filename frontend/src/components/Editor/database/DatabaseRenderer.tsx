@@ -153,7 +153,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const showColumnControls = !readonly && columnControls;
   const showFillColumn = !readonly;
   useDropdownOutsideClose(addColumnOpen, addColumnButtonRef, () => setAddColumnOpen(false), '.akdb-add-column-menu');
-  useDropdownOutsideClose(columnMenuIndex !== null, columnMenuAnchorRef, () => closeColumnMenu(), '.akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-status-group-edit-menu');
+  useDropdownOutsideClose(columnMenuIndex !== null, columnMenuAnchorRef, () => closeColumnMenu(), '.akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-option-color-palette, .akdb-status-group-edit-menu');
   useEffect(() => {
     const handlePopupContextMenu = (event: MouseEvent) => {
       const target = event.target;
@@ -5295,8 +5295,8 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
   const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, !isStatus, true);
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
-  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu');
-  useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-column-icon-popover');
+  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu, .akdb-option-color-palette');
+  useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-option-color-palette, .akdb-column-icon-popover');
   const selected = options.find((option) => option.id === value);
   const editingOption = options.find((option) => option.id === editingOptionID);
   const normalizedQuery = query.trim().toLowerCase();
@@ -5579,8 +5579,8 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
   const [editingOptionID, setEditingOptionID] = useState<string | null>(null);
   const menuRect = useDropdownPosition(open, anchorRef || buttonRef, 300, 'overlay', 0, true, true);
   const editMenuRect = useSubmenuPosition(!!editingOptionID, editAnchorRef, 252, 430);
-  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu');
-  useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-column-icon-popover');
+  useDropdownOutsideClose(open, buttonRef, () => setOpen(false), '.akdb-option-menu, .akdb-option-edit-menu, .akdb-option-color-palette');
+  useDropdownOutsideClose(!!editingOptionID, editAnchorRef, () => setEditingOptionID(null), '.akdb-option-edit-menu, .akdb-option-color-palette, .akdb-column-icon-popover');
   const selectedOptions = ids.map((id) => options.find((option) => option.id === id)).filter(Boolean);
   const editingOption = options.find((option) => option.id === editingOptionID);
   const selectedIDs = new Set(ids);
@@ -5962,11 +5962,14 @@ function OptionEditMenu({ option, config, style, inline = false, isDefault, onBa
   const [name, setName] = useState(String(option.value || option.id || ''));
   const [colorOpen, setColorOpen] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
+  const colorButtonRef = useRef<HTMLButtonElement | null>(null);
   const iconButtonRef = useRef<HTMLButtonElement | null>(null);
+  const colorPaletteRect = useDropdownPosition(colorOpen, colorButtonRef, 146, 'below', 0, false, true);
   const iconPickerRect = useDropdownPosition(iconOpen, iconButtonRef, 408);
   useEffect(() => setName(String(option.value || option.id || '')), [option.id, option.value]);
   useEffect(() => setColorOpen(false), [option.id]);
   useEffect(() => setIconOpen(false), [option.id]);
+  useDropdownOutsideClose(colorOpen, colorButtonRef, () => setColorOpen(false), '.akdb-option-color-palette');
   useDropdownOutsideClose(iconOpen, iconButtonRef, () => setIconOpen(false), '.akdb-column-icon-popover');
   const currentShape = option.shape || config.option_shape || 'pill';
   const currentColor = option.color || 'gray';
@@ -6051,6 +6054,7 @@ function OptionEditMenu({ option, config, style, inline = false, isDefault, onBa
         <div className="akdb-option-segment akdb-option-color-grid" role="group" aria-label="选项颜色">
           <div className="akdb-option-color-cell">
             <button
+              ref={colorButtonRef}
               type="button"
               className="akdb-option-color-picker"
               aria-haspopup="listbox"
@@ -6060,8 +6064,8 @@ function OptionEditMenu({ option, config, style, inline = false, isDefault, onBa
               <span className="akdb-option-color-square" aria-hidden="true" style={{ '--akdb-option-dot-bg': currentColorTokens.bg, '--akdb-option-dot-fg': currentColorTokens.fg, '--akdb-option-dot-border': currentColorTokens.border } as CSSProperties} />
             </button>
           </div>
-          {colorOpen && (
-            <div className="akdb-option-color-palette" role="listbox" aria-label="选项颜色">
+          {colorOpen && colorPaletteRect && createPortal(
+            <div className="akdb-option-color-palette" role="listbox" aria-label="选项颜色" style={{ ...colorPaletteRect, zIndex: 133 }}>
               {optionColorChoices.map((choice) => {
                 const active = currentColor === choice.id;
                 const color = optionColorMap[choice.id] || optionColorMap.gray;
@@ -6083,7 +6087,8 @@ function OptionEditMenu({ option, config, style, inline = false, isDefault, onBa
                   </button>
                 );
               })}
-            </div>
+            </div>,
+            document.body,
           )}
           {optionColorModeChoices.map((choice) => (
             <button

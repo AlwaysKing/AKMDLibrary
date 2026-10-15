@@ -7046,7 +7046,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if ((e.target as HTMLElement).closest('.bn-image-toolbar, .bn-image-toolbar-menu, .bn-image-align-menu, .bn-image-caption, .bn-resize-handle, .bn-file-block-content-wrapper')) {
         return;
       }
-      if ((e.target as HTMLElement).closest('.akdb-row-context-menu, .akdb-filter-menu, .akdb-add-column-menu, .akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-status-group-edit-menu')) {
+      if ((e.target as HTMLElement).closest('.akdb-row-context-menu, .akdb-filter-menu, .akdb-add-column-menu, .akdb-column-menu, .akdb-column-icon-popover, .akdb-column-type-submenu, .akdb-column-property-submenu, .akdb-column-number-submenu, .akdb-option-edit-menu, .akdb-option-color-palette, .akdb-status-group-edit-menu')) {
         return;
       }
       if ((e.target as HTMLElement).closest('.akdb-block-shell')) {

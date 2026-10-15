@@ -1160,7 +1160,7 @@
 .akdb-option-color-picker:disabled { cursor: default; opacity: .45; }
 .akdb-option-color-picker:disabled:hover, .akdb-option-color-picker:disabled[aria-expanded="true"] { background: transparent; }
 .akdb-option-color-square { flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid var(--akdb-option-dot-border); border-radius: 5px; background: var(--akdb-option-dot-bg); padding: 0; }
-.akdb-option-color-palette { position: absolute; left: 0; top: calc(100% + 4px); z-index: 1; display: grid; gap: 0; width: 146px; border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: var(--akdb-menu-padding); }
+.akdb-option-color-palette { position: fixed; z-index: 133; display: grid; gap: 0; width: 146px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: var(--akdb-menu-padding); }
 .akdb-option-color-choice { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font-family: inherit; font-size: var(--akdb-menu-font-size); font-weight: 400; line-height: 1.2; }
 .akdb-option-color-choice:hover, .akdb-option-color-choice.is-active { background: var(--akdb-menu-hover-bg); }
 .akdb-option-color-choice > svg { margin-left: auto; color: var(--akdb-menu-text); }
