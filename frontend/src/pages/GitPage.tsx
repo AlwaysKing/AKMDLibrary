@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { gitApi, GitRepoState, GitSyncConfig, GitFileStatus, CredentialMeta, CredentialType } from '../api/git';
 import { useSpaceStore } from '../stores/spaceStore';
+import ConfirmDialog from '../components/ConfirmDialog';
 import {
   ArrowLeft,
   GitCommitHorizontal,
@@ -45,6 +46,7 @@ export default function GitPage() {
   const [error, setError] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
   const [showCreds, setShowCreds] = useState(false);
+  const [pendingRestorePaths, setPendingRestorePaths] = useState<string[] | null>(null);
 
   const refresh = useCallback(async () => {
     if (!spaceSlug) return;
@@ -179,16 +181,14 @@ export default function GitPage() {
     }
   };
 
-  const handleRestore = async () => {
+  const handleRestore = () => {
     if (!spaceSlug || selected.size === 0) return;
-    // Destructive op — confirm. Using window.confirm keeps the change minimal
-    // and matches a native "are you sure" UX rather than introducing a modal.
-    const paths = Array.from(selected);
-    const msg =
-      paths.length === 1
-        ? `重置选中文件？该文件的工作区改动将被丢弃：\n  ${paths[0]}`
-        : `重置选中的 ${paths.length} 个文件？这些文件的工作区改动将被丢弃。`;
-    if (!window.confirm(msg)) return;
+    setPendingRestorePaths(Array.from(selected));
+  };
+
+  const confirmRestore = async () => {
+    if (!spaceSlug || !pendingRestorePaths?.length || busy) return;
+    const paths = pendingRestorePaths;
     setBusy(true);
     setError('');
     setOutput('');
@@ -201,6 +201,7 @@ export default function GitPage() {
       setUserTouchedMessage(false);
       setMessage('');
       setOutput(`已重置 ${paths.length} 个文件。`);
+      setPendingRestorePaths(null);
     } catch (e: any) {
       setError(e?.response?.data || e?.message || 'Restore failed');
     } finally {
@@ -460,6 +461,26 @@ export default function GitPage() {
         </div>
       </div>
       </div>
+      <ConfirmDialog
+        open={!!pendingRestorePaths?.length}
+        title="重置选中文件"
+        description={
+          pendingRestorePaths?.length === 1 ? (
+            <>
+              该文件的工作区改动将被丢弃：
+              <code className="mt-2 block break-all rounded bg-notion-hover px-2 py-1 text-xs text-notion-text">{pendingRestorePaths[0]}</code>
+            </>
+          ) : (
+            `选中的 ${pendingRestorePaths?.length || 0} 个文件的工作区改动将被丢弃。`
+          )
+        }
+        confirmText="确认重置"
+        loadingText="重置中..."
+        danger
+        loading={busy}
+        onCancel={() => setPendingRestorePaths(null)}
+        onConfirm={confirmRestore}
+      />
     </div>
   );
 }

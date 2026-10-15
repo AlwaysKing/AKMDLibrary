@@ -37,6 +37,7 @@ import { DatabaseBlockSpec } from './DatabaseBlock';
 import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSaves, isPageChangeSuppressed } from './SyncedBlock';
 import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
 import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
+import { SyncedBlockReferenceDialog } from './SyncedBlockReferenceDialog';
 import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
@@ -790,7 +791,13 @@ const BASE_BLOCK_ORDER: Record<string, number> = {
   toggle_heading_4: 8,
 };
 
-function getCustomSlashMenuItems(editor: any) {
+interface SyncedBlockReferenceRequest {
+  blockId: string;
+  isSlashOnly: boolean;
+  isEmpty: boolean;
+}
+
+function getCustomSlashMenuItems(editor: any, onRequestSyncedBlockReference: (request: SyncedBlockReferenceRequest) => void) {
   const defaults = getDefaultReactSlashMenuItems(editor);
   // Remove heading_5, heading_6 from defaults
   const filtered = defaults.filter((item: any) =>
@@ -910,24 +917,12 @@ function getCustomSlashMenuItems(editor: any) {
       group: '高级区块',
       icon: <svg viewBox="0 0 18 18" style={{ width: '18px', height: '18px', fill: 'none', stroke: 'currentColor', strokeWidth: 1.45 }}><path d="M4.5 4.2h6.5a2.5 2.5 0 0 1 0 5H9.5" /><path d="M13.5 13.8H7a2.5 2.5 0 0 1 0-5h1.5" /><path d="M12.5 2.8h2.8v2.8" /><path d="m15.2 2.9-4.4 4.4" /></svg>,
       onItemClick: () => {
-        const sourcePageId = window.prompt('源页面 ID');
-        if (!sourcePageId) return;
-        const sourceBlockId = window.prompt('源同步块 ID');
-        if (!sourceBlockId) return;
         const currentBlock = editor.getTextCursorPosition().block;
         const blockContent = currentBlock.content;
         const isSlashOnly = Array.isArray(blockContent) && blockContent.length === 1 &&
           blockContent[0].type === 'text' && blockContent[0].text === '/';
         const isEmpty = Array.isArray(blockContent) && blockContent.length === 0;
-        const newBlock = {
-          type: 'syncedBlockMirror',
-          props: { syncId: newSyncId(), sourcePageId, sourceBlockId },
-        };
-        if (isSlashOnly || isEmpty) {
-          editor.updateBlock(currentBlock, newBlock as any);
-        } else {
-          editor.insertBlocks([newBlock as any], currentBlock, 'after');
-        }
+        onRequestSyncedBlockReference({ blockId: currentBlock.id, isSlashOnly, isEmpty });
       },
     },
     {
@@ -2667,6 +2662,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
   } | null>(null);
   const [syncedPaste, setSyncedPaste] = useState<ClipboardPayload | null>(null);
   const [syncedDelete, setSyncedDelete] = useState<{ block: any; quotedCount: number } | null>(null);
+  const [syncedReferenceRequest, setSyncedReferenceRequest] = useState<SyncedBlockReferenceRequest | null>(null);
   const [databaseDelete, setDatabaseDelete] = useState<{ ids: string[]; count: number } | null>(null);
   const [fileUploadStates, setFileUploadStates] = useState<Record<string, FileUploadVisualState>>({});
   const [imageLightbox, setImageLightbox] = useState<{ url: string; name: string; type?: 'image' | 'video' } | null>(null);
@@ -5319,23 +5315,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     const handleSlashKey = (e: KeyboardEvent) => {
       if (e.key !== '/') return;
 
-      // Check if current block is empty
-      const currentBlock = editor.getTextCursorPosition().block;
-      const content = currentBlock.content;
-      const isEmpty = !content || (Array.isArray(content) && content.length === 0);
+      // Chrome emits keydown before input, while WKWebView may emit it after.
+      // Check after paint so "//" is visible to both event orders.
+      requestAnimationFrame(() => {
+        const content = editor.getTextCursorPosition().block.content;
+        const isDoubleSlash = Array.isArray(content)
+          && content.length === 1
+          && content[0]?.type === 'text'
+          && content[0]?.text === '//';
+        if (!isDoubleSlash) return;
 
-      if (!isEmpty) {
-        // Block has content — let "/" be typed normally, but close the slash menu
-        // before the next paint so the user never sees it
-        requestAnimationFrame(() => {
-          const pmEl = container.querySelector('.ProseMirror');
-          if (pmEl) {
-            pmEl.dispatchEvent(new KeyboardEvent('keydown', {
-              key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true,
-            }));
-          }
-        });
-      }
+        const pmEl = container.querySelector('.ProseMirror');
+        if (pmEl) {
+          pmEl.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true,
+          }));
+        }
+      });
     };
 
     container.addEventListener('keydown', handleSlashKey, true);
@@ -5732,6 +5728,23 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       showToast('无法创建同步块：源内容已变化');
     }
   }, [insertBlocksAtCursor, persistEditorNow, syncedPaste]);
+
+  const handleCreateSyncedReference = useCallback((sourcePageId: string, sourceBlockId: string) => {
+    if (!syncedReferenceRequest) return;
+    const currentBlock = editor.getBlock(syncedReferenceRequest.blockId);
+    setSyncedReferenceRequest(null);
+    if (!currentBlock) return;
+
+    const newBlock = {
+      type: 'syncedBlockMirror',
+      props: { syncId: newSyncId(), sourcePageId, sourceBlockId },
+    };
+    if (syncedReferenceRequest.isSlashOnly || syncedReferenceRequest.isEmpty) {
+      editor.updateBlock(currentBlock, newBlock as any);
+    } else {
+      editor.insertBlocks([newBlock as any], currentBlock, 'after');
+    }
+  }, [editor, syncedReferenceRequest]);
 
   const handleSyncedDeleteStrategy = useCallback(async (strategy: 'cascade' | 'placeholder' | 'inline') => {
     if (!syncedDelete?.block) return;
@@ -8378,7 +8391,14 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             {!readOnly && (
               <SuggestionMenuController
                 triggerCharacter="/"
-                getItems={async (query: string) => filterSlashMenuItems(getCustomSlashMenuItems(editor), query)}
+                shouldOpen={(tr) => {
+                  const { $from, from, to } = tr.selection;
+                  return from === to
+                    && $from.parent.isTextblock
+                    && !$from.parent.type.spec.code
+                    && $from.parent.content.size === 0;
+                }}
+                getItems={async (query: string) => filterSlashMenuItems(getCustomSlashMenuItems(editor, setSyncedReferenceRequest), query)}
               />
             )}
           </BlockNoteViewRaw>
@@ -8450,6 +8470,12 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           quotedCount={syncedDelete.quotedCount}
           onSelect={handleSyncedDeleteStrategy}
           onClose={() => setSyncedDelete(null)}
+        />
+      )}
+      {syncedReferenceRequest && (
+        <SyncedBlockReferenceDialog
+          onConfirm={handleCreateSyncedReference}
+          onClose={() => setSyncedReferenceRequest(null)}
         />
       )}
       {databaseDelete && (

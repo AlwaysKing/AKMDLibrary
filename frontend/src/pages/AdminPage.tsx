@@ -10,6 +10,7 @@ import { siteSettingsApi, SiteSettings } from '../api/siteSettings';
 import { claudeApi, ClaudeAdminConfig } from '../api/claude';
 import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen } from 'lucide-react';
 import PageIcon from '../components/Editor/PageIcon';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { usePreferenceStore } from '../stores/preferenceStore';
 import apiClient from '../api/client';
 import { CODE_THEME_OPTIONS, CODE_THEME_PREVIEW_SNIPPET, getCodeThemeRegistration, normalizeCodeTheme } from '../utils/codeTheme';
@@ -122,6 +123,8 @@ export default function AdminPage() {
   const [spaceFormData, setSpaceFormData] = useState<{ name: string; icon: string; description: string; feature_flags: FeatureFlags }>({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
   const [showIconPicker, setShowIconPicker] = useState(false);
   const iconPickerRef = useRef<HTMLDivElement>(null);
+  const [pendingDeleteSpace, setPendingDeleteSpace] = useState<Space | null>(null);
+  const [deletingSpace, setDeletingSpace] = useState(false);
 
   // ---- 空间列表内联编辑名称 ----
   const [editingSpaceNameSlug, setEditingSpaceNameSlug] = useState<string | null>(null);
@@ -148,6 +151,8 @@ export default function AdminPage() {
   const [renamingItem, setRenamingItem] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [uploadingResource, setUploadingResource] = useState(false);
+  const [pendingDeleteResource, setPendingDeleteResource] = useState<string | null>(null);
+  const [deletingResource, setDeletingResource] = useState(false);
   const iconFileRef = useRef<HTMLInputElement>(null);
   const coverFileRef = useRef<HTMLInputElement>(null);
 
@@ -674,14 +679,24 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeleteSpace = async (slug: string) => {
-    if (!window.confirm('确定要删除此空间吗？所有页面数据将被永久删除。')) return;
+  const handleDeleteSpace = (space: Space) => {
+    setPendingDeleteSpace(space);
+  };
+
+  const confirmDeleteSpace = async () => {
+    if (!pendingDeleteSpace || deletingSpace) return;
+    const slug = pendingDeleteSpace.slug;
+    setDeletingSpace(true);
+    setError('');
     try {
       await spacesApi.delete(slug);
-      setSpaces(spaces.filter((s) => s.slug !== slug));
+      setSpaces(prev => prev.filter((s) => s.slug !== slug));
       if (spacePanelSlug === slug) closePanel();
+      setPendingDeleteSpace(null);
     } catch (err: any) {
       setError(err.message);
+    } finally {
+      setDeletingSpace(false);
     }
   };
 
@@ -1464,7 +1479,7 @@ export default function AdminPage() {
                         <button onClick={() => handleRefreshSpace(space.slug)} disabled={refreshingSlug === space.slug} className="text-notion-textSecondary hover:text-notion-text disabled:pointer-events-none" title="刷新">
                           <RefreshCw className={`w-4 h-4 ${refreshingSlug === space.slug ? 'animate-spin' : ''}`} />
                         </button>
-                        <button onClick={() => handleDeleteSpace(space.slug)} className="text-red-500 hover:text-red-600" title="删除"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={() => handleDeleteSpace(space)} className="text-red-500 hover:text-red-600" title="删除"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </td>
                   </tr>
@@ -1479,6 +1494,18 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+
+        <ConfirmDialog
+          open={!!pendingDeleteSpace}
+          title="删除空间"
+          description={`确定要删除「${pendingDeleteSpace?.name || ''}」吗？所有页面数据将被永久删除。`}
+          confirmText="确认删除"
+          loadingText="删除中..."
+          danger
+          loading={deletingSpace}
+          onCancel={() => setPendingDeleteSpace(null)}
+          onConfirm={confirmDeleteSpace}
+        />
       </>
     );
   };
@@ -1506,18 +1533,27 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeleteResource = async (name: string) => {
-    if (!window.confirm(`确定要删除「${name}」吗？`)) return;
+  const handleDeleteResource = (name: string) => {
+    setPendingDeleteResource(name);
+  };
+
+  const confirmDeleteResource = async () => {
+    if (!pendingDeleteResource || deletingResource) return;
+    setDeletingResource(true);
+    setError('');
     try {
       if (resourceType === 'icons') {
-        await deleteIcon(name);
-        setIconItems(prev => prev.filter(i => i.name !== name));
+        await deleteIcon(pendingDeleteResource);
+        setIconItems(prev => prev.filter(i => i.name !== pendingDeleteResource));
       } else {
-        await deleteCover(name);
-        setCoverItems(prev => prev.filter(i => i.name !== name));
+        await deleteCover(pendingDeleteResource);
+        setCoverItems(prev => prev.filter(i => i.name !== pendingDeleteResource));
       }
+      setPendingDeleteResource(null);
     } catch (err: any) {
       setError(err.message || '删除失败');
+    } finally {
+      setDeletingResource(false);
     }
   };
 
@@ -1697,6 +1733,18 @@ export default function AdminPage() {
             ))}
           </div>
         )}
+
+        <ConfirmDialog
+          open={!!pendingDeleteResource}
+          title={resourceType === 'icons' ? '删除图标' : '删除封面'}
+          description={`确定要删除「${pendingDeleteResource || ''}」吗？`}
+          confirmText="确认删除"
+          loadingText="删除中..."
+          danger
+          loading={deletingResource}
+          onCancel={() => setPendingDeleteResource(null)}
+          onConfirm={confirmDeleteResource}
+        />
       </>
     );
   };
@@ -1781,7 +1829,7 @@ export default function AdminPage() {
     const DEFAULT_SITE_NAME = 'MD Library';
 
     // 重置确认弹窗
-    const ConfirmDialog = () => {
+    const ResetConfirmDialog = () => {
       if (!confirmReset) return null;
       const labels = { favicon: '小图标', logo: '大图标', site_name: '站点名称' };
       return (
@@ -1799,7 +1847,7 @@ export default function AdminPage() {
 
     return (
       <>
-        {confirmReset && <ConfirmDialog />}
+        {confirmReset && <ResetConfirmDialog />}
         <h1 className="text-xl font-semibold text-notion-text mb-8">站点设置</h1>
 
         {siteSettingsMsg && (
