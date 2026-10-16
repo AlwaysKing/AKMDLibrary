@@ -6,6 +6,7 @@ import {
   AlignRight,
   ArrowLeft,
   ArrowUpDown,
+  ArrowUpRight,
   CalendarDays,
   Check,
   ChevronDown,
@@ -114,12 +115,15 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const [editingCell, setEditingCell] = useState<CellCoord | null>(null);
   const [cellRange, setCellRange] = useState<CellRange | null>(null);
   const [fillRange, setFillRange] = useState<CellRange | null>(null);
-  const [hoveredRowID, setHoveredRowID] = useState<string | null>(null);
+  const [hoveredRowEl, setHoveredRowEl] = useState<HTMLTableRowElement | null>(null);
   const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(() => new Set());
   const [rowDragState, setRowDragState] = useState<{ sourceRowID: string; targetRowID?: string; sourceIndex: number; targetIndex: number; placement: 'before' | 'after'; sourceGroupKey?: string; targetGroupKey?: string; targetInstanceKey?: string } | null>(null);
   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
+  const [rowOpenPosition, setRowOpenPosition] = useState<{ top: number; left: number } | null>(null);
+  const [tableWrapWidth, setTableWrapWidth] = useState(0);
+  const rowOpenPositionRef = useRef<{ top: number; left: number } | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [columnDragState, setColumnDragState] = useState<{
     sourceIndex: number;
@@ -1326,9 +1330,93 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const allVisibleRowsSelected = selectableRowCount > 0 && selectedVisibleRowCount === selectableRowCount;
   const someVisibleRowsSelected = selectedVisibleRowCount > 0;
 
+  // 行末“打开子页面”按钮不参与表格列布局：跟随 hover 行，并贴住横向滚动视口的右缘。
+  const setRowOpenPositionTracked = (next: { top: number; left: number } | null) => {
+    const prev = rowOpenPositionRef.current;
+    if (prev === next || (prev && next && prev.top === next.top && prev.left === next.left)) return;
+    rowOpenPositionRef.current = next;
+    setRowOpenPosition(next);
+  };
+
+  useLayoutEffect(() => {
+    if (!onOpenRow || !tableWrapRef.current) return;
+    const wrap = tableWrapRef.current;
+    const updateWidth = () => setTableWrapWidth(wrap.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, [onOpenRow]);
+
+  useLayoutEffect(() => {
+    if (readonly || !onOpenRow || !hoveredRowEl || !tableWrapRef.current || !tableWrapWidth) {
+      setRowOpenPositionTracked(null);
+      return;
+    }
+    const wrap = tableWrapRef.current;
+    const row = hoveredRowEl;
+    const update = () => {
+      const wrapRect = wrap.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const rowCenter = rowRect.top + rowRect.height / 2;
+      if (
+        rowRect.bottom < wrapRect.top ||
+        rowRect.top > wrapRect.bottom ||
+        wrapRect.width <= 0 ||
+        wrapRect.right <= 0 ||
+        wrapRect.right > window.innerWidth
+      ) {
+        setRowOpenPositionTracked(null);
+        return;
+      }
+      // 左对齐到操作列（+ / ... 所在列的 8px 内边距处）；操作列还没滚进可视区时，按钮先贴住表格容器右缘保持可见。
+      const actionCell = row.querySelector<HTMLElement>('.akdb-action-cell');
+      const actionLeft = (actionCell?.getBoundingClientRect().left ?? wrapRect.right - 64) + 8;
+      const maxLeft = Math.max(wrapRect.left + 6, wrapRect.right - 24 - 6);
+      const left = Math.min(Math.max(actionLeft, wrapRect.left + 6), maxLeft);
+      setRowOpenPositionTracked({ top: rowCenter - 12, left });
+    };
+    let frame = 0;
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        update();
+      });
+    };
+    update();
+    wrap.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      wrap.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+    };
+  }, [hoveredRowEl, onOpenRow, readonly, tableWrapWidth]);
+
   const toggleAllVisibleRows = () => {
     clearEditorBlockSelection();
     setSelectedRowIDs(allVisibleRowsSelected ? new Set() : new Set(displayRowIDs));
+  };
+
+  const handleRowPointerEnter = (event: ReactMouseEvent<HTMLTableRowElement>) => {
+    setHoveredRowEl(event.currentTarget);
+  };
+
+  const handleRowPointerLeave = (event: ReactMouseEvent<HTMLTableRowElement>) => {
+    // 按钮是 fixed 浮层、不在行内：从行移到按钮上时保留浮层，避免点不到。
+    if ((event.relatedTarget as HTMLElement | null)?.closest('.akdb-row-open')) return;
+    setHoveredRowEl((current) => current === event.currentTarget ? null : current);
+  };
+
+  const handleGutterHoverStart = (rowID: string) => {
+    setHoveredRowEl(tableWrapRef.current?.querySelector<HTMLTableRowElement>(`tr[data-akdb-row-id="${CSS.escape(rowID)}"]`) ?? null);
+  };
+
+  const handleGutterHoverEnd = (rowID: string) => {
+    setHoveredRowEl((current) => current?.dataset.akdbRowId === rowID ? null : current);
   };
 
   if (loading) return <div className="akdb-empty">加载中...</div>;
@@ -1460,7 +1548,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             {displayRows.map(({ row }, index) => {
               const selected = selectedRowIDs.has(row.uuid);
               const menuOpenForRow = rowContextMenu?.row.uuid === row.uuid;
-              const controlsVisible = hoveredRowID === row.uuid || menuOpenForRow;
+              const controlsVisible = hoveredRowEl?.dataset.akdbRowId === row.uuid || menuOpenForRow;
               const checkboxVisible = selected || controlsVisible;
               const isDraggingRow = rowDragState?.sourceRowID === row.uuid;
               return (
@@ -1468,8 +1556,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                   key={row.uuid}
                   className={`akdb-row-gutter-item ${controlsVisible ? 'is-controls-visible' : ''} ${checkboxVisible ? 'is-checkbox-visible' : ''} ${isDraggingRow ? 'is-row-dragging' : ''}`}
                   style={{ top: tableRowOffsets.get(row.uuid) ?? (36 + index * 36) }}
-                  onMouseEnter={() => setHoveredRowID(row.uuid)}
-                  onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
+                  onMouseEnter={() => handleGutterHoverStart(row.uuid)}
+                  onMouseLeave={() => handleGutterHoverEnd(row.uuid)}
                 >
                   <span className="akdb-row-selector">
                     <button
@@ -1701,8 +1789,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                           data-akdb-drop-group-key={group.key}
                           className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${isRowDropTarget ? 'is-row-drop-target' : ''} ${isRowDropTarget && rowDragState?.placement === 'after' ? 'is-row-drop-after' : ''}`}
                           style={rowColorStyle}
-                          onMouseEnter={() => setHoveredRowID(row.uuid)}
-                          onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
+                          onMouseEnter={handleRowPointerEnter}
+                          onMouseLeave={handleRowPointerLeave}
                           onContextMenu={(event) => openRowContextMenu(row, event)}
                         >
                           {visibleColumns.map((c, index) => {
@@ -1812,8 +1900,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
                 data-akdb-row-drop-key={row.uuid}
                 className={`${rowContextMenu?.row.uuid === row.uuid ? 'is-context-selected' : ''} ${selectedRowIDs.has(row.uuid) ? 'is-row-selected' : ''} ${isRowDropTarget ? 'is-row-drop-target' : ''} ${isRowDropTarget && rowDragState?.placement === 'after' ? 'is-row-drop-after' : ''}`}
                 style={rowColorStyle}
-                onMouseEnter={() => setHoveredRowID(row.uuid)}
-                onMouseLeave={() => setHoveredRowID((current) => current === row.uuid ? null : current)}
+                onMouseEnter={handleRowPointerEnter}
+                onMouseLeave={handleRowPointerLeave}
                 onContextMenu={(event) => openRowContextMenu(row, event)}
               >
                 {visibleColumns.map((c, index) => {
@@ -1903,6 +1991,28 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
           </tbody>
           </table>
         </div>
+        {onOpenRow && rowOpenPosition && createPortal(
+          <button
+            type="button"
+            className="akdb-row-open"
+            aria-label="打开子页面"
+            style={{ top: rowOpenPosition.top, left: rowOpenPosition.left }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseLeave={(event) => {
+              if ((event.relatedTarget as HTMLElement | null)?.closest('tr[data-akdb-row-id]')) return;
+              setHoveredRowEl(null);
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const rowID = hoveredRowEl?.dataset.akdbRowId;
+              if (rowID) onOpenRow(rowID);
+            }}
+          >
+            <ArrowUpRight size={16} strokeWidth={2} />
+          </button>,
+          document.body,
+        )}
         {columnMenuColumn && columnMenuRect && createPortal(
           <ColumnHeaderMenu
             column={columnMenuColumn}
@@ -2094,7 +2204,7 @@ function viewColumnID(rule: ViewColumnRule, index: number) {
   return '';
 }
 
-function buildFormulaProps(columns: DatabaseColumn[], row: DatabaseRow) {
+export function buildFormulaProps(columns: DatabaseColumn[], row: DatabaseRow) {
   const props: Record<string, any> = { ...row.values, uuid: row.uuid };
   for (const column of columns) {
     if (column.type === 'formula') continue;
@@ -2266,11 +2376,11 @@ function firstColumnOption(column: DatabaseColumn) {
   return options[0]?.id ? String(options[0].id) : undefined;
 }
 
-function personColumnMultiple(column: DatabaseColumn) {
+export function personColumnMultiple(column: DatabaseColumn) {
   return !!column.config?.multiple;
 }
 
-function personValueIDs(raw: string) {
+export function personValueIDs(raw: string) {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -2824,7 +2934,7 @@ function compareDatabaseValues(a: unknown, b: unknown, column?: DatabaseColumn) 
   return av.localeCompare(bv, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
 }
 
-function parseMultiSelectValue(value: string) {
+export function parseMultiSelectValue(value: string) {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
@@ -5267,7 +5377,7 @@ function EditableCell({ value, column, align, usersByUUID, readonly, active, edi
   return <td {...tdProps('akdb-editable-cell')} ref={cellRef}><input ref={setInputElement} value={inputValue} type={inputType} maxLength={maxLength} {...numberInputProps} onFocus={() => { setEditing(true); onEditStateChange?.(true); updateFocusRect(); }} onChange={(e) => setLocal(e.target.value)} onBlur={() => { commitValue(); setEditing(false); onEditStateChange?.(false); setFocusRect(null); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); skipNextCommitRef.current = true; setLocal(value); setEditing(false); onEditStateChange?.(false); setFocusRect(null); (e.currentTarget as HTMLInputElement).blur(); } }} />{focusOverlay}{cellChrome}</td>;
 }
 
-function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange, onEditProperty }: { value: string; options: any[]; config: Record<string, any>; isStatus?: boolean; anchorRef?: RefObject<HTMLElement>; onChange: (value: string) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void; onEditProperty?: () => void }) {
+export function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange, onEditProperty }: { value: string; options: any[]; config: Record<string, any>; isStatus?: boolean; anchorRef?: RefObject<HTMLElement>; onChange: (value: string) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void; onEditProperty?: () => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -5551,7 +5661,7 @@ function OptionSelect({ value, options, config, isStatus, anchorRef, onChange, o
   );
 }
 
-function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange }: { ids: string[]; options: any[]; config: Record<string, any>; anchorRef?: RefObject<HTMLElement>; onChange: (ids: string[]) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void }) {
+export function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate, onReorder, onUpdateOption, onDeleteOption, onOpenChange }: { ids: string[]; options: any[]; config: Record<string, any>; anchorRef?: RefObject<HTMLElement>; onChange: (ids: string[]) => void; onCreate?: (label: string) => Promise<any | null>; onReorder?: (sourceID: string, targetID: string) => Promise<void>; onUpdateOption?: (optionID: string, patch: Record<string, any>) => Promise<void>; onDeleteOption?: (optionID: string) => Promise<void>; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -5828,7 +5938,7 @@ function OptionMultiSelect({ ids, options, config, anchorRef, onChange, onCreate
   );
 }
 
-function PersonSelect({
+export function PersonSelect({
   value,
   ids,
   userMap,
@@ -6335,7 +6445,7 @@ function datePickerSubmenuRect(pickerStyle: CSSProperties, submenuStyle: CSSProp
   return { ...submenuStyle, left, width, ...(maxHeight ? { maxHeight } : {}) };
 }
 
-function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0, matchAnchorWidth = true, fitViewport = false) {
+export function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, minWidth = 220, placement: 'below' | 'overlay' = 'below', offsetLeft = 0, matchAnchorWidth = true, fitViewport = false) {
   const [rect, setRect] = useState<CSSProperties | null>(null);
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) {
@@ -6379,7 +6489,7 @@ function useDropdownPosition(open: boolean, buttonRef: RefObject<HTMLElement>, m
   return rect;
 }
 
-function useSubmenuPosition(open: boolean, buttonRef: RefObject<HTMLElement>, width = 392, maxHeight = 430) {
+export function useSubmenuPosition(open: boolean, buttonRef: RefObject<HTMLElement>, width = 392, maxHeight = 430) {
   const [rect, setRect] = useState<CSSProperties | null>(null);
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) {
@@ -6416,7 +6526,7 @@ function useSubmenuPosition(open: boolean, buttonRef: RefObject<HTMLElement>, wi
   return rect;
 }
 
-function useDropdownOutsideClose(open: boolean, buttonRef: RefObject<HTMLElement>, onClose: () => void, menuSelector = '.akdb-option-menu') {
+export function useDropdownOutsideClose(open: boolean, buttonRef: RefObject<HTMLElement>, onClose: () => void, menuSelector = '.akdb-option-menu') {
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: PointerEvent) => {

@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { createReactBlockSpec } from '@blocknote/react';
 import { createPortal } from 'react-dom';
-import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
+import { Activity, ArrowLeft, ArrowUpDown, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Database, Eye, Filter, GripVertical, Image, Info, Link, List, ListFilter, Map as MapIcon, MoreHorizontal, Palette, PanelRight, Pencil, PieChart, Plus, Search, SlidersHorizontal, Table2, Trash2, Workflow, X, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../api/databases';
 import { usersApi } from '../../api/users';
@@ -9,6 +9,7 @@ import { type User } from '../../api/auth';
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
 import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, PersonTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
+import DatabaseRowView from './database/DatabaseRowView';
 import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
 
@@ -67,6 +68,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
+  const [rowPeek, setRowPeek] = useState<{ rowId: string; mode: 'peek' | 'center' } | null>(null);
   const [iconPickerRequest, setIconPickerRequest] = useState(0);
   const [viewContextMenu, setViewContextMenu] = useState<{ viewId: string; top: number; left: number; pane: 'main' | 'source' } | null>(null);
   const [createViewMenu, setCreateViewMenu] = useState<{ top: number; left: number; step: 'type' | 'source'; type?: DatabaseViewType; showAll?: boolean; query?: string } | null>(null);
@@ -106,6 +108,16 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const activeView = parsed.views.find((v) => v.id === viewId) || parsed.views[0];
   const activeSource = activeView?.source || '';
   const viewLocked = !!activeView?.readonly;
+  const rowOpenMode = activeView?.openMode || 'peek';
+  // 统一的行页面打开入口：全屏走路由，居中/右侧展开用浮层。
+  const openRow = (rowId: string) => {
+    if (!activeSource) return;
+    if (rowOpenMode === 'full') {
+      navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+      return;
+    }
+    setRowPeek({ rowId, mode: rowOpenMode });
+  };
   const showDatabaseTitle = activeView?.showSourceTitle !== false;
   const usedSourceIds = useMemo(() => Array.from(new Set(parsed.views.map((view) => view.source).filter((source): source is string => !!source))), [parsed.views]);
   const usedSources = useMemo(() => sources.filter((source) => usedSourceIds.includes(source.id)), [sources, usedSourceIds]);
@@ -1304,8 +1316,45 @@ function DatabaseBlockComponent({ block, editor }: any) {
           onAddFilterColumn={addFilter}
           onAddSortColumn={addSort}
           onGroupOptionsChange={handleRuntimeGroupOptionsChange}
-          onOpenRow={(rowId) => navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`)}
+          onOpenRow={openRow}
         />
+      )}
+      {rowPeek && slug && activeSource && createPortal(
+        rowPeek.mode === 'center' ? (
+          <div className="akdb-row-overlay-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRowPeek(null); }}>
+            <div className="akdb-row-overlay akdb-row-overlay-center" role="dialog" aria-modal="true" aria-label="行页面">
+              <DatabaseRowView
+                spaceSlug={slug}
+                dbId={activeSource}
+                rowId={rowPeek.rowId}
+                onClose={() => setRowPeek(null)}
+                onOpenFull={() => {
+                  const rowId = rowPeek.rowId;
+                  setRowPeek(null);
+                  navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="akdb-row-overlay-scrim" onMouseDown={() => setRowPeek(null)} />
+            <div className="akdb-row-overlay akdb-row-overlay-peek" role="dialog" aria-modal="true" aria-label="行页面">
+              <DatabaseRowView
+                spaceSlug={slug}
+                dbId={activeSource}
+                rowId={rowPeek.rowId}
+                onClose={() => setRowPeek(null)}
+                onOpenFull={() => {
+                  const rowId = rowPeek.rowId;
+                  setRowPeek(null);
+                  navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+                }}
+              />
+            </div>
+          </>
+        ),
+        document.body,
       )}
       {pendingBind && createPortal(
         <BindColumnsDialog
@@ -1487,6 +1536,55 @@ const databaseViewTypeChoices: Array<{ type: DatabaseViewType; label: string; ic
 
 function ViewTypeIcon({ type }: { type: DatabaseViewType }) {
   return databaseViewTypeChoices.find((choice) => choice.type === type)?.icon || <Table2 size={17} />;
+}
+
+const databaseOpenModeChoices: Array<{ id: NonNullable<DatabaseViewConfig['openMode']>; label: string; icon: ReactNode }> = [
+  { id: 'center', label: '居中打开', icon: <CenterOpenIcon /> },
+  { id: 'peek', label: '右侧展开', icon: <PanelRight size={17} /> },
+  { id: 'full', label: '全屏打开', icon: <FullOpenIcon /> },
+];
+
+/** 居中打开：大外框内嵌一个小框（lucide 无同款图形）。 */
+function CenterOpenIcon({ size = 17 }: { size?: number }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <rect x="8" y="9" width="8" height="6" rx="1.5" />
+    </svg>
+  );
+}
+
+/** 全屏打开：完整外框 + 四角向外的展开箭头（lucide 无同款图形）。 */
+function FullOpenIcon({ size = 17 }: { size?: number }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="m12.4 11.6 5-5M13.2 6.4h4.2v4.2" />
+      <path d="m11.6 12.4-5 5M10.8 17.6H6.6v-4.2" />
+    </svg>
+  );
 }
 
 const ViewTabContextMenu = forwardRef<HTMLDivElement, {
@@ -5389,6 +5487,7 @@ function ViewSettingsMenu({
   }
 
   if (pane === 'layout') {
+    const rowOpenMode = activeView.openMode || 'peek';
     return (
       <div className="akdb-view-settings-menu akdb-view-layout-menu" role="dialog" aria-label="布局" style={style}>
         <div className="akdb-column-visibility-head">
@@ -5418,7 +5517,27 @@ function ViewSettingsMenu({
           <ViewLayoutSwitch label="显示垂直线" checked={showVerticalLines} onChange={() => onChangeLayout({ showVerticalLines: !showVerticalLines })} />
           <ViewLayoutSwitch label="显示页面图标" checked={activeView.showPageIcon !== false} disabled onChange={() => {}} />
           <ViewLayoutSwitch label="所有内容换行显示" checked={wrapContent} onChange={() => onChangeLayout({ wrapContent: !wrapContent })} />
-          <ViewLayoutItem label="打开页面方式" detail="侧边预览" disabled />
+          <div className="akdb-open-mode-head">
+            <span>打开页面方式</span>
+          </div>
+          <div className="akdb-open-mode-grid" role="radiogroup" aria-label="打开页面方式">
+            {databaseOpenModeChoices.map((choice) => {
+              const active = rowOpenMode === choice.id;
+              return (
+                <button
+                  key={choice.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  className={`akdb-view-layout-card akdb-open-mode-card ${active ? 'is-active' : ''}`}
+                  onClick={() => onChangeLayout({ openMode: choice.id })}
+                >
+                  <span className="akdb-open-mode-card-icon">{choice.icon}</span>
+                  <span>{choice.label}</span>
+                </button>
+              );
+            })}
+          </div>
           <ViewLayoutNumber label="加载限制" value={activeView.limit || 50} onChange={(limit) => onChangeLayout({ limit })} />
         </div>
       </div>
