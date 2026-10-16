@@ -38,6 +38,20 @@ const DEFAULT_STATE: FindReplaceState = {
   currentIndex: -1,
 };
 
+const FIND_MATCH_HIGHLIGHT = 'akmd-find-match';
+const FIND_CURRENT_HIGHLIGHT = 'akmd-find-current';
+
+// Keep the full match list for the counter and navigation, but only render a
+// bounded window around the current hit. A short query can match thousands of
+// positions; creating one inline decoration for every hit blocks the UI for
+// seconds in large file-content blocks.
+const MAX_MATCH_DECORATIONS = 100;
+
+const supportsCssHighlights =
+  typeof CSS !== 'undefined'
+  && 'highlights' in CSS
+  && typeof Highlight === 'function';
+
 /**
  * Walk the ProseMirror document and return all case-insensitive matches
  * of `term` across text nodes. Matches do not span node boundaries.
@@ -62,17 +76,67 @@ function findMatches(doc: any, term: string): FindMatch[] {
 }
 
 /**
- * Build a DecorationSet that highlights every match. The current match
- * gets a distinct class so the panel can visually distinguish it.
+ * Build a DecorationSet for a bounded window of matches around the current
+ * hit. The current match gets a distinct class so the panel can visually
+ * distinguish it.
  */
 function buildDecorations(doc: any, state: FindReplaceState): DecorationSet {
   if (state.matches.length === 0) return DecorationSet.empty;
   const decorations: Decoration[] = [];
-  state.matches.forEach((m, i) => {
+  const anchorIndex = state.currentIndex >= 0 ? state.currentIndex : 0;
+  const halfWindow = Math.floor(MAX_MATCH_DECORATIONS / 2);
+  let start = Math.max(0, anchorIndex - halfWindow);
+  const end = Math.min(state.matches.length, start + MAX_MATCH_DECORATIONS);
+  start = Math.max(0, end - MAX_MATCH_DECORATIONS);
+
+  for (let i = start; i < end; i += 1) {
+    const m = state.matches[i];
     const className = i === state.currentIndex ? 'find-match-current' : 'find-match';
     decorations.push(Decoration.inline(m.from, m.to, { class: className }));
-  });
+  }
   return DecorationSet.create(doc, decorations);
+}
+
+function clearCssHighlights() {
+  if (!supportsCssHighlights) return;
+  CSS.highlights.delete(FIND_MATCH_HIGHLIGHT);
+  CSS.highlights.delete(FIND_CURRENT_HIGHLIGHT);
+}
+
+function updateCssHighlights(view: any, state: FindReplaceState) {
+  if (!supportsCssHighlights) return;
+  clearCssHighlights();
+  if (state.matches.length === 0) return;
+
+  const anchorIndex = state.currentIndex >= 0 ? state.currentIndex : 0;
+  const halfWindow = Math.floor(MAX_MATCH_DECORATIONS / 2);
+  let start = Math.max(0, anchorIndex - halfWindow);
+  const end = Math.min(state.matches.length, start + MAX_MATCH_DECORATIONS);
+  start = Math.max(0, end - MAX_MATCH_DECORATIONS);
+
+  const ranges: Range[] = [];
+  const currentRanges: Range[] = [];
+  for (let i = start; i < end; i += 1) {
+    const match = state.matches[i];
+    try {
+      const from = view.domAtPos(match.from);
+      const to = view.domAtPos(match.to);
+      const range = document.createRange();
+      range.setStart(from.node, from.offset);
+      range.setEnd(to.node, to.offset);
+      (i === state.currentIndex ? currentRanges : ranges).push(range);
+    } catch {
+      // A match can become stale for one update while the document is being
+      // replaced; the next transaction will rebuild the ranges.
+    }
+  }
+
+  if (ranges.length > 0) {
+    CSS.highlights.set(FIND_MATCH_HIGHLIGHT, new Highlight(...ranges));
+  }
+  if (currentRanges.length > 0) {
+    CSS.highlights.set(FIND_CURRENT_HIGHLIGHT, new Highlight(...currentRanges));
+  }
 }
 
 /**
@@ -289,9 +353,23 @@ export const FindReplaceExtension = Extension.create({
       props: {
         decorations(state) {
           const s = findReplaceKey.getState(state);
-          if (!s) return null;
+          if (!s || supportsCssHighlights) return null;
           return buildDecorations(state.doc, s);
         },
+      },
+      view(view) {
+        updateCssHighlights(view, findReplaceKey.getState(view.state) ?? { ...DEFAULT_STATE });
+        return {
+          update(updatedView, previousState) {
+            if (findReplaceKey.getState(previousState) === findReplaceKey.getState(updatedView.state)) {
+              return;
+            }
+            updateCssHighlights(updatedView, findReplaceKey.getState(updatedView.state) ?? { ...DEFAULT_STATE });
+          },
+          destroy() {
+            clearCssHighlights();
+          },
+        };
       },
     });
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { createReactBlockSpec } from '@blocknote/react';
 import { createExtension } from '@blocknote/core';
 import {
@@ -10,9 +10,11 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useSpaceStore } from '../../stores/spaceStore';
+import { usePreferenceStore } from '../../stores/preferenceStore';
 import { readSpaceFile, saveSpaceFileAs, displayFilePath } from '../../api/files';
 import { FilePickerMenu } from './FilePickerMenu';
 import { LANGUAGES, languageDisplayName } from './languages';
+import { renderFileContentHighlightLines } from './fileContentHighlight';
 
 /**
  * fileContent block
@@ -155,7 +157,11 @@ function FileContentComponent({ block, editor, contentRef }: any) {
   const path: string = block.props.path || '';
   const language: string = block.props.language || 'text';
   const { currentSpace } = useSpaceStore();
+  const codeTheme = usePreferenceStore((state) => state.getCodeTheme());
   const slug = currentSpace?.slug;
+  const inlineText = (block.content ?? [])
+    .map((c: any) => c?.text ?? '')
+    .join('');
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [missing, setMissing] = useState(false);
@@ -166,6 +172,100 @@ function FileContentComponent({ block, editor, contentRef }: any) {
   const [copied, setCopied] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const langBtnRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const previousLinesRef = useRef<string[]>([]);
+  const highlightGenerationRef = useRef(0);
+
+  const handleCodeScroll = useCallback(() => {
+    const overlay = overlayRef.current;
+    const pre = wrapperRef.current?.querySelector('.bn-file-content-pre') as HTMLElement | null;
+    if (!overlay || !pre) return;
+    overlay.scrollLeft = pre.scrollLeft;
+    overlay.scrollTop = pre.scrollTop;
+  }, []);
+
+  useEffect(() => {
+    const pre = wrapperRef.current?.querySelector('.bn-file-content-pre') as HTMLElement | null;
+    if (!pre) return;
+    pre.addEventListener('scroll', handleCodeScroll, { passive: true });
+    handleCodeScroll();
+    return () => pre.removeEventListener('scroll', handleCodeScroll);
+  }, [handleCodeScroll]);
+
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    if (!path || loading || !inlineText) {
+      overlay.replaceChildren();
+      previousLinesRef.current = [];
+      return;
+    }
+
+    const nextLines = inlineText.split('\n');
+    const previousLines = previousLinesRef.current;
+    const isInitialRender = previousLines.length === 0;
+
+    let prefix = 0;
+    while (
+      prefix < previousLines.length
+      && prefix < nextLines.length
+      && previousLines[prefix] === nextLines[prefix]
+    ) {
+      prefix += 1;
+    }
+
+    let previousEnd = previousLines.length;
+    let nextEnd = nextLines.length;
+    while (
+      previousEnd > prefix
+      && nextEnd > prefix
+      && previousLines[previousEnd - 1] === nextLines[nextEnd - 1]
+    ) {
+      previousEnd -= 1;
+      nextEnd -= 1;
+    }
+
+    while (overlay.children.length < nextLines.length) {
+      const line = document.createElement('div');
+      line.className = 'bn-file-content-highlight-line';
+      overlay.appendChild(line);
+    }
+    while (overlay.children.length > nextLines.length) {
+      overlay.lastElementChild?.remove();
+    }
+
+    // Keep existing token DOM while the next highlight frame is pending. Only
+    // brand-new/empty lines need a plain placeholder before their first paint.
+    for (let i = prefix; i < nextEnd; i += 1) {
+      const line = overlay.children[i] as HTMLElement | undefined;
+      if (line && (isInitialRender || line.childNodes.length === 0)) {
+        line.textContent = nextLines[i] ?? '';
+      }
+    }
+    previousLinesRef.current = nextLines;
+
+    const generation = ++highlightGenerationRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      void renderFileContentHighlightLines(inlineText, language, codeTheme).then((renderedLines) => {
+        if (
+          generation !== highlightGenerationRef.current
+          || overlayRef.current !== overlay
+        ) {
+          return;
+        }
+        for (let i = prefix; i < nextEnd; i += 1) {
+          const line = overlay.children[i] as HTMLElement | undefined;
+          if (line) line.innerHTML = renderedLines[i] ?? '';
+        }
+        handleCodeScroll();
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [codeTheme, handleCodeScroll, inlineText, language, loading, path]);
 
   // When a path is set but the block content is empty, hydrate by reading
   // the file. (Backend normally injects content during page load via
@@ -432,16 +532,23 @@ function FileContentComponent({ block, editor, contentRef }: any) {
           </div>
         </div>
       )}
-      {/* contentRef must always be mounted for inline content blocks.
-          Hidden while loading (display:none) so the not-yet-hydrated empty
-          area is not clickable/editable — prevents partial input from
-          replacing file content on save. */}
-      <pre
-        className={`bn-file-content-pre${path && !loading ? '' : ' is-hidden'}`}
-        data-language={language}
-        ref={contentRef}
-        spellCheck={false}
-      />
+      <div className="bn-file-content-body">
+        {/* contentRef must always be mounted for inline content blocks.
+            Hidden while loading (display:none) so the not-yet-hydrated empty
+            area is not clickable/editable — prevents partial input from
+            replacing file content on save. */}
+        <pre
+          className={`bn-inline-content bn-file-content-pre${path && !loading ? '' : ' is-hidden'}`}
+          data-language={language}
+          ref={contentRef}
+          spellCheck={false}
+        />
+        <div
+          ref={overlayRef}
+          className="bn-file-content-highlight-overlay"
+          aria-hidden="true"
+        />
+      </div>
       {!path && (
         <div className="bn-file-content-placeholder" contentEditable={false}>
           <FileCode size={20} />

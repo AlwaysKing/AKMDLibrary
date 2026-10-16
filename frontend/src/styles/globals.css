@@ -3,6 +3,10 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    color-scheme: light;
+  }
+
   html, body, #root {
     height: 100%;
   }
@@ -3863,7 +3867,13 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   cursor: not-allowed;
 }
 
+.bn-file-content-body {
+  position: relative;
+}
+
 .bn-file-content-pre {
+  position: relative;
+  z-index: 1;
   margin: 0 !important;
   padding: 16px !important;
   overflow-x: auto;
@@ -3873,6 +3883,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   white-space: pre;
   word-break: normal;
   overflow-wrap: normal;
+  tab-size: 4;
   font-family: ui-monospace, 'SF Mono', 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono', Courier, monospace;
   /* Match codeBlock content styling (see [data-content-type="codeBlock"]
      .bn-inline-content rule above). Without these the pre inherits the
@@ -3882,7 +3893,38 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
   line-height: 20.4px !important;
   -webkit-font-smoothing: auto !important;
   -moz-osx-font-smoothing: auto !important;
+  color: transparent !important;
+  caret-color: #2c2c2b;
   outline: none;
+}
+
+.bn-file-content-highlight-overlay {
+  box-sizing: border-box;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 16px;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-family: ui-monospace, 'SF Mono', 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono', Courier, monospace;
+  font-size: 13.6px !important;
+  font-weight: 400 !important;
+  line-height: 20.4px !important;
+  -webkit-font-smoothing: auto !important;
+  -moz-osx-font-smoothing: auto !important;
+  color: #2c2c2b;
+  tab-size: 4;
+}
+
+.bn-file-content-highlight-line {
+  min-height: 20.4px;
+  white-space: pre;
 }
 .bn-file-content-pre::-webkit-scrollbar {
   height: 10px;

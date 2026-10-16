@@ -38,7 +38,6 @@ import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSa
 import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
 import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
 import { SyncedBlockReferenceDialog } from './SyncedBlockReferenceDialog';
-import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
 import LinkPasteMenu from './LinkPasteMenu';
 import CodeBlockToolbar from './CodeBlockToolbar';
 import { FindReplaceExtension } from './FindReplaceExtension';
@@ -2684,7 +2683,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       const result = await uploadApi.upload(file, { pageId, spaceSlug });
       return result.path;
     },
-    _tiptapOptions: { extensions: [CustomTabIndent, CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension, createFileContentHighlightExtension(resolvedCodeTheme)] },
+    _tiptapOptions: { extensions: [CustomTabIndent, CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension] },
   } as any);
 
   // Wire up the editor ref for ToggleHeadingInputRules

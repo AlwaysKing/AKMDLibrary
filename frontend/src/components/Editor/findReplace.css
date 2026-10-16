@@ -1,7 +1,19 @@
 /* Find & Replace match highlights.
  *
- * Applied to ProseMirror inline Decorations created by FindReplaceExtension.
+ * Preferred path: CSS Custom Highlight API, which paints ranges without
+ * changing the editor DOM. The class rules below remain the fallback for
+ * browsers without that API.
  */
+
+::highlight(akmd-find-match) {
+  background-color: rgba(255, 213, 79, 0.3);
+  color: inherit;
+}
+
+::highlight(akmd-find-current) {
+  background-color: #ffc400;
+  color: inherit;
+}
 
 .find-match {
   background: rgba(255, 213, 79, 0.3);
