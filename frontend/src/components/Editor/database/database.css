@@ -685,9 +685,25 @@
 .akdb-row-overlay { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--akdb-menu-border); background: #fff; color: var(--akdb-menu-text); }
 .akdb-row-overlay-center { width: min(1200px, calc(100vw - 64px)); height: min(820px, calc(100vh - 56px)); border-radius: 12px; box-shadow: 0 18px 44px rgba(15,23,42,.18), 0 2px 8px rgba(15,23,42,.10); }
 .akdb-row-overlay-peek { position: fixed; top: 0; right: 0; bottom: 0; z-index: 119; width: min(1040px, calc(100vw - 240px)); border-width: 0 0 0 1px; box-shadow: -18px 0 44px rgba(15,23,42,.16); }
+.akdb-row-overlay-frame { display: block; flex: 1 1 auto; width: 100%; height: 100%; border: 0; background: #fff; }
+/* 行页面浮层打开时，抬高 BlockNote 的浮层（/ 菜单、块菜单等）：
+   它的 z-index 是写死的（菜单 80 / 侧边把手 20），否则会被浮层(119/120)盖住 */
+body:has(.akdb-row-overlay-peek) [data-floating-ui-focusable],
+body:has(.akdb-row-overlay-center) [data-floating-ui-focusable] { z-index: 130 !important; }
 .akdb-row-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; background: #fff; color: var(--akdb-menu-text); }
+/* iframe 内需要撑满视口，否则编辑器下方空白不属于滚动容器，点击/框选会失效 */
+.akdb-row-embed-root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .akdb-row-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; height: 45px; border-bottom: 1px solid var(--akdb-menu-divider); padding: 0 12px; }
 .akdb-row-view-tool-left { display: flex; align-items: center; gap: 2px; }
+.akdb-row-view-sync-text { display: inline-flex; align-items: center; gap: 4px; color: var(--akdb-menu-text-secondary); font-size: 12px; line-height: 16px; white-space: nowrap; }
+.akdb-row-view-spin { animation: akdb-row-view-spin 1s linear infinite; }
+@keyframes akdb-row-view-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.akdb-row-view-page-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font: inherit; font-size: 13px; font-weight: 400; line-height: 1.2; }
+.akdb-row-view-page-menu-item:hover { background: var(--akdb-menu-hover-bg); }
+.akdb-row-view-switch { position: relative; flex: 0 0 auto; box-sizing: content-box; width: 26px; height: 14px; border-radius: 999px; background: rgba(42,28,0,.18); padding: 2px; transition: background .16s ease; }
+.akdb-row-view-switch > span { display: block; width: 14px; height: 14px; border-radius: 999px; background: #fff; transition: transform .16s ease; }
+.akdb-row-view-switch.is-on { background: var(--c-bluTexAccPri, #2383e2); }
+.akdb-row-view-switch.is-on > span { transform: translateX(12px); }
 .akdb-row-view-tool-actions { display: flex; align-items: center; gap: 6px; }
 .akdb-row-view-tool-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-icon-secondary); cursor: pointer; padding: 0; }
 .akdb-row-view-tool-btn:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-icon); }
@@ -699,6 +715,7 @@
 .akdb-row-view-loading { display: flex; align-items: center; gap: 6px; padding: 16px 12px; color: var(--akdb-menu-text-tertiary); font-size: 13px; }
 .akdb-row-view-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .akdb-row-view-page { width: 100%; max-width: 912px; box-sizing: border-box; margin: 0 auto; padding: 40px 48px 80px; }
+.akdb-row-view-page.is-full-page { max-width: none; padding-left: 96px; padding-right: 96px; }
 .akdb-row-view-title { margin: 0 0 10px; color: var(--akdb-menu-text); font-size: 34px; font-weight: 700; line-height: 1.25; word-break: break-word; }
 .akdb-row-view-properties { display: grid; grid-template-columns: minmax(0, 1fr); }
 .akdb-row-view-property { display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 32px; }
@@ -741,6 +758,7 @@
 .akdb-row-view-rename input { width: 100%; height: var(--akdb-menu-control-height); border: 1px solid rgba(35,131,226,.85); border-radius: var(--akdb-menu-control-radius); background: var(--akdb-menu-input-bg); color: var(--akdb-menu-text); font: inherit; font-size: 13px; outline: none; padding: 0 6px; }
 .akdb-row-view-divider { margin: 18px 0 0; border-top: 1px solid var(--akdb-menu-divider); }
 .akdb-row-view-body { width: 100%; min-height: 320px; margin-top: 18px; border: 0; background: transparent; color: var(--akdb-menu-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 22px; outline: none; padding: 0; resize: vertical; }
+/* 行页面正文的块把手（自建：＋ 与六点菜单），层级高于浮层 */
 @media (max-width: 720px) {
   .akdb-row-view-properties { grid-template-columns: minmax(0, 1fr); }
   .akdb-row-view-page { padding: 28px 24px 64px; }

@@ -2605,6 +2605,10 @@ function buildInternalLinkDecorations(doc: any, spaceSlug: string, _editorView?:
 interface PageEditorProps {
   initialContent: string;
   pageIdentity: { spaceSlug: string; pageId: string };
+  /** 暴露“读取当前 markdown”的函数（行页面自建保存通道时用，不改变默认行为） */
+  registerMarkdownGetter?: (getter: (() => string) | null) => void;
+  /** 行页面：由外层负责保存，跳过内部的镜像写入（默认 false，普通页面行为不变） */
+  disableMirror?: boolean;
   onSyncStatusChange?: (status: 'unsaved' | 'syncing' | 'synced') => void;
   readOnly?: boolean;
   codeTheme?: CodeThemeValue;
@@ -2626,7 +2630,7 @@ const IMAGE_TOOLBAR_ICONS = {
   replace: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5L5 13l2.5-2.5"/><path d="M5 3v10"/><path d="M13.5 5.5L11 3 8.5 5.5"/><path d="M11 13V3"/></svg>`,
 };
 
-export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false, codeTheme }: PageEditorProps) {
+export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, registerMarkdownGetter, disableMirror = false, readOnly = false, codeTheme }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const immediateSyncInFlightRef = useRef<Promise<void> | null>(null);
   const immediateSyncQueuedRef = useRef(false);
@@ -5256,6 +5260,22 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     return blocksToMarkdown(blocks);
   }, [editor]);
 
+  // 行页面用：暴露“读取当前 markdown”，便于和 frontmatter 一起写回
+  const registerMarkdownGetterRef = useRef(registerMarkdownGetter);
+  registerMarkdownGetterRef.current = registerMarkdownGetter;
+  useEffect(() => {
+    registerMarkdownGetterRef.current?.(() => serializeEditorMarkdown(editor.document));
+    return () => registerMarkdownGetterRef.current?.(null);
+  }, [editor, serializeEditorMarkdown]);
+
+  // 行页面（disableMirror=true）由外层负责保存，这里跳过镜像写入
+  const disableMirrorRef = useRef(disableMirror);
+  disableMirrorRef.current = disableMirror;
+  const writeMirror = useCallback((slug: string, id: string, markdown: string) => {
+    if (disableMirrorRef.current) return Promise.resolve();
+    return createMirror(slug, id, markdown);
+  }, []);
+
   // Write mirror to IndexedDB — fast, local, no network
   const triggerMirror = useCallback(async () => {
     if (!hasChangesRef.current || readOnlyRef.current) return;
@@ -5267,7 +5287,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     // before syncModule ships the page markdown that references them.
     await persistFileContentBlocks(currentBlocks, spaceSlug);
     const markdown = serializeEditorMarkdown(currentBlocks);
-    await createMirror(spaceSlug, pageId, markdown);
+    await writeMirror(spaceSlug, pageId, markdown);
 
     hasChangesRef.current = false;
     onSyncStatusChangeRef.current?.('syncing');
@@ -5289,7 +5309,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
             // and page stay consistent on the backend.
             await persistFileContentBlocks(currentBlocks, spaceSlug);
             const markdown = serializeEditorMarkdown(editor.document);
-            await createMirror(spaceSlug, pageId, markdown);
+            await writeMirror(spaceSlug, pageId, markdown);
             hasChangesRef.current = false;
             onSyncStatusChangeRef.current?.('syncing');
             await flushSync();
@@ -5473,7 +5493,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
         await persistFileContentBlocks(currentBlocks, spaceSlug);
         const markdown = serializeEditorMarkdown(currentBlocks);
-        await createMirror(spaceSlug, pageId, markdown);
+        await writeMirror(spaceSlug, pageId, markdown);
         hasChangesRef.current = false;
         onSyncStatusChangeRef.current?.('syncing');
         await flushSync();
@@ -5590,7 +5610,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     await flushAllSyncedBlockSaves(editor.document, spaceSlug, pageId);
     await persistFileContentBlocks(editor.document, spaceSlug);
     const markdown = serializeEditorMarkdown(editor.document);
-    await createMirror(spaceSlug, pageId, markdown);
+    await writeMirror(spaceSlug, pageId, markdown);
     hasChangesRef.current = false;
     await flushSync();
     await useSpaceStore.getState().refreshAll();
@@ -5900,7 +5920,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           // 立即保存，让 backend maintainSubpageBlocks 在 sidebar 刷新前修正 sort_order
           await persistFileContentBlocks(editor.document, currentSpaceSlug);
           const markdown = serializeEditorMarkdown(editor.document);
-          await createMirror(currentSpaceSlug, currentPageId, markdown);
+          await writeMirror(currentSpaceSlug, currentPageId, markdown);
           hasChangesRef.current = false;
           await flushSync();
           await useSpaceStore.getState().refreshAll();
@@ -8166,7 +8186,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
       if (!hasChangesRef.current || readOnlyRef.current) return;
       const { spaceSlug, pageId } = identityRef.current;
       const markdown = serializeEditorMarkdown(editor.document);
-      await createMirror(spaceSlug, pageId, markdown);
+      await writeMirror(spaceSlug, pageId, markdown);
       hasChangesRef.current = false;
     });
     return () => {
@@ -8185,7 +8205,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
         try {
           const currentBlocks = editor.document;
           const markdown = serializeEditorMarkdown(currentBlocks);
-          createMirror(spaceSlug, pageId, markdown);
+          writeMirror(spaceSlug, pageId, markdown);
         } catch (error) {
           console.error('Failed to create mirror on unmount:', error);
         }
@@ -8201,7 +8221,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
           const currentBlocks = editor.document;
           const markdown = serializeEditorMarkdown(currentBlocks);
           const { spaceSlug, pageId } = identityRef.current;
-          createMirror(spaceSlug, pageId, markdown);
+          writeMirror(spaceSlug, pageId, markdown);
         } catch {
           // Best effort — IndexedDB write may not complete in all browsers
         }

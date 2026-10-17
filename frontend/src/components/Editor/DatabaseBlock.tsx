@@ -9,7 +9,6 @@ import { type User } from '../../api/auth';
 import { useSpaceStore } from '../../stores/spaceStore';
 import PageIcon from './PageIcon';
 import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, PersonTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
-import DatabaseRowView from './database/DatabaseRowView';
 import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
 import './database/database.css';
 
@@ -118,6 +117,27 @@ function DatabaseBlockComponent({ block, editor }: any) {
     }
     setRowPeek({ rowId, mode: rowOpenMode });
   };
+
+  // 浮层 iframe 内的行页面通过 postMessage 通知：关闭 / 全局展开
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (!data || data.source !== 'akmd-row-embed') return;
+      if (data.type === 'close') {
+        setRowPeek(null);
+        return;
+      }
+      if (data.type === 'open-full') {
+        const rowId = rowPeek?.rowId;
+        if (!rowId || !activeSource) return;
+        setRowPeek(null);
+        navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [rowPeek, activeSource, slug, navigate]);
   const showDatabaseTitle = activeView?.showSourceTitle !== false;
   const usedSourceIds = useMemo(() => Array.from(new Set(parsed.views.map((view) => view.source).filter((source): source is string => !!source))), [parsed.views]);
   const usedSources = useMemo(() => sources.filter((source) => usedSourceIds.includes(source.id)), [sources, usedSourceIds]);
@@ -1323,34 +1343,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
         rowPeek.mode === 'center' ? (
           <div className="akdb-row-overlay-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRowPeek(null); }}>
             <div className="akdb-row-overlay akdb-row-overlay-center" role="dialog" aria-modal="true" aria-label="行页面">
-              <DatabaseRowView
-                spaceSlug={slug}
-                dbId={activeSource}
-                rowId={rowPeek.rowId}
-                onClose={() => setRowPeek(null)}
-                onOpenFull={() => {
-                  const rowId = rowPeek.rowId;
-                  setRowPeek(null);
-                  navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
-                }}
-              />
+              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}`} />
             </div>
           </div>
         ) : (
           <>
             <div className="akdb-row-overlay-scrim" onMouseDown={() => setRowPeek(null)} />
             <div className="akdb-row-overlay akdb-row-overlay-peek" role="dialog" aria-modal="true" aria-label="行页面">
-              <DatabaseRowView
-                spaceSlug={slug}
-                dbId={activeSource}
-                rowId={rowPeek.rowId}
-                onClose={() => setRowPeek(null)}
-                onOpenFull={() => {
-                  const rowId = rowPeek.rowId;
-                  setRowPeek(null);
-                  navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
-                }}
-              />
+              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}`} />
             </div>
           </>
         ),

@@ -13,6 +13,7 @@ import FilesPage from './pages/FilesPage';
 import DatabasesPage from './pages/DatabasesPage';
 import DatabaseDetailPage from './pages/DatabaseDetailPage';
 import DatabaseRowPage from './pages/DatabaseRowPage';
+import EmbedDatabaseRowPage from './pages/EmbedDatabaseRowPage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 import { usePreferenceStore } from './stores/preferenceStore';
@@ -165,6 +166,15 @@ function App() {
           <Route index element={<WelcomePage />} />
         </Route>
         <Route path="/" element={<HomeRedirect />} />
+        {/* 浮层 iframe 专用：不带 App 外壳，独立文档里只有行页面（这样才能拿到原生块把手） */}
+        <Route
+          path="/embed/s/:spaceSlug/db/:dbId/row/:rowId"
+          element={
+            <ProtectedRoute>
+              <EmbedDatabaseRowPage />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );
