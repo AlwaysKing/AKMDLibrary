@@ -9,6 +9,10 @@ interface BreadcrumbProps {
   pageTitle?: string;
   spaceSlug: string;
   actions?: React.ReactNode;
+  /** 面包屑左侧的前置元素（如返回按钮） */
+  leading?: React.ReactNode;
+  /** 空间与当前标题之间的额外层级（如：数据库所在页面） */
+  trail?: Array<{ label: string; onClick?: () => void }>;
 }
 
 const SUBMENU_WIDTH = 260;
@@ -249,7 +253,7 @@ function findPagePath(pages: Page[], targetId: string, path: Page[] = []): Page[
 
 type ActiveItem = 'space' | number | null;
 
-export default function Breadcrumb({ pageTitle, spaceSlug, actions }: BreadcrumbProps) {
+export default function Breadcrumb({ pageTitle, spaceSlug, actions, leading, trail }: BreadcrumbProps) {
   const { currentSpace, pageTree, spaces } = useSpaceStore();
   const { sidebarCollapsed, toggleSidebar } = useOutletContext<{ sidebarCollapsed: boolean; toggleSidebar: () => void }>();
   const { pageId } = useParams<{ pageId: string }>();
@@ -327,6 +331,7 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
   return (
     <div className="relative z-[80] flex items-center justify-between text-base text-notion-textSecondary h-11 px-4 select-none">
       <div className="flex items-center gap-1">
+      {leading}
       {sidebarCollapsed && (
         <button
           onClick={toggleSidebar}
@@ -365,6 +370,22 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions }: Breadcrumb
           </div>
         )}
       </div>
+      {trail && trail.map((item, index) => (
+        <Fragment key={`trail:${index}`}>
+          <ChevronRight className="w-4 h-4 flex-shrink-0" />
+          {item.onClick ? (
+            <button
+              type="button"
+              className="max-w-[200px] truncate rounded px-1.5 py-0.5 text-notion-text transition-colors hover:bg-notion-hover"
+              onClick={item.onClick}
+            >
+              {item.label}
+            </button>
+          ) : (
+            <span className="max-w-[200px] truncate px-1.5 py-0.5 text-notion-text">{item.label}</span>
+          )}
+        </Fragment>
+      ))}
       {pagePath && pagePath.map((page, index) => (
         <Fragment key={page.id}>
           <ChevronRight className="w-4 h-4 flex-shrink-0" />

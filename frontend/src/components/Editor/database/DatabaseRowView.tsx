@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Maximize2, MessageSquare, MoreHorizontal, Pencil, Save, SlidersHorizontal, Trash2, UploadCloud, X } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseDetail, type DatabaseRow } from '../../../api/databases';
 import { gitApi, type GitRepoState } from '../../../api/git';
+import { pagesApi } from '../../../api/pages';
 import { usersApi } from '../../../api/users';
 import { type User } from '../../../api/auth';
 import { useSpaceStore } from '../../../stores/spaceStore';
+import { usePageStore } from '../../../stores/pageStore';
 import PageEditor from '../PageEditor';
+import Breadcrumb from '../Breadcrumb';
 import {
   buildFormulaProps,
   ColumnIconGlyph,
@@ -61,6 +65,9 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
   const [renameDraft, setRenameDraft] = useState('');
   const [gitState, setGitState] = useState<GitRepoState | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [parentPageTitle, setParentPageTitle] = useState('');
+  const [searchParams] = useSearchParams();
+  const fromPageId = searchParams.get('from');
   const pageMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const rowPageRef = useRef<HTMLDivElement | null>(null);
@@ -104,6 +111,21 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
     usersApi.list().then((next) => { if (alive) setUsers(next || []); }).catch(() => { if (alive) setUsers([]); });
     return () => { alive = false; };
   }, []);
+
+  // 面包屑中间层：来源页面（空间 / 页面 / subpage）
+  useEffect(() => {
+    if (!fromPageId) { setParentPageTitle(''); return; }
+    const current = usePageStore.getState().currentPage;
+    if (current?.id === fromPageId) {
+      setParentPageTitle(current.title || '未命名页面');
+      return;
+    }
+    let alive = true;
+    pagesApi.get(spaceSlug, fromPageId)
+      .then((page) => { if (alive) setParentPageTitle(page.title || '未命名页面'); })
+      .catch(() => { if (alive) setParentPageTitle(''); });
+    return () => { alive = false; };
+  }, [fromPageId, spaceSlug]);
 
   // 浮层打开期间抬高 BlockNote 浮层基准层级：它把菜单/block handler 挂在 body 下，
   // 默认层级(20/80)会低于本行页面浮层(119/120)，导致菜单被盖住。
@@ -337,76 +359,91 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
         ? '已同步'
         : '';
 
+  /** 顶部右侧操作区（面包屑 actions 与浮层工具栏共用） */
+  const toolActions = (
+    <>
+      {syncStatus === 'unsaved' && (
+        <>
+          <span className="akdb-row-view-sync-text">{syncLabel}</span>
+          <button
+            type="button"
+            className="akdb-row-view-tool-btn"
+            aria-label="立即同步"
+            title="立即同步 (等同于 Cmd+S)"
+            onClick={() => {
+              if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+              void saveNow();
+            }}
+          >
+            <Save size={15} strokeWidth={2} />
+          </button>
+        </>
+      )}
+      {syncStatus === 'syncing' && (
+        <span className="akdb-row-view-sync-text"><Loader2 size={13} className="akdb-row-view-spin" />同步中</span>
+      )}
+      {syncStatus === 'synced' && (
+        <span className="akdb-row-view-sync-text">已同步<Check size={13} strokeWidth={2} /></span>
+      )}
+      {gitState?.is_repo && rowDirty && (
+        <button
+          type="button"
+          className="akdb-row-view-tool-btn"
+          aria-label="提交此页面到 git"
+          title={`提交此页面到 git (${rowRepoPath})`}
+          disabled={committing}
+          onClick={() => void handleCommitRow()}
+        >
+          {committing ? <Loader2 size={15} className="akdb-row-view-spin" /> : <UploadCloud size={15} strokeWidth={2} />}
+        </button>
+      )}
+      <button
+        ref={pageMenuButtonRef}
+        type="button"
+        className="akdb-row-view-tool-btn"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        aria-expanded={!!pageMenu}
+        onClick={togglePageMenu}
+      >
+        <MoreHorizontal size={16} strokeWidth={2} />
+      </button>
+    </>
+  );
+
   return (
     <div className={`akdb-row-view ${className || ''}`.trim()}>
-      <div className="akdb-row-view-toolbar">
-        <div className="akdb-row-view-tool-left">
-          {onBack && (
-            <button type="button" className="akdb-row-view-tool-btn" aria-label="返回数据库" onClick={onBack}>
+      {onBack ? (
+        /* 全屏路由：与普通页面一致，导航与操作合并为一行 */
+        <Breadcrumb
+          pageTitle={titleValue || '未命名'}
+          spaceSlug={spaceSlug}
+          trail={parentPageTitle ? [{ label: parentPageTitle, onClick: onBack }] : undefined}
+          leading={(
+            <button type="button" className="akdb-row-view-tool-btn" aria-label="返回数据库" title="返回数据库" onClick={onBack}>
               <ArrowLeft size={16} strokeWidth={2} />
             </button>
           )}
-          {onClose && (
-            <button type="button" className="akdb-row-view-tool-btn" aria-label="关闭" onClick={onClose}>
-              <X size={16} strokeWidth={2} />
-            </button>
-          )}
-          {onOpenFull && (
-            <button type="button" className="akdb-row-view-tool-btn" aria-label="全局展开" title="全局展开" onClick={onOpenFull}>
-              <Maximize2 size={16} strokeWidth={2} />
-            </button>
-          )}
-          {!onBack && !onOpenFull && <span className="akdb-row-view-tool-spacer" />}
-        </div>
-        <div className="akdb-row-view-tool-actions">
-          {syncStatus === 'unsaved' && (
-            <>
-              <span className="akdb-row-view-sync-text">{syncLabel}</span>
-              <button
-                type="button"
-                className="akdb-row-view-tool-btn"
-                aria-label="立即同步"
-                title="立即同步 (等同于 Cmd+S)"
-                onClick={() => {
-                  if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
-                  void saveNow();
-                }}
-              >
-                <Save size={15} strokeWidth={2} />
+          actions={toolActions}
+        />
+      ) : (
+        <div className="akdb-row-view-toolbar">
+          <div className="akdb-row-view-tool-left">
+            {onClose && (
+              <button type="button" className="akdb-row-view-tool-btn" aria-label="关闭" onClick={onClose}>
+                <X size={16} strokeWidth={2} />
               </button>
-            </>
-          )}
-          {syncStatus === 'syncing' && (
-            <span className="akdb-row-view-sync-text"><Loader2 size={13} className="akdb-row-view-spin" />同步中</span>
-          )}
-          {syncStatus === 'synced' && (
-            <span className="akdb-row-view-sync-text">已同步<Check size={13} strokeWidth={2} /></span>
-          )}
-          {gitState?.is_repo && rowDirty && (
-            <button
-              type="button"
-              className="akdb-row-view-tool-btn"
-              aria-label="提交此页面到 git"
-              title={`提交此页面到 git (${rowRepoPath})`}
-              disabled={committing}
-              onClick={() => void handleCommitRow()}
-            >
-              {committing ? <Loader2 size={15} className="akdb-row-view-spin" /> : <UploadCloud size={15} strokeWidth={2} />}
-            </button>
-          )}
-          <button
-            ref={pageMenuButtonRef}
-            type="button"
-            className="akdb-row-view-tool-btn"
-            aria-label="更多操作"
-            aria-haspopup="menu"
-            aria-expanded={!!pageMenu}
-            onClick={togglePageMenu}
-          >
-            <MoreHorizontal size={16} strokeWidth={2} />
-          </button>
+            )}
+            {onOpenFull && (
+              <button type="button" className="akdb-row-view-tool-btn" aria-label="全局展开" title="全局展开" onClick={onOpenFull}>
+                <Maximize2 size={16} strokeWidth={2} />
+              </button>
+            )}
+            {!onOpenFull && <span className="akdb-row-view-tool-spacer" />}
+          </div>
+          <div className="akdb-row-view-tool-actions">{toolActions}</div>
         </div>
-      </div>
+      )}
 
       {error && <div className="akdb-row-view-error">{error}</div>}
 

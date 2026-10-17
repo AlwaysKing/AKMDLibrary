@@ -7,6 +7,7 @@ import { databasesApi, type DatabaseColumn, type DatabaseSummary } from '../../a
 import { usersApi } from '../../api/users';
 import { type User } from '../../api/auth';
 import { useSpaceStore } from '../../stores/spaceStore';
+import { usePageStore } from '../../stores/pageStore';
 import PageIcon from './PageIcon';
 import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, PersonTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
 import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
@@ -67,7 +68,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
-  const [rowPeek, setRowPeek] = useState<{ rowId: string; mode: 'peek' | 'center' } | null>(null);
+  const [rowPeek, setRowPeek] = useState<{ rowId: string; mode: 'peek' | 'center'; fromPageId?: string } | null>(null);
   const [iconPickerRequest, setIconPickerRequest] = useState(0);
   const [viewContextMenu, setViewContextMenu] = useState<{ viewId: string; top: number; left: number; pane: 'main' | 'source' } | null>(null);
   const [createViewMenu, setCreateViewMenu] = useState<{ top: number; left: number; step: 'type' | 'source'; type?: DatabaseViewType; showAll?: boolean; query?: string } | null>(null);
@@ -111,11 +112,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
   // 统一的行页面打开入口：全屏走路由，居中/右侧展开用浮层。
   const openRow = (rowId: string) => {
     if (!activeSource) return;
+    // 记录来源页面，供行页面面包屑显示「空间 / 页面 / subpage」
+    const fromPageId = usePageStore.getState().currentPage?.id;
+    const fromQuery = fromPageId ? `?from=${fromPageId}` : '';
     if (rowOpenMode === 'full') {
-      navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+      navigate(`/s/${slug}/db/${activeSource}/row/${rowId}${fromQuery}`);
       return;
     }
-    setRowPeek({ rowId, mode: rowOpenMode });
+    setRowPeek({ rowId, mode: rowOpenMode, fromPageId });
   };
 
   // 浮层 iframe 内的行页面通过 postMessage 通知：关闭 / 全局展开
@@ -131,8 +135,9 @@ function DatabaseBlockComponent({ block, editor }: any) {
       if (data.type === 'open-full') {
         const rowId = rowPeek?.rowId;
         if (!rowId || !activeSource) return;
+        const fromQuery = rowPeek?.fromPageId ? `?from=${rowPeek.fromPageId}` : '';
         setRowPeek(null);
-        navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+        navigate(`/s/${slug}/db/${activeSource}/row/${rowId}${fromQuery}`);
       }
     };
     window.addEventListener('message', handleMessage);
@@ -1343,14 +1348,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
         rowPeek.mode === 'center' ? (
           <div className="akdb-row-overlay-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRowPeek(null); }}>
             <div className="akdb-row-overlay akdb-row-overlay-center" role="dialog" aria-modal="true" aria-label="行页面">
-              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}`} />
+              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}${rowPeek.fromPageId ? `?from=${rowPeek.fromPageId}` : ''}`} />
             </div>
           </div>
         ) : (
           <>
             <div className="akdb-row-overlay-scrim" onMouseDown={() => setRowPeek(null)} />
             <div className="akdb-row-overlay akdb-row-overlay-peek" role="dialog" aria-modal="true" aria-label="行页面">
-              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}`} />
+              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}${rowPeek.fromPageId ? `?from=${rowPeek.fromPageId}` : ''}`} />
             </div>
           </>
         ),
