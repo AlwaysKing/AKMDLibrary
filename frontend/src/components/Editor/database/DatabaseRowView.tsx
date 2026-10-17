@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Maximize2, MessageSquare, MoreHorizontal, Pencil, Save, SlidersHorizontal, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Maximize2, MoreHorizontal, Pencil, Save, SlidersHorizontal, Trash2, UploadCloud, X } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseDetail, type DatabaseRow } from '../../../api/databases';
 import { gitApi, type GitRepoState } from '../../../api/git';
 import { pagesApi } from '../../../api/pages';
@@ -14,6 +14,7 @@ import Breadcrumb from '../Breadcrumb';
 import {
   buildFormulaProps,
   ColumnIconGlyph,
+  ColumnPropertySubmenu,
   OptionSelect,
   OptionMultiSelect,
   OptionTag,
@@ -60,6 +61,7 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
   const [foldedPropertyIds, setFoldedPropertyIds] = useState<string[]>([]);
   const [revealFolded, setRevealFolded] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<{ columnId: string; top: number; left: number } | null>(null);
+  const [propertyEditor, setPropertyEditor] = useState<{ columnId: string; top: number; left: number } | null>(null);
   const [pageMenu, setPageMenu] = useState<{ top: number; left: number } | null>(null);
   const [renamingColumnId, setRenamingColumnId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -68,6 +70,7 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
   const [parentPageTitle, setParentPageTitle] = useState('');
   const [searchParams] = useSearchParams();
   const fromPageId = searchParams.get('from');
+  const orderParam = searchParams.get('order');
   const pageMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const rowPageRef = useRef<HTMLDivElement | null>(null);
@@ -144,13 +147,26 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
     () => buildFormulaProps(schema?.columns || [], row || { uuid: rowId, values: {} }),
     [schema?.columns, row, rowId],
   );
-  const editableColumns = useMemo(
+  /** 数据源里的可编辑列（schema 顺序） */
+  const schemaEditableColumns = useMemo(
     () => (schema?.columns || []).filter((column) => !column.auto && column.type !== 'formula' && column.type !== 'created_time' && column.type !== 'last_edited_time' && column.type !== 'last_edited_user' && column.type !== 'linked'),
     [schema?.columns],
   );
+  /** 展示顺序：优先按来源 table view 的列顺序，未出现在视图里的列排在最后 */
+  const editableColumns = useMemo(() => {
+    if (!orderParam) return schemaEditableColumns;
+    const order = orderParam.split(',').map((id) => id.trim()).filter(Boolean);
+    if (!order.length) return schemaEditableColumns;
+    const rank = new Map(order.map((id, index) => [id, index]));
+    return [...schemaEditableColumns].sort((a, b) => {
+      const ra = rank.has(a.id) ? rank.get(a.id)! : Number.MAX_SAFE_INTEGER;
+      const rb = rank.has(b.id) ? rank.get(b.id)! : Number.MAX_SAFE_INTEGER;
+      return ra - rb;
+    });
+  }, [schemaEditableColumns, orderParam]);
   const titleColumn = useMemo(
-    () => editableColumns.find((column) => column.type === 'text') || editableColumns[0],
-    [editableColumns],
+    () => schemaEditableColumns.find((column) => column.type === 'text') || schemaEditableColumns[0],
+    [schemaEditableColumns],
   );
   const titleValue = titleColumn ? String(row?.values?.[titleColumn.id] ?? '') : '';
 
@@ -287,6 +303,37 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
     return option;
   };
 
+  /** 更新列 schema（编辑属性面板用） */
+  const applyColumnPatch = async (column: DatabaseColumn, patch: Partial<DatabaseColumn>) => {
+    try {
+      setSchema(await databasesApi.updateColumn(spaceSlug, dbId, column.id, patch));
+    } catch {
+      setError('属性更新失败');
+    }
+  };
+  const updateColumnConfig = (column: DatabaseColumn, patch: Record<string, any>) => {
+    void applyColumnPatch(column, { config: { ...(column.config || {}), ...patch } });
+  };
+  const updateColumnOption = (column: DatabaseColumn, optionID: string, patch: Record<string, any>) => {
+    const options = ((column.config?.options || []) as any[]).map((option) => option.id === optionID ? { ...option, ...patch } : option);
+    updateColumnConfig(column, { options });
+  };
+  const reorderColumnOption = (column: DatabaseColumn, sourceID: string, targetID: string) => {
+    const options = [...((column.config?.options || []) as any[])];
+    const from = options.findIndex((option) => option.id === sourceID);
+    const to = options.findIndex((option) => option.id === targetID);
+    if (from < 0 || to < 0 || from === to) return;
+    const [moved] = options.splice(from, 1);
+    options.splice(to, 0, moved);
+    updateColumnConfig(column, { options });
+  };
+  const deleteColumnOption = (column: DatabaseColumn, optionID: string) => {
+    updateColumnConfig(column, { options: ((column.config?.options || []) as any[]).filter((option) => option.id !== optionID) });
+  };
+  const updateColumnDefault = (column: DatabaseColumn, value: any) => {
+    void applyColumnPatch(column, { default: value });
+  };
+
   const commitRename = async (column: DatabaseColumn) => {
     const nextName = renameDraft.trim();
     setRenamingColumnId(null);
@@ -334,6 +381,23 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [propertyMenu]);
+
+  // 编辑属性面板：点击外部关闭
+  useEffect(() => {
+    if (!propertyEditor) return;
+    const close = (event: MouseEvent) => {
+      const el = event.target as Element | null;
+      if (el?.closest('.akdb-row-view-property-editor')) return;
+      setPropertyEditor(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPropertyEditor(null); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [propertyEditor]);
 
   useEffect(() => {
     if (!pageMenu) return;
@@ -472,7 +536,19 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
             <div className="akdb-row-view-properties">
               {displayColumns.map((column) => (
                 <div className="akdb-row-view-property" key={column.id}>
-                  <span className="akdb-row-view-property-name">
+                  <span
+                    className="akdb-row-view-property-name"
+                    onContextMenu={(event) => {
+                      // 属性名右键：打开属性菜单
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setPropertyMenu({
+                        columnId: column.id,
+                        top: Math.min(event.clientY, window.innerHeight - 240),
+                        left: Math.min(event.clientX, window.innerWidth - 248),
+                      });
+                    }}
+                  >
                     <button
                       type="button"
                       className="akdb-row-view-property-label"
@@ -489,7 +565,14 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
                       <span className="akdb-row-view-property-label-text">{column.name}</span>
                     </button>
                   </span>
-                  <span className="akdb-row-view-property-value">
+                  <span
+                    className="akdb-row-view-property-value"
+                    onContextMenu={(event) => {
+                      // 属性内容右键：直接屏蔽，不弹菜单
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                  >
                     <PropertyValue
                       column={column}
                       value={row?.values?.[column.id] ?? ''}
@@ -595,13 +678,23 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
                 <span>重命名</span>
               </button>
             )}
-            <button type="button" className="akdb-row-context-item" role="menuitem" onClick={() => setPropertyMenu(null)}>
+            <button
+              type="button"
+              className="akdb-row-context-item"
+              role="menuitem"
+              onClick={() => {
+                const menu = propertyMenu;
+                setPropertyMenu(null);
+                if (!menu) return;
+                setPropertyEditor({
+                  columnId: column.id,
+                  top: menu.top,
+                  left: Math.max(8, Math.min(menu.left, window.innerWidth - 320)),
+                });
+              }}
+            >
               <SlidersHorizontal size={16} strokeWidth={2} />
               <span>编辑属性</span>
-            </button>
-            <button type="button" className="akdb-row-context-item" role="menuitem" onClick={() => setPropertyMenu(null)}>
-              <MessageSquare size={16} strokeWidth={2} />
-              <span>评论</span>
             </button>
             <div className="akdb-row-view-property-menu-sep" />
             <button
@@ -623,6 +716,52 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
               <Trash2 size={16} strokeWidth={2} />
               <span>删除属性</span>
             </button>
+          </div>,
+          document.body,
+        );
+      })()}
+      {propertyEditor && (() => {
+        const column = editableColumns.find((item) => item.id === propertyEditor.columnId);
+        if (!column) return null;
+        return createPortal(
+          <div
+            className="akdb-row-view-property-editor"
+            role="dialog"
+            aria-label="编辑属性"
+            style={{ top: propertyEditor.top, left: propertyEditor.left }}
+          >
+            <div className="akdb-row-view-property-editor-head">
+              <span>{column.name}</span>
+              <button type="button" aria-label="关闭属性编辑" onClick={() => setPropertyEditor(null)}>
+                <X size={15} strokeWidth={2} />
+              </button>
+            </div>
+            <ColumnPropertySubmenu
+              key={column.id}
+              column={column}
+              align={undefined}
+              style={{
+                position: 'static',
+                zIndex: 'auto',
+                width: 'auto',
+                minWidth: 'auto',
+                maxWidth: 'none',
+                maxHeight: 'none',
+                overflow: 'visible',
+                border: 0,
+                borderRadius: 0,
+                background: 'transparent',
+                boxShadow: 'none',
+                padding: '3px 0 5px',
+              }}
+              onCreateOption={(label) => createOption(column, label)}
+              onUpdateOption={(optionID, patch) => updateColumnOption(column, optionID, patch)}
+              onReorderOption={(sourceID, targetID) => reorderColumnOption(column, sourceID, targetID)}
+              onDeleteOption={(optionID) => deleteColumnOption(column, optionID)}
+              onUpdateConfig={(patch) => updateColumnConfig(column, patch)}
+              onUpdateDefault={(value) => updateColumnDefault(column, value)}
+              onChangeAlign={() => {}}
+            />
           </div>,
           document.body,
         );

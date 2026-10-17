@@ -753,6 +753,11 @@ body:has(.akdb-row-overlay-center) [data-floating-ui-focusable] { z-index: 130 !
 .akdb-row-view-more { display: inline-flex; align-items: center; gap: 4px; height: 28px; margin-top: 6px; border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text-secondary); cursor: pointer; padding: 0 6px; font: inherit; font-size: 13px; }
 .akdb-row-view-more:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-text); }
 .akdb-row-view-property-menu-sep { margin: 4px 0; border-top: 1px solid var(--akdb-menu-divider); }
+.akdb-row-view-property-editor { position: fixed; z-index: 152; box-sizing: border-box; width: min(320px, calc(100vw - 24px)); max-height: min(72vh, 600px); overflow: auto; border: 1px solid var(--akdb-menu-border); border-radius: var(--akdb-menu-radius); background: var(--akdb-menu-bg); box-shadow: var(--akdb-menu-shadow); padding: 6px 8px 8px; color: var(--akdb-menu-text); scrollbar-width: thin; }
+.akdb-row-view-property-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-bottom: 2px; }
+.akdb-row-view-property-editor-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; line-height: 20px; }
+.akdb-row-view-property-editor-head > button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-icon-secondary); cursor: pointer; padding: 0; }
+.akdb-row-view-property-editor-head > button:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-icon); }
 .akdb-row-view-rename { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 8px; }
 .akdb-row-view-rename > svg { color: var(--akdb-menu-icon-secondary); }
 .akdb-row-view-rename input { width: 100%; height: var(--akdb-menu-control-height); border: 1px solid rgba(35,131,226,.85); border-radius: var(--akdb-menu-control-radius); background: var(--akdb-menu-input-bg); color: var(--akdb-menu-text); font: inherit; font-size: 13px; outline: none; padding: 0 6px; }

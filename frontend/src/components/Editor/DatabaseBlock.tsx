@@ -68,7 +68,7 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const [pendingBind, setPendingBind] = useState<DatabaseSummary | null>(null);
   const [binding, setBinding] = useState(false);
   const [selectedRowCount, setSelectedRowCount] = useState(0);
-  const [rowPeek, setRowPeek] = useState<{ rowId: string; mode: 'peek' | 'center'; fromPageId?: string } | null>(null);
+  const [rowPeek, setRowPeek] = useState<{ rowId: string; mode: 'peek' | 'center'; fromPageId?: string; columnOrder?: string[] } | null>(null);
   const [iconPickerRequest, setIconPickerRequest] = useState(0);
   const [viewContextMenu, setViewContextMenu] = useState<{ viewId: string; top: number; left: number; pane: 'main' | 'source' } | null>(null);
   const [createViewMenu, setCreateViewMenu] = useState<{ top: number; left: number; step: 'type' | 'source'; type?: DatabaseViewType; showAll?: boolean; query?: string } | null>(null);
@@ -114,12 +114,19 @@ function DatabaseBlockComponent({ block, editor }: any) {
     if (!activeSource) return;
     // 记录来源页面，供行页面面包屑显示「空间 / 页面 / subpage」
     const fromPageId = usePageStore.getState().currentPage?.id;
-    const fromQuery = fromPageId ? `?from=${fromPageId}` : '';
+    // 记录视图列顺序，行页面按 table view 的顺序展示属性
+    const columnOrder = (activeView?.columns || [])
+      .map((rule) => rule.property)
+      .filter((id): id is string => !!id);
+    const params = new URLSearchParams();
+    if (fromPageId) params.set('from', fromPageId);
+    if (columnOrder.length) params.set('order', columnOrder.join(','));
+    const fromQuery = params.toString() ? `?${params.toString()}` : '';
     if (rowOpenMode === 'full') {
       navigate(`/s/${slug}/db/${activeSource}/row/${rowId}${fromQuery}`);
       return;
     }
-    setRowPeek({ rowId, mode: rowOpenMode, fromPageId });
+    setRowPeek({ rowId, mode: rowOpenMode, fromPageId, columnOrder });
   };
 
   // 浮层 iframe 内的行页面通过 postMessage 通知：关闭 / 全局展开
@@ -135,7 +142,10 @@ function DatabaseBlockComponent({ block, editor }: any) {
       if (data.type === 'open-full') {
         const rowId = rowPeek?.rowId;
         if (!rowId || !activeSource) return;
-        const fromQuery = rowPeek?.fromPageId ? `?from=${rowPeek.fromPageId}` : '';
+        const params = new URLSearchParams();
+        if (rowPeek?.fromPageId) params.set('from', rowPeek.fromPageId);
+        if (rowPeek?.columnOrder?.length) params.set('order', rowPeek.columnOrder.join(','));
+        const fromQuery = params.toString() ? `?${params.toString()}` : '';
         setRowPeek(null);
         navigate(`/s/${slug}/db/${activeSource}/row/${rowId}${fromQuery}`);
       }
@@ -1181,6 +1191,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
   const rowSelectionToolbar = selectedRowCount > 0 ? <RowSelectionToolbar blockId={block.id} count={selectedRowCount} /> : null;
   const showViewTabs = parsed.views.length > 1 || !showDatabaseTitle;
   const showBlockHeader = showDatabaseTitle;
+  /** 浮层 iframe 的 query（来源页面 + 视图列顺序） */
+  const rowEmbedQuery = (() => {
+    if (!rowPeek) return '';
+    const params = new URLSearchParams();
+    if (rowPeek.fromPageId) params.set('from', rowPeek.fromPageId);
+    if (rowPeek.columnOrder?.length) params.set('order', rowPeek.columnOrder.join(','));
+    return params.toString() ? `?${params.toString()}` : '';
+  })();
 
   return (
     <div
@@ -1348,14 +1366,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
         rowPeek.mode === 'center' ? (
           <div className="akdb-row-overlay-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRowPeek(null); }}>
             <div className="akdb-row-overlay akdb-row-overlay-center" role="dialog" aria-modal="true" aria-label="行页面">
-              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}${rowPeek.fromPageId ? `?from=${rowPeek.fromPageId}` : ''}`} />
+              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}${rowEmbedQuery}`} />
             </div>
           </div>
         ) : (
           <>
             <div className="akdb-row-overlay-scrim" onMouseDown={() => setRowPeek(null)} />
             <div className="akdb-row-overlay akdb-row-overlay-peek" role="dialog" aria-modal="true" aria-label="行页面">
-              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}${rowPeek.fromPageId ? `?from=${rowPeek.fromPageId}` : ''}`} />
+              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}${rowEmbedQuery}`} />
             </div>
           </>
         ),
