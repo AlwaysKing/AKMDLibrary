@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import DesktopTitleBar from './DesktopTitleBar';
 import { ClaudeChat } from '../ClaudeChat';
 import { useUndoStore } from '../../stores/undoStore';
 import { usePreferenceStore } from '../../stores/preferenceStore';
+import { isDesktopRuntime } from '../../utils/desktopRuntime';
 
 const DEFAULT_SIDEBAR_WIDTH = 270;
 const MIN_SIDEBAR_WIDTH = 220;
@@ -14,6 +16,7 @@ function clampSidebarWidth(width: number) {
 }
 
 export default function AppLayout() {
+  const isDesktopShell = isDesktopRuntime();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
@@ -111,14 +114,22 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen bg-notion-bg">
+    <div className="flex h-full bg-notion-bg">
       <div
-        className={`flex-shrink-0 overflow-hidden ${isResizingSidebar ? '' : 'transition-[width] duration-200 ease-in-out'}`}
+        className={`flex h-full flex-shrink-0 flex-col overflow-hidden border-r border-notion-border ${isResizingSidebar ? '' : 'transition-[width] duration-200 ease-in-out'}`}
         style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
       >
-        <Sidebar collapsed={sidebarCollapsed} onToggle={toggle} />
+        {isDesktopShell && (
+          <div
+            className="desktop-titlebar h-8 flex-shrink-0 bg-notion-sidebarBg"
+            aria-hidden="true"
+          />
+        )}
+        <div className="min-h-0 flex-1">
+          <Sidebar collapsed={sidebarCollapsed} onToggle={toggle} />
+        </div>
       </div>
-      {!sidebarCollapsed && (
+      {!sidebarCollapsed && !isDesktopShell && (
         <div
           className="w-1 cursor-col-resize bg-transparent transition-colors hover:bg-notion-border"
           onMouseDown={handleResizeStart}
@@ -127,7 +138,19 @@ export default function AppLayout() {
           aria-label="Resize sidebar"
         />
       )}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="relative flex-1 flex flex-col overflow-hidden">
+        {!sidebarCollapsed && isDesktopShell && (
+          <div
+            className="absolute inset-y-0 left-0 z-20 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-notion-border"
+            onMouseDown={handleResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+          />
+        )}
+        {isDesktopShell && (
+          <DesktopTitleBar sidebarWidth={sidebarCollapsed ? 0 : sidebarWidth} />
+        )}
         <Outlet context={{ sidebarCollapsed, toggleSidebar: toggle }} />
       </main>
       <ClaudeChat />

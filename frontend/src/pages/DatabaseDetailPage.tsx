@@ -229,7 +229,7 @@ export default function DatabaseDetailPage() {
               </div>
             </div>
             {definitionMode === 'visual' ? (
-              <div className="grid h-[calc(100vh-310px)] min-h-[360px] grid-cols-1 overflow-hidden lg:grid-cols-[minmax(240px,280px)_1fr]">
+              <div className="database-schema-split grid min-h-[360px] grid-cols-1 overflow-hidden lg:grid-cols-[minmax(240px,280px)_1fr]">
                 <div className="min-h-0 overflow-y-auto border-r border-notion-border bg-white">
                   <div className="px-3 py-2 border-b border-notion-border text-xs font-medium text-notion-textSecondary">字段</div>
                   <div className="divide-y divide-notion-border">

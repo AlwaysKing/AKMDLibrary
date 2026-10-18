@@ -79,6 +79,13 @@ func (s *Scanner) ScanPageTree(spaceSlug string) ([]*model.PageNode, error) {
 
 // resolveSpaceDir finds the actual directory for a space slug.
 func (s *Scanner) resolveSpaceDir(spaceSlug string) (string, string) {
+	if personalDir, ok := PersonalWorkspaceRelDir(spaceSlug); ok {
+		absDir := filepath.Join(s.docsDir, personalDir)
+		if info, err := os.Stat(absDir); err == nil && info.IsDir() {
+			return absDir, personalDir
+		}
+	}
+
 	exactPath := filepath.Join(s.docsDir, spaceSlug)
 	if info, err := os.Stat(exactPath); err == nil && info.IsDir() {
 		return exactPath, spaceSlug
@@ -168,6 +175,25 @@ func (s *Scanner) scanDirectory(dirPath string, pathPrefix string) ([]*model.Pag
 
 func generateSlug(name string) string {
 	return name
+}
+
+func PersonalWorkspaceRelDir(spaceSlug string) (string, bool) {
+	if !model.IsPersonalSpaceSlug(spaceSlug) {
+		return "", false
+	}
+	userUUID := strings.TrimPrefix(spaceSlug, model.PersonalSpacePrefix)
+	if userUUID == "" || userUUID != filepath.Base(userUUID) || strings.ContainsAny(userUUID, `/\`) {
+		return "", false
+	}
+	return filepath.Join(".personal", userUUID), true
+}
+
+func PersonalWorkspacePath(docsDir string, spaceSlug string) (string, bool) {
+	relDir, ok := PersonalWorkspaceRelDir(spaceSlug)
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(docsDir, relDir), true
 }
 
 // readPageMeta reads a .md file's frontmatter. If no ID exists in frontmatter,

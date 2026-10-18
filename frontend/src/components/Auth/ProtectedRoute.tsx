@@ -12,7 +12,7 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-notion-bg">
+      <div className="min-h-full flex items-center justify-center bg-notion-bg">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-notion-text"></div>
       </div>
     );

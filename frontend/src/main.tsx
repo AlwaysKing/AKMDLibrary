@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles/globals.css'
 import App from './App.tsx'
+import { isDesktopRuntime } from './utils/desktopRuntime'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -11,7 +12,7 @@ createRoot(document.getElementById('root')!).render(
 
 // Register the PWA service worker (production only — HMR + SW don't mix).
 // On update, skip waiting and reload so the new App Shell takes effect.
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
+if ('serviceWorker' in navigator && import.meta.env.PROD && !isDesktopRuntime()) {
   navigator.serviceWorker.register('/sw.js').then((reg) => {
     reg.addEventListener('updatefound', () => {
       const installing = reg.installing

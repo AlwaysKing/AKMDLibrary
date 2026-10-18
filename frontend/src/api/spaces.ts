@@ -29,6 +29,13 @@ export interface SpaceMember {
   created_at: string;
 }
 
+export type SpaceImportMode = 'copy' | 'link';
+
+export interface CreateSpaceData extends Partial<Space> {
+  source_path?: string;
+  import_mode?: SpaceImportMode;
+}
+
 export const spacesApi = {
   list: async (): Promise<Space[]> => {
     const response = await apiClient.get<Space[]>('/spaces');
@@ -45,7 +52,7 @@ export const spacesApi = {
     return response.data;
   },
 
-  create: async (data: Partial<Space>): Promise<Space> => {
+  create: async (data: CreateSpaceData): Promise<Space> => {
     const response = await apiClient.post<Space>('/spaces', data);
     return response.data;
   },

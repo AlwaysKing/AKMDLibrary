@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { claudeApi } from '../api/claude';
+import { getWebSocketURL } from '../utils/desktopRuntime';
 
 export type ChatStatus = 'idle' | 'answering' | 'error';
 
@@ -118,7 +119,7 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
     const token = localStorage.getItem('token');
     if (!token) return;
 
-    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/spaces/${encodeURIComponent(slug)}/claude/ws?token=${encodeURIComponent(token)}`;
+    const wsUrl = getWebSocketURL(`/api/spaces/${encodeURIComponent(slug)}/claude/ws?token=${encodeURIComponent(token)}`);
     console.log('[useClaudeChat] connecting to', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

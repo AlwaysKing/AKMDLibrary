@@ -4,6 +4,7 @@ import { createReactBlockSpec } from '@blocknote/react';
 import { FileText } from 'lucide-react';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { pagesApi, Page } from '../../api/pages';
+import { getEditorPageContext } from './EditorPageContext';
 
 function findPageInTree(tree: Page[], pageId: string): Page | null {
   for (const page of tree) {
@@ -20,24 +21,27 @@ function PageReferenceComponent({ block, editor }: any) {
   const pageId = block.props.pageId || '';
   const navigate = useNavigate();
   const { currentSpace, pageTree } = useSpaceStore();
+  const pageContext = getEditorPageContext(editor);
+  const activeSpaceSlug = pageContext?.spaceSlug || currentSpace?.slug;
+  const activePageTree = (pageContext?.pageTree || pageTree) as Page[];
   const [page, setPage] = useState<Page | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     if (!pageId) { setNotFound(true); return; }
     // Try pageTree first
-    const found = findPageInTree(pageTree, pageId);
+    const found = findPageInTree(activePageTree, pageId);
     if (found) {
       setPage(found);
       return;
     }
     // Fallback: fetch from API
-    if (currentSpace?.slug) {
-      pagesApi.get(currentSpace.slug, pageId)
+    if (activeSpaceSlug) {
+      pagesApi.get(activeSpaceSlug, pageId)
         .then(p => { setPage(p); setNotFound(false); })
         .catch(() => setNotFound(true));
     }
-  }, [pageId, pageTree, currentSpace?.slug]);
+  }, [pageId, activePageTree, activeSpaceSlug]);
 
   // Keyboard: Backspace/Delete removes the block when selected
   useEffect(() => {
@@ -81,10 +85,8 @@ function PageReferenceComponent({ block, editor }: any) {
   }
 
   const handleDoubleClick = () => {
-    const slug = currentSpace?.slug;
-    if (slug) {
-      navigate(`/s/${slug}/p/${page.id}`);
-    }
+    if (pageContext?.pagePath) navigate(pageContext.pagePath(page.id));
+    else if (currentSpace?.slug) navigate(`/s/${currentSpace.slug}/p/${page.id}`);
   };
 
   return (

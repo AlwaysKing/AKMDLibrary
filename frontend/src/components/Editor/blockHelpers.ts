@@ -2,6 +2,7 @@ import { useSpaceStore } from '../../stores/spaceStore';
 import { pagesApi } from '../../api/pages';
 import { syncedBlocksApi } from '../../api/syncedBlocks';
 import { findBlockDeep } from './BlockNoteComponents';
+import { getEditorPageContext } from './EditorPageContext';
 
 function flattenBlocks(blocks: any[]): any[] {
   const out: any[] = [];
@@ -116,13 +117,15 @@ export async function removeBlocksEnhanced(editor: any, blocks: any[] | string[]
 
   // Delete corresponding pages and refresh sidebar
   if (subpagePageIds.length > 0) {
-    const slug = useSpaceStore.getState().currentSpace?.slug;
+    const pageContext = getEditorPageContext(editor);
+    const slug = pageContext?.spaceSlug || useSpaceStore.getState().currentSpace?.slug;
     if (slug) {
       try {
         await Promise.all(
           subpagePageIds.map(pageId => pagesApi.delete(slug, pageId)),
         );
-        useSpaceStore.getState().refreshPageTree();
+        if (pageContext) await pageContext.refreshPageTree();
+        else useSpaceStore.getState().refreshPageTree();
       } catch (err) {
         console.error('Failed to delete subpage(s):', err);
       }

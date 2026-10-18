@@ -95,6 +95,13 @@ func diagWriteFile(label, filePath string, content []byte) error {
 // resolveSpaceDir finds the actual directory for a space slug.
 // Returns the full path and the actual directory name.
 func (s *PageService) resolveSpaceDir(spaceSlug string) (string, string) {
+	if spaceDir, ok := filesystem.PersonalWorkspacePath(s.docsDir, spaceSlug); ok {
+		if info, err := os.Stat(spaceDir); err == nil && info.IsDir() {
+			relDir, _ := filesystem.PersonalWorkspaceRelDir(spaceSlug)
+			return spaceDir, relDir
+		}
+	}
+
 	// Try exact slug match first
 	exactPath := filepath.Join(s.docsDir, spaceSlug)
 	if info, err := os.Stat(exactPath); err == nil && info.IsDir() {
@@ -1563,9 +1570,9 @@ func (s *PageService) Move(spaceSlug string, pageID string, targetParentID *stri
 		targetDir = filepath.Join(s.docsDir, childRelDir)
 		targetRelDir = childRelDir
 	} else {
-		spaceDir, _ := s.resolveSpaceDir(spaceSlug)
+		spaceDir, dirName := s.resolveSpaceDir(spaceSlug)
 		targetDir = spaceDir
-		targetRelDir = spaceSlug
+		targetRelDir = dirName
 	}
 
 	// Ensure target directory exists

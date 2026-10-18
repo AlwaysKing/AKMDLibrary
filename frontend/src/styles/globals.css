@@ -5,6 +5,7 @@
 @layer base {
   :root {
     color-scheme: light;
+    --desktop-titlebar-height: 0px;
   }
 
   html, body, #root {
@@ -41,6 +42,19 @@
 }
 
 @layer utilities {
+  .desktop-runtime {
+    --desktop-titlebar-height: 40px;
+  }
+
+  .desktop-titlebar {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .database-schema-split {
+    height: calc(100vh - var(--desktop-titlebar-height) - 310px);
+  }
+
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;

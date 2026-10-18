@@ -106,14 +106,30 @@ func (h *FilesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := []fileItem{}
-	if _, statErr := os.Stat(root); os.IsNotExist(statErr) {
+	rootInfo, statErr := os.Stat(root)
+	if os.IsNotExist(statErr) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(items)
 		return
 	}
+	if statErr != nil {
+		http.Error(w, statErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !rootInfo.IsDir() {
+		http.Error(w, "_files is not a directory", http.StatusBadRequest)
+		return
+	}
 
-	spaceDir := filepath.Join(h.docsDir, slug)
-	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+	// _files itself may be a symlink. filepath.Walk does not traverse a
+	// symlinked root, so walk the resolved target while keeping client paths
+	// rooted at the logical _files directory.
+	walkRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	err = filepath.Walk(walkRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -129,11 +145,11 @@ func (h *FilesHandler) List(w http.ResponseWriter, r *http.Request) {
 		if info.IsDir() {
 			return nil
 		}
-		rel, relErr := filepath.Rel(spaceDir, path)
+		rel, relErr := filepath.Rel(walkRoot, path)
 		if relErr != nil {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
+		rel = filepath.ToSlash(filepath.Join("_files", rel))
 		items = append(items, fileItem{
 			Path:  rel,
 			Name:  info.Name(),

@@ -4,6 +4,7 @@ import SpaceSelector from '../Sidebar/SpaceSelector';
 import PageTree from '../Sidebar/PageTree';
 import PageTreeItem from '../Sidebar/PageTreeItem';
 import SearchOverlay from '../Search/SearchOverlay';
+import PersonalSpaceCard from '../Sidebar/PersonalSpaceCard';
 import { useAuthStore } from '../../stores/authStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { usePreferenceStore } from '../../stores/preferenceStore';
@@ -99,7 +100,7 @@ export default function Sidebar({ onToggle }: SidebarProps) {
   // 管理面板侧边栏
   if (isAdmin) {
     return (
-      <aside className="w-full bg-notion-sidebarBg h-screen flex flex-col border-r border-notion-border flex-shrink-0 select-none">
+      <aside className="w-full bg-notion-sidebarBg h-full flex flex-col flex-shrink-0 select-none">
         <div className="px-3 py-3 flex items-center gap-2">
           <button
             onClick={handleAdminBack}
@@ -250,7 +251,7 @@ export default function Sidebar({ onToggle }: SidebarProps) {
   );
 
   return (
-    <aside className="w-full bg-notion-sidebarBg h-screen flex flex-col border-r border-notion-border flex-shrink-0 select-none">
+    <aside className="w-full bg-notion-sidebarBg h-full flex flex-col flex-shrink-0 select-none">
       {/* Space selector header */}
       <div className="px-2 flex items-center h-11 gap-1">
         <div className="relative" ref={userMenuRef}>
@@ -284,6 +285,8 @@ export default function Sidebar({ onToggle }: SidebarProps) {
           <ChevronsLeft size={16} className="text-notion-textSecondary" />
         </button>
       </div>
+
+      <PersonalSpaceCard />
 
       {/* Three sections: 最近 / 最爱 / 文档 */}
       <div className="flex-1 overflow-y-auto scrollbar-thin px-2 py-1">

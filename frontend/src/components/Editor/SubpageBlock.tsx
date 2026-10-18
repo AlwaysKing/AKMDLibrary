@@ -6,6 +6,7 @@ import { useSpaceStore } from '../../stores/spaceStore';
 import { isPendingRestore } from './blockClipboardState';
 import { pagesApi, Page } from '../../api/pages';
 import { removeBlocksEnhanced } from './blockHelpers';
+import { getEditorPageContext } from './EditorPageContext';
 
 function findPageInTree(tree: Page[], pageId: string): Page | null {
   for (const page of tree) {
@@ -22,6 +23,12 @@ function SubpageComponent({ block, editor }: any) {
   const pageId = block.props.pageId || '';
   const navigate = useNavigate();
   const { currentSpace, pageTree } = useSpaceStore();
+  const pageContext = getEditorPageContext(editor);
+  const activeSpaceSlug = pageContext?.spaceSlug || currentSpace?.slug;
+  const activePageTree = (pageContext?.pageTree || pageTree) as Page[];
+  const activeCurrentPageId = pageContext?.currentPageId
+    || window.location.pathname.match(/\/p\/([^/]+)$/)?.[1]
+    || '';
   const [page, setPage] = useState<Page | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -35,32 +42,36 @@ function SubpageComponent({ block, editor }: any) {
   // Auto-create child page when pageId is empty (inserted from slash menu)
   useEffect(() => {
     if (pageId || creatingGuardRef.current) return;
-    const slug = currentSpace?.slug;
-    if (!slug) return;
-    // Get current page ID from URL
-    const currentPageId = window.location.pathname.match(/\/p\/([^/]+)$/)?.[1];
-    if (!currentPageId) { setNotFound(true); return; }
+    if (!activeSpaceSlug) return;
+    if (!activeCurrentPageId) { setNotFound(true); return; }
 
     creatingGuardRef.current = true;
     setCreating(true);
-    pagesApi.create(slug, { title: '未命名页面', parent_id: currentPageId })
-      .then(newPage => {
+    const createPage = pageContext?.createSubpage
+      ? pageContext.createSubpage('未命名页面', activeCurrentPageId)
+      : pagesApi.create(activeSpaceSlug, { title: '未命名页面', parent_id: activeCurrentPageId });
+    createPage
+      .then(async (newPage) => {
         editor.updateBlock(block.id, { type: 'subpage', props: { pageId: newPage.id } } as any);
         // Notify sidebar
         document.dispatchEvent(new CustomEvent('subpage-created', { detail: { pageId: newPage.id } }));
-        useSpaceStore.getState().refreshAll();
+        if (pageContext?.refreshPageTree) {
+          await pageContext.refreshPageTree();
+        } else {
+          await useSpaceStore.getState().refreshAll();
+        }
       })
       .catch(() => {
         setNotFound(true);
         setCreating(false);
         creatingGuardRef.current = false;
       });
-  }, [pageId, currentSpace?.slug]);
+  }, [pageId, activeSpaceSlug, activeCurrentPageId, pageContext?.createSubpage, pageContext?.refreshPageTree]);
 
   useEffect(() => {
     if (!pageId) return;
     // Try pageTree first
-    const found = findPageInTree(pageTree, pageId);
+    const found = findPageInTree(activePageTree, pageId);
     if (found) {
       setPage(found);
       setNotFound(false);
@@ -69,11 +80,11 @@ function SubpageComponent({ block, editor }: any) {
     // If page is being restored (undo), skip API call — pageTree will update via refreshAll
     if (isPendingRestore(pageId)) return;
     // Fallback: fetch from API
-    if (currentSpace?.slug) {
+    if (activeSpaceSlug) {
       let cancelled = false;
       const fetchPage = async (retries = 1) => {
         try {
-          const p = await pagesApi.get(currentSpace.slug, pageId);
+          const p = await pagesApi.get(activeSpaceSlug, pageId);
           if (!cancelled) { setPage(p); setNotFound(false); }
         } catch {
           if (cancelled) return;
@@ -88,7 +99,7 @@ function SubpageComponent({ block, editor }: any) {
       fetchPage();
       return () => { cancelled = true; };
     }
-  }, [pageId, pageTree, currentSpace?.slug]);
+  }, [pageId, activePageTree, activeSpaceSlug]);
 
   // Keyboard: Backspace/Delete removes the block when selected
   useEffect(() => {
@@ -158,10 +169,8 @@ function SubpageComponent({ block, editor }: any) {
   }
 
   const handleClick = () => {
-    const slug = currentSpace?.slug;
-    if (slug) {
-      navigate(`/s/${slug}/p/${page.id}`);
-    }
+    if (pageContext?.pagePath) navigate(pageContext.pagePath(page.id));
+    else if (currentSpace?.slug) navigate(`/s/${currentSpace.slug}/p/${page.id}`);
   };
 
   return (

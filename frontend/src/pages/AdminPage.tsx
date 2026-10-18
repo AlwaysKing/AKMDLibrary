@@ -2,18 +2,19 @@ import { useEffect, useState, useRef, Fragment } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { usersApi } from '../api/users';
-import { spacesApi, Space, SpaceMember, FeatureFlags } from '../api/spaces';
+import { spacesApi, Space, SpaceMember, FeatureFlags, SpaceImportMode } from '../api/spaces';
 import { authApi } from '../api/auth';
 import { fetchIconLibrary, uploadToIconLibrary, deleteIcon, renameIcon, IconLibraryItem } from '../api/icons';
 import { fetchCoverLibrary, uploadToCoverLibrary, deleteCover, renameCover, CoverLibraryItem } from '../api/covers';
 import { siteSettingsApi, SiteSettings } from '../api/siteSettings';
 import { claudeApi, ClaudeAdminConfig } from '../api/claude';
-import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen } from 'lucide-react';
+import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen, Folder } from 'lucide-react';
 import PageIcon from '../components/Editor/PageIcon';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { usePreferenceStore } from '../stores/preferenceStore';
 import apiClient from '../api/client';
 import { CODE_THEME_OPTIONS, CODE_THEME_PREVIEW_SNIPPET, getCodeThemeRegistration, normalizeCodeTheme } from '../utils/codeTheme';
+import { isDesktopRuntime } from '../utils/desktopRuntime';
 
 interface EditingUser {
   id: number;
@@ -23,6 +24,15 @@ interface EditingUser {
   role: 'admin' | 'user';
   created_at: string;
   updated_at: string;
+}
+
+interface SpaceFormData {
+  name: string;
+  icon: string;
+  description: string;
+  feature_flags: FeatureFlags;
+  source_path?: string;
+  import_mode?: SpaceImportMode;
 }
 
 const ICON_OPTIONS = ['📚', '📝', '💼', '🏠', '🎨', '🔬', '📊', '🗂️', '💡', '🚀', '🎯', '✅', '📋', '📁', '🔧', '💬', '🌟', '🎓', '🎵', '🌍', '🔒', '📱', '☕', '🔮'];
@@ -120,9 +130,11 @@ export default function AdminPage() {
   const [spacesLoading, setSpacesLoading] = useState(false);
   // 统一面板: null=关闭, 'new'=创建, slug=编辑
   const [spacePanelSlug, setSpacePanelSlug] = useState<string | null>(null);
-  const [spaceFormData, setSpaceFormData] = useState<{ name: string; icon: string; description: string; feature_flags: FeatureFlags }>({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
+  const [spaceFormData, setSpaceFormData] = useState<SpaceFormData>({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
   const [showIconPicker, setShowIconPicker] = useState(false);
   const iconPickerRef = useRef<HTMLDivElement>(null);
+  const [folderPickerLoading, setFolderPickerLoading] = useState(false);
+  const [showImportModeDialog, setShowImportModeDialog] = useState(false);
   const [pendingDeleteSpace, setPendingDeleteSpace] = useState<Space | null>(null);
   const [deletingSpace, setDeletingSpace] = useState(false);
 
@@ -606,6 +618,7 @@ export default function AdminPage() {
   // ---- 空间面板操作 ----
   const openCreatePanel = () => {
     setSpaceFormData({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
+    setShowImportModeDialog(false);
     setMembers([]);
     setSpacePanelSlug('new');
     setIsAddingMember(false);
@@ -616,7 +629,8 @@ export default function AdminPage() {
       closePanel();
       return;
     }
-    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false, claude: false }) } });
+    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false, claude: false }) }, source_path: undefined, import_mode: undefined });
+    setShowImportModeDialog(false);
     setSpacePanelSlug(space.slug);
     setIsAddingMember(false);
     await fetchMembers(space.slug);
@@ -630,16 +644,46 @@ export default function AdminPage() {
     setShowUserDropdown(false);
     setShowNewRoleDropdown(false);
     setOpenMemberRoleId(null);
+    setShowImportModeDialog(false);
+  };
+
+  const handleChooseFolder = async () => {
+    if (!isDesktopRuntime() || folderPickerLoading) return;
+    setFolderPickerLoading(true);
+    try {
+      const response = await apiClient.post<{ path?: string; cancelled?: boolean }>('/desktop/choose-folder');
+      if (response.data.path) {
+        setSpaceFormData(prev => ({
+          ...prev,
+          source_path: response.data.path,
+          import_mode: undefined,
+        }));
+        setShowImportModeDialog(true);
+      }
+    } catch (err: any) {
+      setError(err?.response?.data || err.message);
+    } finally {
+      setFolderPickerLoading(false);
+    }
   };
 
   const handleSavePanel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!spaceFormData.name.trim()) return;
+    if (spacePanelSlug === 'new' && spaceFormData.source_path && !spaceFormData.import_mode) {
+      setError('请先选择迁入或引用方式');
+      return;
+    }
     try {
       if (spacePanelSlug === 'new') {
         await spacesApi.create(spaceFormData);
       } else {
-        await spacesApi.update(spacePanelSlug!, spaceFormData);
+        await spacesApi.update(spacePanelSlug!, {
+          name: spaceFormData.name,
+          icon: spaceFormData.icon,
+          description: spaceFormData.description,
+          feature_flags: spaceFormData.feature_flags,
+        });
       }
       closePanel();
       fetchSpaces();
@@ -1198,9 +1242,38 @@ export default function AdminPage() {
             placeholder="描述（可选）"
             className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {isDesktopRuntime() && (
+            <button
+              type="button"
+              onClick={handleChooseFolder}
+              disabled={folderPickerLoading}
+              className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors disabled:opacity-50"
+              title="选择本地文件夹"
+            >
+              {folderPickerLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Folder className="w-4 h-4" />}
+            </button>
+          )}
           <button type="submit" className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="创建"><Check className="w-4 h-4" /></button>
           <button type="button" onClick={closePanel} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="取消"><X className="w-4 h-4" /></button>
         </div>
+        )}
+
+        {!isEditing && spaceFormData.source_path && (
+          <div className="mt-3 flex items-center gap-2 rounded border border-notion-border bg-notion-sidebarBg/40 px-3 py-2 text-xs text-notion-textSecondary">
+            <Folder className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="flex-shrink-0 text-notion-text">
+              {spaceFormData.import_mode === 'copy' ? '迁入' : spaceFormData.import_mode === 'link' ? '引用' : '待选择方式'}
+            </span>
+            <span className="min-w-0 flex-1 truncate" title={spaceFormData.source_path}>{spaceFormData.source_path}</span>
+            <button
+              type="button"
+              onClick={() => setSpaceFormData(prev => ({ ...prev, source_path: undefined, import_mode: undefined }))}
+              className="p-0.5 hover:text-notion-text"
+              title="清除"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         )}
 
         {/* 功能开关（仅编辑模式） */}
@@ -1338,6 +1411,51 @@ export default function AdminPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {showImportModeDialog && spaceFormData.source_path && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 p-4">
+            <div className="w-full max-w-md rounded-xl border border-notion-border bg-white p-5 shadow-xl">
+              <h3 className="text-base font-semibold text-notion-text">选择导入方式</h3>
+              <p className="mt-1 break-all text-xs text-notion-textSecondary">{spaceFormData.source_path}</p>
+              <div className="mt-5 grid gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSpaceFormData(prev => ({ ...prev, import_mode: 'copy' }));
+                    setShowImportModeDialog(false);
+                  }}
+                  className="rounded-lg border border-notion-border px-4 py-3 text-left transition-colors hover:bg-notion-hover"
+                >
+                  <span className="block text-sm font-medium text-notion-text">迁入</span>
+                  <span className="mt-1 block text-xs text-notion-textSecondary">复制文件夹内容到空间目录，不修改源文件夹。</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSpaceFormData(prev => ({ ...prev, import_mode: 'link' }));
+                    setShowImportModeDialog(false);
+                  }}
+                  className="rounded-lg border border-notion-border px-4 py-3 text-left transition-colors hover:bg-notion-hover"
+                >
+                  <span className="block text-sm font-medium text-notion-text">引用</span>
+                  <span className="mt-1 block text-xs text-notion-textSecondary">在空间根目录创建软链接，内容仍保存在原文件夹。</span>
+                </button>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSpaceFormData(prev => ({ ...prev, source_path: undefined, import_mode: undefined }));
+                    setShowImportModeDialog(false);
+                  }}
+                  className="rounded px-3 py-1.5 text-sm text-notion-textSecondary hover:bg-notion-hover"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

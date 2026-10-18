@@ -240,6 +240,9 @@ func (r *SpaceRepository) SyncFromFS(spaces []*model.Space) error {
 	}
 	for _, dbSpace := range allSpaces {
 		if !fsSlugs[dbSpace.Slug] {
+			if model.IsPersonalSpaceSlug(dbSpace.Slug) {
+				continue
+			}
 			if err := r.Delete(dbSpace.ID); err != nil {
 				return fmt.Errorf("failed to remove stale space %s: %w", dbSpace.Slug, err)
 			}

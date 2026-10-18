@@ -1,4 +1,4 @@
-import { ChevronRight, Menu, Landmark, FileText } from 'lucide-react';
+import { ChevronRight, Menu, Landmark, FileText, LockKeyhole } from 'lucide-react';
 import { useNavigate, useOutletContext, useLocation, useParams } from 'react-router-dom';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { pagesApi, Page } from '../../api/pages';
@@ -8,6 +8,7 @@ import { useState, useRef, useEffect, Fragment } from 'react';
 interface BreadcrumbProps {
   pageTitle?: string;
   spaceSlug: string;
+  rootLabel?: string;
   actions?: React.ReactNode;
   /** 面包屑左侧的前置元素（如返回按钮） */
   leading?: React.ReactNode;
@@ -253,7 +254,8 @@ function findPagePath(pages: Page[], targetId: string, path: Page[] = []): Page[
 
 type ActiveItem = 'space' | number | null;
 
-export default function Breadcrumb({ pageTitle, spaceSlug, actions, leading, trail }: BreadcrumbProps) {
+export default function Breadcrumb({ pageTitle, spaceSlug, rootLabel, actions, leading, trail }: BreadcrumbProps) {
+  const navigate = useNavigate();
   const { currentSpace, pageTree, spaces } = useSpaceStore();
   const { sidebarCollapsed, toggleSidebar } = useOutletContext<{ sidebarCollapsed: boolean; toggleSidebar: () => void }>();
   const { pageId } = useParams<{ pageId: string }>();
@@ -262,6 +264,7 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions, leading, tra
   const [activeItem, setActiveItem] = useState<ActiveItem>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<number | null>(null);
   const showMenu = activeItem === 'space';
+  const showSpaceMenu = showMenu;
   const [spaceTrees, setSpaceTrees] = useState<Record<string, Page[]>>({});
   const menuRef = useRef<HTMLDivElement>(null);
   const fetchedSlugs = useRef<Set<string>>(new Set());
@@ -344,23 +347,56 @@ export default function Breadcrumb({ pageTitle, spaceSlug, actions, leading, tra
       <div
         className="relative"
         ref={menuRef}
-        onMouseEnter={() => handleItemEnter('space')}
-        onMouseLeave={handleItemLeave}
+        onMouseEnter={() => {
+          handleItemEnter('space');
+        }}
+        onMouseLeave={() => {
+          handleItemLeave();
+        }}
       >
-        <button
-          className={`hover:bg-notion-hover px-1.5 py-0.5 rounded transition-colors flex items-center ${showMenu ? 'bg-notion-hover' : ''}`}
-        >
-          {currentSpace?.icon ? <span className="mr-1">{currentSpace.icon}</span> : <Landmark className="w-4 h-4 mr-1 text-notion-textSecondary" />}
-          {currentSpace?.name || 'Space'}
-        </button>
+        {rootLabel ? (
+          <button
+            type="button"
+            onClick={() => setActiveItem((current) => current === 'space' ? null : 'space')}
+            className={`flex items-center rounded px-1.5 py-0.5 text-notion-text transition-colors hover:bg-notion-hover ${showMenu ? 'bg-notion-hover' : ''}`}
+          >
+            <LockKeyhole className="mr-1 h-4 w-4 text-notion-textSecondary" />
+            {rootLabel}
+          </button>
+        ) : (
+          <button
+            className={`hover:bg-notion-hover px-1.5 py-0.5 rounded transition-colors flex items-center ${showMenu ? 'bg-notion-hover' : ''}`}
+          >
+            {currentSpace?.icon ? <span className="mr-1">{currentSpace.icon}</span> : <Landmark className="w-4 h-4 mr-1 text-notion-textSecondary" />}
+            {currentSpace?.name || 'Space'}
+          </button>
+        )}
 
-        {showMenu && (
+        {showSpaceMenu && (
           <div className="absolute left-0 top-full mt-1 w-[240px] bg-white border border-notion-border rounded-lg shadow-lg z-50 py-1.5 px-1.5 select-none">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveItem(null);
+                navigate('/personal');
+              }}
+              className={`flex h-[30px] w-full items-center rounded-md px-2.5 text-left transition-colors ${
+                location.pathname.startsWith('/personal')
+                  ? 'bg-[#E6F0FF]'
+                  : 'hover:bg-notion-hover'
+              }`}
+            >
+              <span className="mr-2 flex h-[18px] w-[22px] flex-shrink-0 items-center justify-center">
+                <LockKeyhole className="h-[18px] w-[18px] text-[#91918e]" strokeWidth={1.7} />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-notion-sidebarText">个人空间</span>
+              <ChevronRight className="ml-1 h-3 w-3 flex-shrink-0 text-[#ada9a3]" />
+            </button>
             {spaces.map(space => (
               <SpaceMenuItem
                 key={space.id}
                 space={space}
-                isCurrent={space.slug === currentSpace?.slug}
+                isCurrent={!location.pathname.startsWith('/personal') && space.slug === currentSpace?.slug}
                 pageTree={spaceTrees[space.slug] || []}
                 onClose={() => setActiveItem(null)}
                 isOpen={activeSpaceId === space.id}

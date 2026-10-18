@@ -123,7 +123,6 @@ func (h *PageHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	if req.Title == "" {
 		http.Error(w, "Title is required", http.StatusBadRequest)
 		return
@@ -164,7 +163,6 @@ func (h *PageHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	page, err := h.pageService.Update(slug, pageID, &req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -187,7 +185,6 @@ func (h *PageHandler) UpdateMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	page, err := h.pageService.UpdateMeta(slug, pageID, &req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -258,7 +255,6 @@ func (h *PageHandler) Duplicate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	space, err := h.spaceService.GetBySlug(slug)
 	if err != nil {
 		http.Error(w, "Space not found", http.StatusNotFound)
@@ -329,7 +325,6 @@ func (h *PageHandler) Move(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	page, err := h.pageService.Move(slug, pageID, req.TargetParentID, req.AfterID)
 	if err != nil {
 		errMsg := err.Error()

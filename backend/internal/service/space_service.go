@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
 	"github.com/alwaysking/akmdlibrary/internal/repository"
@@ -55,11 +57,24 @@ func (s *SpaceService) List(isAdmin bool, userID int) ([]*model.Space, error) {
 		return nil, fmt.Errorf("failed to sync spaces: %w", err)
 	}
 
-	// Admin sees all spaces, regular users see only their member spaces.
+	var spaces []*model.Space
+	var err error
 	if isAdmin {
-		return s.spaceRepo.ListByUserID(0)
+		spaces, err = s.spaceRepo.ListByUserID(0)
+	} else {
+		spaces, err = s.spaceRepo.ListByUserID(userID)
 	}
-	return s.spaceRepo.ListByUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	visible := make([]*model.Space, 0, len(spaces))
+	for _, space := range spaces {
+		if !model.IsPersonalSpaceSlug(space.Slug) {
+			visible = append(visible, space)
+		}
+	}
+	return visible, nil
 }
 
 func (s *SpaceService) GetBySlug(slug string) (*model.Space, error) {
@@ -74,28 +89,68 @@ func (s *SpaceService) Create(req *model.CreateSpaceRequest, creatorID int) (*mo
 		return nil, errors.New("space with this name already exists")
 	}
 
-	// Create directory
 	spacePath := filepath.Join(s.docsDir, req.Name)
-	if err := os.MkdirAll(spacePath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create space directory: %w", err)
+	if _, err := os.Lstat(spacePath); err == nil {
+		return nil, errors.New("space directory already exists")
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to check space directory: %w", err)
 	}
 
-	// Create README.md
-	readmePath := filepath.Join(spacePath, "README.md")
-	if err := os.WriteFile(readmePath, []byte("# "+req.Name), 0644); err != nil {
-		return nil, fmt.Errorf("failed to create README: %w", err)
+	sourcePath := strings.TrimSpace(req.SourcePath)
+	importMode := strings.TrimSpace(req.ImportMode)
+	if sourcePath != "" {
+		resolvedSource, err := filepath.EvalSymlinks(sourcePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve source folder: %w", err)
+		}
+		if err := validateSpaceImportPaths(resolvedSource, spacePath, s.docsDir); err != nil {
+			return nil, err
+		}
+		sourcePath = resolvedSource
+	}
+
+	switch {
+	case importMode == "link":
+		if sourcePath == "" {
+			return nil, errors.New("source folder is required for reference mode")
+		}
+		if err := os.Symlink(sourcePath, spacePath); err != nil {
+			return nil, fmt.Errorf("failed to create space symlink: %w", err)
+		}
+	case importMode == "copy":
+		if sourcePath == "" {
+			return nil, errors.New("source folder is required for copy mode")
+		}
+		if err := os.MkdirAll(spacePath, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create space directory: %w", err)
+		}
+		if err := copyDirectoryContents(sourcePath, spacePath); err != nil {
+			_ = os.RemoveAll(spacePath)
+			return nil, fmt.Errorf("failed to copy source folder: %w", err)
+		}
+	case sourcePath != "" || importMode != "":
+		return nil, errors.New("source_path and import_mode must be provided together")
+	default:
+		if err := os.MkdirAll(spacePath, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create space directory: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(spacePath, "README.md"), []byte("# "+req.Name), 0644); err != nil {
+			_ = os.RemoveAll(spacePath)
+			return nil, fmt.Errorf("failed to create README: %w", err)
+		}
 	}
 
 	space, err := s.spaceRepo.Create(req, slug)
 	if err != nil {
-		// Rollback directory creation
-		os.RemoveAll(spacePath)
+		_ = os.RemoveAll(spacePath)
 		return nil, fmt.Errorf("failed to create space: %w", err)
 	}
 
 	// Add creator as admin
 	_, err = s.memberRepo.Add(space.ID, creatorID, "admin")
 	if err != nil {
+		_ = s.spaceRepo.Delete(space.ID)
+		_ = os.RemoveAll(spacePath)
 		return nil, fmt.Errorf("failed to add creator as admin: %w", err)
 	}
 
@@ -104,6 +159,97 @@ func (s *SpaceService) Create(req *model.CreateSpaceRequest, creatorID int) (*mo
 	s.markGitDirty(slug)
 
 	return space, nil
+}
+
+func validateSpaceImportPaths(sourcePath, spacePath, docsDir string) error {
+	sourceAbs, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return err
+	}
+	spaceAbs, err := filepath.Abs(spacePath)
+	if err != nil {
+		return err
+	}
+	docsAbs, err := filepath.Abs(docsDir)
+	if err != nil {
+		return err
+	}
+	sourceAbs = filepath.Clean(sourceAbs)
+	spaceAbs = filepath.Clean(spaceAbs)
+	docsAbs = filepath.Clean(docsAbs)
+
+	if pathWithin(spaceAbs, sourceAbs) {
+		return errors.New("space directory cannot be inside the source folder")
+	}
+	if sourceAbs == docsAbs {
+		return errors.New("source folder cannot be the docs root")
+	}
+	return nil
+}
+
+func pathWithin(path, parent string) bool {
+	rel, err := filepath.Rel(parent, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func copyDirectoryContents(source, destination string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := copyPath(filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyPath(source, destination string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		target, err := os.Readlink(source)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, destination)
+	case info.IsDir():
+		if err := os.MkdirAll(destination, info.Mode().Perm()); err != nil {
+			return err
+		}
+		return copyDirectoryContents(source, destination)
+	case info.Mode().IsRegular():
+		return copyRegularFile(source, destination, info.Mode().Perm())
+	default:
+		return fmt.Errorf("unsupported file type: %s", source)
+	}
+}
+
+func copyRegularFile(source, destination string, mode os.FileMode) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func (s *SpaceService) Update(slug string, req *model.UpdateSpaceRequest) (*model.Space, error) {
@@ -225,6 +371,12 @@ func (s *SpaceService) MemberRole(spaceID, userID int) (string, bool) {
 // rather than go through the page tree. Mirrors GitService.resolveSpacePath
 // semantics: exact dir name first, slugified fallback scan.
 func (s *SpaceService) SpacePath(slug string) (string, bool) {
+	if personalDir, ok := filesystem.PersonalWorkspacePath(s.docsDir, slug); ok {
+		if info, err := os.Stat(personalDir); err == nil && info.IsDir() {
+			return personalDir, true
+		}
+	}
+
 	exact := filepath.Join(s.docsDir, slug)
 	if info, err := os.Stat(exact); err == nil && info.IsDir() {
 		return exact, true

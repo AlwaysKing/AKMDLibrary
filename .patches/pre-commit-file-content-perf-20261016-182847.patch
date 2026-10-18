@@ -1,0 +1,597 @@
+diff --git a/frontend/src/components/Editor/FileContentBlock.tsx b/frontend/src/components/Editor/FileContentBlock.tsx
+index b06e91e..8e4cb3e 100644
+--- a/frontend/src/components/Editor/FileContentBlock.tsx
++++ b/frontend/src/components/Editor/FileContentBlock.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useRef, useState, useCallback } from 'react';
++import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+ import { createReactBlockSpec } from '@blocknote/react';
+ import { createExtension } from '@blocknote/core';
+ import {
+@@ -10,9 +10,11 @@ import {
+   ChevronDown,
+ } from 'lucide-react';
+ import { useSpaceStore } from '../../stores/spaceStore';
++import { usePreferenceStore } from '../../stores/preferenceStore';
+ import { readSpaceFile, saveSpaceFileAs, displayFilePath } from '../../api/files';
+ import { FilePickerMenu } from './FilePickerMenu';
+ import { LANGUAGES, languageDisplayName } from './languages';
++import { renderFileContentHighlightLines } from './fileContentHighlight';
+ 
+ /**
+  * fileContent block
+@@ -155,7 +157,11 @@ function FileContentComponent({ block, editor, contentRef }: any) {
+   const path: string = block.props.path || '';
+   const language: string = block.props.language || 'text';
+   const { currentSpace } = useSpaceStore();
++  const codeTheme = usePreferenceStore((state) => state.getCodeTheme());
+   const slug = currentSpace?.slug;
++  const inlineText = (block.content ?? [])
++    .map((c: any) => c?.text ?? '')
++    .join('');
+ 
+   const [pickerOpen, setPickerOpen] = useState(false);
+   const [missing, setMissing] = useState(false);
+@@ -166,6 +172,100 @@ function FileContentComponent({ block, editor, contentRef }: any) {
+   const [copied, setCopied] = useState(false);
+   const wrapperRef = useRef<HTMLDivElement>(null);
+   const langBtnRef = useRef<HTMLDivElement>(null);
++  const overlayRef = useRef<HTMLDivElement>(null);
++  const previousLinesRef = useRef<string[]>([]);
++  const highlightGenerationRef = useRef(0);
++
++  const handleCodeScroll = useCallback(() => {
++    const overlay = overlayRef.current;
++    const pre = wrapperRef.current?.querySelector('.bn-file-content-pre') as HTMLElement | null;
++    if (!overlay || !pre) return;
++    overlay.scrollLeft = pre.scrollLeft;
++    overlay.scrollTop = pre.scrollTop;
++  }, []);
++
++  useEffect(() => {
++    const pre = wrapperRef.current?.querySelector('.bn-file-content-pre') as HTMLElement | null;
++    if (!pre) return;
++    pre.addEventListener('scroll', handleCodeScroll, { passive: true });
++    handleCodeScroll();
++    return () => pre.removeEventListener('scroll', handleCodeScroll);
++  }, [handleCodeScroll]);
++
++  useLayoutEffect(() => {
++    const overlay = overlayRef.current;
++    if (!overlay) return;
++
++    if (!path || loading || !inlineText) {
++      overlay.replaceChildren();
++      previousLinesRef.current = [];
++      return;
++    }
++
++    const nextLines = inlineText.split('\n');
++    const previousLines = previousLinesRef.current;
++    const isInitialRender = previousLines.length === 0;
++
++    let prefix = 0;
++    while (
++      prefix < previousLines.length
++      && prefix < nextLines.length
++      && previousLines[prefix] === nextLines[prefix]
++    ) {
++      prefix += 1;
++    }
++
++    let previousEnd = previousLines.length;
++    let nextEnd = nextLines.length;
++    while (
++      previousEnd > prefix
++      && nextEnd > prefix
++      && previousLines[previousEnd - 1] === nextLines[nextEnd - 1]
++    ) {
++      previousEnd -= 1;
++      nextEnd -= 1;
++    }
++
++    while (overlay.children.length < nextLines.length) {
++      const line = document.createElement('div');
++      line.className = 'bn-file-content-highlight-line';
++      overlay.appendChild(line);
++    }
++    while (overlay.children.length > nextLines.length) {
++      overlay.lastElementChild?.remove();
++    }
++
++    // Keep existing token DOM while the next highlight frame is pending. Only
++    // brand-new/empty lines need a plain placeholder before their first paint.
++    for (let i = prefix; i < nextEnd; i += 1) {
++      const line = overlay.children[i] as HTMLElement | undefined;
++      if (line && (isInitialRender || line.childNodes.length === 0)) {
++        line.textContent = nextLines[i] ?? '';
++      }
++    }
++    previousLinesRef.current = nextLines;
++
++    const generation = ++highlightGenerationRef.current;
++    const frame = window.requestAnimationFrame(() => {
++      void renderFileContentHighlightLines(inlineText, language, codeTheme).then((renderedLines) => {
++        if (
++          generation !== highlightGenerationRef.current
++          || overlayRef.current !== overlay
++        ) {
++          return;
++        }
++        for (let i = prefix; i < nextEnd; i += 1) {
++          const line = overlay.children[i] as HTMLElement | undefined;
++          if (line) line.innerHTML = renderedLines[i] ?? '';
++        }
++        handleCodeScroll();
++      });
++    });
++
++    return () => {
++      window.cancelAnimationFrame(frame);
++    };
++  }, [codeTheme, handleCodeScroll, inlineText, language, loading, path]);
+ 
+   // When a path is set but the block content is empty, hydrate by reading
+   // the file. (Backend normally injects content during page load via
+@@ -432,16 +532,23 @@ function FileContentComponent({ block, editor, contentRef }: any) {
+           </div>
+         </div>
+       )}
+-      {/* contentRef must always be mounted for inline content blocks.
+-          Hidden while loading (display:none) so the not-yet-hydrated empty
+-          area is not clickable/editable — prevents partial input from
+-          replacing file content on save. */}
+-      <pre
+-        className={`bn-file-content-pre${path && !loading ? '' : ' is-hidden'}`}
+-        data-language={language}
+-        ref={contentRef}
+-        spellCheck={false}
+-      />
++      <div className="bn-file-content-body">
++        {/* contentRef must always be mounted for inline content blocks.
++            Hidden while loading (display:none) so the not-yet-hydrated empty
++            area is not clickable/editable — prevents partial input from
++            replacing file content on save. */}
++        <pre
++          className={`bn-inline-content bn-file-content-pre${path && !loading ? '' : ' is-hidden'}`}
++          data-language={language}
++          ref={contentRef}
++          spellCheck={false}
++        />
++        <div
++          ref={overlayRef}
++          className="bn-file-content-highlight-overlay"
++          aria-hidden="true"
++        />
++      </div>
+       {!path && (
+         <div className="bn-file-content-placeholder" contentEditable={false}>
+           <FileCode size={20} />
+diff --git a/frontend/src/components/Editor/FileContentHighlightExtension.ts b/frontend/src/components/Editor/FileContentHighlightExtension.ts
+deleted file mode 100644
+index fc01be6..0000000
+--- a/frontend/src/components/Editor/FileContentHighlightExtension.ts
++++ /dev/null
+@@ -1,82 +0,0 @@
+-import { Extension } from '@tiptap/core';
+-import { createHighlightPlugin } from 'prosemirror-highlight';
+-import { createParser } from 'prosemirror-highlight/shiki';
+-import type { Highlighter } from 'shiki';
+-import { getCodeThemeRegistration, type CodeThemeValue } from '../../utils/codeTheme';
+-import { LANGUAGES } from './languages';
+-
+-/**
+- * Adds Shiki-based syntax highlighting to `fileContent` blocks, mirroring the
+- * code block highlighting that BlockNote applies to `codeBlock` nodes.
+- *
+- * Why this exists: BlockNote's built-in highlight plugin is hardcoded to
+- * `nodeTypes: ["codeBlock"]`, so custom block types that also want Shiki
+- * decorations need their own plugin. We build a parallel highlighter with the
+- * same theme + language list as the code block so the visuals match.
+- *
+- * Created via a factory so the highlighter picks up the current code theme.
+- */
+-
+-const SHIKI_LANG_IDS = LANGUAGES.map(([id]) => id).filter((id) => id !== 'text');
+-
+-const PLAIN_LANG_IDS = new Set(['text', 'none', 'plaintext', 'txt']);
+-
+-interface ParserOpts {
+-  language?: string;
+-  [key: string]: unknown;
+-}
+-
+-export function createFileContentHighlightExtension(codeTheme: CodeThemeValue) {
+-  let highlighterPromise: Promise<Highlighter> | null = null;
+-  let resolvedHighlighter: Highlighter | null = null;
+-  let parser: ((opts: ParserOpts) => unknown[]) | null = null;
+-
+-  const ensureHighlighter = (): Promise<Highlighter> => {
+-    if (!highlighterPromise) {
+-      highlighterPromise = (async () => {
+-        const { createHighlighter: createShikiHighlighter } = await import('shiki');
+-        const themeRegistration = getCodeThemeRegistration(codeTheme);
+-        return createShikiHighlighter({
+-          themes: [themeRegistration as any],
+-          langs: SHIKI_LANG_IDS,
+-        });
+-      })();
+-      highlighterPromise.then((h) => {
+-        resolvedHighlighter = h;
+-      });
+-    }
+-    return highlighterPromise;
+-  };
+-
+-  // Mirrors BlockNote's parser logic: kick off highlighter load on first
+-  // call (plugin will re-run when the promise resolves), skip plain text,
+-  // load missing languages on demand.
+-  const parserFn = (opts: ParserOpts): any => {
+-    const lang = opts?.language;
+-    if (!lang || PLAIN_LANG_IDS.has(lang)) return [];
+-    if (!resolvedHighlighter) {
+-      return ensureHighlighter().then(() => parserFn(opts));
+-    }
+-    const loaded = (resolvedHighlighter as any).getLoadedLanguages?.() ?? [];
+-    if (!loaded.includes(lang)) {
+-      return (resolvedHighlighter as any).loadLanguage(lang).then(() => parserFn(opts));
+-    }
+-    if (!parser) {
+-      parser = createParser(resolvedHighlighter as any) as unknown as (opts: ParserOpts) => unknown[];
+-    }
+-    return parser(opts);
+-  };
+-
+-  return Extension.create({
+-    name: 'fileContentHighlighter',
+-    addProseMirrorPlugins() {
+-      return [
+-        createHighlightPlugin({
+-          parser: parserFn as any,
+-          nodeTypes: ['fileContent'],
+-          languageExtractor: (node: any) => node?.attrs?.language,
+-        } as any),
+-      ];
+-    },
+-  });
+-}
+diff --git a/frontend/src/components/Editor/FindReplaceExtension.ts b/frontend/src/components/Editor/FindReplaceExtension.ts
+index 775af00..70f26da 100644
+--- a/frontend/src/components/Editor/FindReplaceExtension.ts
++++ b/frontend/src/components/Editor/FindReplaceExtension.ts
+@@ -38,6 +38,20 @@ const DEFAULT_STATE: FindReplaceState = {
+   currentIndex: -1,
+ };
+ 
++const FIND_MATCH_HIGHLIGHT = 'akmd-find-match';
++const FIND_CURRENT_HIGHLIGHT = 'akmd-find-current';
++
++// Keep the full match list for the counter and navigation, but only render a
++// bounded window around the current hit. A short query can match thousands of
++// positions; creating one inline decoration for every hit blocks the UI for
++// seconds in large file-content blocks.
++const MAX_MATCH_DECORATIONS = 100;
++
++const supportsCssHighlights =
++  typeof CSS !== 'undefined'
++  && 'highlights' in CSS
++  && typeof Highlight === 'function';
++
+ /**
+  * Walk the ProseMirror document and return all case-insensitive matches
+  * of `term` across text nodes. Matches do not span node boundaries.
+@@ -62,19 +76,69 @@ function findMatches(doc: any, term: string): FindMatch[] {
+ }
+ 
+ /**
+- * Build a DecorationSet that highlights every match. The current match
+- * gets a distinct class so the panel can visually distinguish it.
++ * Build a DecorationSet for a bounded window of matches around the current
++ * hit. The current match gets a distinct class so the panel can visually
++ * distinguish it.
+  */
+ function buildDecorations(doc: any, state: FindReplaceState): DecorationSet {
+   if (state.matches.length === 0) return DecorationSet.empty;
+   const decorations: Decoration[] = [];
+-  state.matches.forEach((m, i) => {
++  const anchorIndex = state.currentIndex >= 0 ? state.currentIndex : 0;
++  const halfWindow = Math.floor(MAX_MATCH_DECORATIONS / 2);
++  let start = Math.max(0, anchorIndex - halfWindow);
++  const end = Math.min(state.matches.length, start + MAX_MATCH_DECORATIONS);
++  start = Math.max(0, end - MAX_MATCH_DECORATIONS);
++
++  for (let i = start; i < end; i += 1) {
++    const m = state.matches[i];
+     const className = i === state.currentIndex ? 'find-match-current' : 'find-match';
+     decorations.push(Decoration.inline(m.from, m.to, { class: className }));
+-  });
++  }
+   return DecorationSet.create(doc, decorations);
+ }
+ 
++function clearCssHighlights() {
++  if (!supportsCssHighlights) return;
++  CSS.highlights.delete(FIND_MATCH_HIGHLIGHT);
++  CSS.highlights.delete(FIND_CURRENT_HIGHLIGHT);
++}
++
++function updateCssHighlights(view: any, state: FindReplaceState) {
++  if (!supportsCssHighlights) return;
++  clearCssHighlights();
++  if (state.matches.length === 0) return;
++
++  const anchorIndex = state.currentIndex >= 0 ? state.currentIndex : 0;
++  const halfWindow = Math.floor(MAX_MATCH_DECORATIONS / 2);
++  let start = Math.max(0, anchorIndex - halfWindow);
++  const end = Math.min(state.matches.length, start + MAX_MATCH_DECORATIONS);
++  start = Math.max(0, end - MAX_MATCH_DECORATIONS);
++
++  const ranges: Range[] = [];
++  const currentRanges: Range[] = [];
++  for (let i = start; i < end; i += 1) {
++    const match = state.matches[i];
++    try {
++      const from = view.domAtPos(match.from);
++      const to = view.domAtPos(match.to);
++      const range = document.createRange();
++      range.setStart(from.node, from.offset);
++      range.setEnd(to.node, to.offset);
++      (i === state.currentIndex ? currentRanges : ranges).push(range);
++    } catch {
++      // A match can become stale for one update while the document is being
++      // replaced; the next transaction will rebuild the ranges.
++    }
++  }
++
++  if (ranges.length > 0) {
++    CSS.highlights.set(FIND_MATCH_HIGHLIGHT, new Highlight(...ranges));
++  }
++  if (currentRanges.length > 0) {
++    CSS.highlights.set(FIND_CURRENT_HIGHLIGHT, new Highlight(...currentRanges));
++  }
++}
++
+ /**
+  * Recompute matches for the current term and clamp the current index.
+  * `keepNearPos` biases the initial current match toward a document
+@@ -289,10 +353,24 @@ export const FindReplaceExtension = Extension.create({
+       props: {
+         decorations(state) {
+           const s = findReplaceKey.getState(state);
+-          if (!s) return null;
++          if (!s || supportsCssHighlights) return null;
+           return buildDecorations(state.doc, s);
+         },
+       },
++      view(view) {
++        updateCssHighlights(view, findReplaceKey.getState(view.state) ?? { ...DEFAULT_STATE });
++        return {
++          update(updatedView, previousState) {
++            if (findReplaceKey.getState(previousState) === findReplaceKey.getState(updatedView.state)) {
++              return;
++            }
++            updateCssHighlights(updatedView, findReplaceKey.getState(updatedView.state) ?? { ...DEFAULT_STATE });
++          },
++          destroy() {
++            clearCssHighlights();
++          },
++        };
++      },
+     });
+ 
+     return [plugin];
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index 0d06be3..898f3ae 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -38,7 +38,6 @@ import { SyncedBlockSourceSpec, SyncedBlockMirrorSpec, flushPendingSyncedBlockSa
+ import { SyncedBlockPasteDialog } from './SyncedBlockPasteDialog';
+ import { SyncedBlockDeleteDialog } from './SyncedBlockDeleteDialog';
+ import { SyncedBlockReferenceDialog } from './SyncedBlockReferenceDialog';
+-import { createFileContentHighlightExtension } from './FileContentHighlightExtension';
+ import LinkPasteMenu from './LinkPasteMenu';
+ import CodeBlockToolbar from './CodeBlockToolbar';
+ import { FindReplaceExtension } from './FindReplaceExtension';
+@@ -2684,7 +2683,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       const result = await uploadApi.upload(file, { pageId, spaceSlug });
+       return result.path;
+     },
+-    _tiptapOptions: { extensions: [CustomTabIndent, CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension, createFileContentHighlightExtension(resolvedCodeTheme)] },
++    _tiptapOptions: { extensions: [CustomTabIndent, CustomInputRules, NumberedListIndexFix, InternalLinkBadge, TableCellHighlight, TableHeaderIndicators, ColumnDropPlugin, FindReplaceExtension] },
+   } as any);
+ 
+   // Wire up the editor ref for ToggleHeadingInputRules
+diff --git a/frontend/src/components/Editor/fileContentHighlight.ts b/frontend/src/components/Editor/fileContentHighlight.ts
+new file mode 100644
+index 0000000..1d87ae3
+--- /dev/null
++++ b/frontend/src/components/Editor/fileContentHighlight.ts
+@@ -0,0 +1,85 @@
++import type { Highlighter } from 'shiki';
++import { getCodeThemeRegistration, type CodeThemeValue } from '../../utils/codeTheme';
++import { LANGUAGES } from './languages';
++
++const SHIKI_LANG_IDS = LANGUAGES.map(([id]) => id).filter((id) => id !== 'text');
++const PLAIN_LANG_IDS = new Set(['text', 'none', 'plaintext', 'txt']);
++
++let highlighterPromise: Promise<Highlighter> | null = null;
++let highlighterTheme: CodeThemeValue | null = null;
++
++function escapeHtml(value: string) {
++  return value
++    .replace(/&/g, '&amp;')
++    .replace(/</g, '&lt;')
++    .replace(/>/g, '&gt;');
++}
++
++function escapeAttribute(value: string) {
++  return escapeHtml(value).replace(/"/g, '&quot;');
++}
++
++function stringifyStyle(style: unknown) {
++  if (typeof style === 'string') return style;
++  if (!style || typeof style !== 'object') return '';
++  return Object.entries(style as Record<string, unknown>)
++    .map(([key, value]) => `${key}:${value}`)
++    .join(';');
++}
++
++async function ensureHighlighter(codeTheme: CodeThemeValue) {
++  if (!highlighterPromise || highlighterTheme !== codeTheme) {
++    highlighterTheme = codeTheme;
++    highlighterPromise = (async () => {
++      const { createHighlighter: createShikiHighlighter } = await import('shiki');
++      const themeRegistration = getCodeThemeRegistration(codeTheme);
++      return createShikiHighlighter({
++        themes: [themeRegistration as any],
++        langs: SHIKI_LANG_IDS,
++      });
++    })();
++  }
++  return highlighterPromise;
++}
++
++/**
++ * Return one HTML string per source line. The overlay can therefore retain
++ * unchanged line DOM nodes and replace only the lines touched by an edit.
++ */
++export async function renderFileContentHighlightLines(
++  content: string,
++  language: string,
++  codeTheme: CodeThemeValue,
++) {
++  const plainLines = content.split('\n').map(escapeHtml);
++  if (!content || !language || PLAIN_LANG_IDS.has(language)) {
++    return plainLines;
++  }
++
++  try {
++    const highlighter = await ensureHighlighter(codeTheme);
++    if (!highlighter.getLoadedLanguages().includes(language)) {
++      await highlighter.loadLanguage(language as any);
++    }
++
++    const theme = highlighter.getLoadedThemes()[0];
++    const result = highlighter.codeToTokens(content, {
++      lang: language as any,
++      theme,
++    });
++    const lines = result.tokens.map((tokens) => tokens.map((token: any) => {
++      const style = stringifyStyle(token.htmlStyle ?? (token.color ? { color: token.color } : ''));
++      const text = escapeHtml(token.content);
++      return style
++        ? `<span class="shiki" style="${escapeAttribute(style)}">${text}</span>`
++        : text;
++    }).join(''));
++
++    // Shiki may omit trailing empty lines. Keep the overlay line count aligned
++    // with the editable text so newlines render at the correct height.
++    while (lines.length < plainLines.length) lines.push('');
++    return lines;
++  } catch {
++    return plainLines;
++  }
++}
+diff --git a/frontend/src/components/Editor/findReplace.css b/frontend/src/components/Editor/findReplace.css
+index a25ef40..ba5b37c 100644
+--- a/frontend/src/components/Editor/findReplace.css
++++ b/frontend/src/components/Editor/findReplace.css
+@@ -1,8 +1,20 @@
+ /* Find & Replace match highlights.
+  *
+- * Applied to ProseMirror inline Decorations created by FindReplaceExtension.
++ * Preferred path: CSS Custom Highlight API, which paints ranges without
++ * changing the editor DOM. The class rules below remain the fallback for
++ * browsers without that API.
+  */
+ 
++::highlight(akmd-find-match) {
++  background-color: rgba(255, 213, 79, 0.3);
++  color: inherit;
++}
++
++::highlight(akmd-find-current) {
++  background-color: #ffc400;
++  color: inherit;
++}
++
+ .find-match {
+   background: rgba(255, 213, 79, 0.3);
+   border-radius: 2px;
+diff --git a/frontend/src/styles/globals.css b/frontend/src/styles/globals.css
+index 9824e7f..178ef44 100644
+--- a/frontend/src/styles/globals.css
++++ b/frontend/src/styles/globals.css
+@@ -3,6 +3,10 @@
+ @tailwind utilities;
+ 
+ @layer base {
++  :root {
++    color-scheme: light;
++  }
++
+   html, body, #root {
+     height: 100%;
+   }
+@@ -3863,7 +3867,13 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   cursor: not-allowed;
+ }
+ 
++.bn-file-content-body {
++  position: relative;
++}
++
+ .bn-file-content-pre {
++  position: relative;
++  z-index: 1;
+   margin: 0 !important;
+   padding: 16px !important;
+   overflow-x: auto;
+@@ -3873,6 +3883,7 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   white-space: pre;
+   word-break: normal;
+   overflow-wrap: normal;
++  tab-size: 4;
+   font-family: ui-monospace, 'SF Mono', 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono', Courier, monospace;
+   /* Match codeBlock content styling (see [data-content-type="codeBlock"]
+      .bn-inline-content rule above). Without these the pre inherits the
+@@ -3882,8 +3893,39 @@ body.side-menu-visible [data-floating-ui-focusable]:has(> .bn-side-menu[data-blo
+   line-height: 20.4px !important;
+   -webkit-font-smoothing: auto !important;
+   -moz-osx-font-smoothing: auto !important;
++  color: transparent !important;
++  caret-color: #2c2c2b;
+   outline: none;
+ }
++
++.bn-file-content-highlight-overlay {
++  box-sizing: border-box;
++  position: absolute;
++  inset: 0;
++  z-index: 2;
++  margin: 0;
++  padding: 16px;
++  overflow: hidden;
++  pointer-events: none;
++  user-select: none;
++  -webkit-user-select: none;
++  white-space: pre;
++  word-break: normal;
++  overflow-wrap: normal;
++  font-family: ui-monospace, 'SF Mono', 'SFMono-Regular', Menlo, Consolas, 'PT Mono', 'Liberation Mono', Courier, monospace;
++  font-size: 13.6px !important;
++  font-weight: 400 !important;
++  line-height: 20.4px !important;
++  -webkit-font-smoothing: auto !important;
++  -moz-osx-font-smoothing: auto !important;
++  color: #2c2c2b;
++  tab-size: 4;
++}
++
++.bn-file-content-highlight-line {
++  min-height: 20.4px;
++  white-space: pre;
++}
+ .bn-file-content-pre::-webkit-scrollbar {
+   height: 10px;
+ }

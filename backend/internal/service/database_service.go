@@ -597,6 +597,15 @@ func (s *DatabaseService) UpdateRow(spaceSlug, dbID, rowID, username string, val
 }
 
 func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
+	return s.removeRow(spaceSlug, dbID, rowID, true)
+}
+
+// PermanentDeleteRow 直接从磁盘删除行数据与行正文页（含子页面），不写入回收站，删除后无法恢复。
+func (s *DatabaseService) PermanentDeleteRow(spaceSlug, dbID, rowID string) error {
+	return s.removeRow(spaceSlug, dbID, rowID, false)
+}
+
+func (s *DatabaseService) removeRow(spaceSlug, dbID, rowID string, toTrash bool) error {
 	root, dir, cfg, err := s.findDB(spaceSlug, dbID)
 	if err != nil {
 		return err
@@ -618,8 +627,10 @@ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
 	if deletedRow == nil {
 		return errors.New("row not found")
 	}
-	if err := s.writeRowTrashPackage(spaceSlug, root, dir, cfg, rowID, deletedRow); err != nil {
-		return err
+	if toTrash {
+		if err := s.writeRowTrashPackage(spaceSlug, root, dir, cfg, rowID, deletedRow); err != nil {
+			return err
+		}
 	}
 	err = s.rewriteRows(filepath.Join(root, dir), cfg, func(rows []map[string]string) []map[string]string {
 		next := rows[:0]
@@ -634,7 +645,12 @@ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
 	if err != nil {
 		return err
 	}
-	_ = os.Remove(filepath.Join(root, dir, "subpages", rowID+".md"))
+	pagePath := filepath.Join(dbDir, "subpages", rowID+".md")
+	_ = os.Remove(pagePath)
+	if !toTrash {
+		// 进回收站时子页面目录已随行一起挪进 .trash；永久删除则连带子页面一起删掉
+		_ = os.RemoveAll(strings.TrimSuffix(pagePath, ".md"))
+	}
 	_ = s.rebuildAllLinked(spaceSlug)
 	s.markGitDirty(spaceSlug)
 	return nil

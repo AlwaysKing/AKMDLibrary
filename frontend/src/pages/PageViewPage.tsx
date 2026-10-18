@@ -1,16 +1,20 @@
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { usePageStore } from '../stores/pageStore';
 import { useSpaceStore } from '../stores/spaceStore';
+import { usePersonalStore } from '../stores/personalStore';
 import { usePreferenceStore } from '../stores/preferenceStore';
+import { PersonalNoteNode } from '../api/personal';
 import Breadcrumb from '../components/Editor/Breadcrumb';
 import CoverImage from '../components/Editor/CoverImage';
 import PageIcon from '../components/Editor/PageIcon';
 import PageEditor from '../components/Editor/PageEditor';
+import type { EditorPageContextValue } from '../components/Editor/EditorPageContext';
 import { getLatestMirror } from '../services/mirrorStore';
 import { onSyncStatusChange, flushSync } from '../services/syncModule';
 import { gitApi, GitRepoState } from '../api/git';
+import { pagesApi } from '../api/pages';
 import { MoreHorizontal, Loader2, Check, Lock, UploadCloud, Save } from 'lucide-react';
 
 // 页面不存在时的提示
@@ -25,41 +29,84 @@ function PageNotFound() {
   );
 }
 
+function findPersonalNotePath(
+  notes: PersonalNoteNode[],
+  targetId: string,
+  path: PersonalNoteNode[] = [],
+): PersonalNoteNode[] | null {
+  for (const note of notes) {
+    const nextPath = [...path, note];
+    if (note.id === targetId) return nextPath;
+    const childPath = findPersonalNotePath(note.children || [], targetId, nextPath);
+    if (childPath) return childPath;
+  }
+  return null;
+}
+
 export default function PageViewPage() {
-  const { spaceSlug, pageId } = useParams<{ spaceSlug: string; pageId: string }>();
+  const { spaceSlug, pageId: routePageId, personalNoteId } = useParams<{
+    spaceSlug?: string;
+    pageId?: string;
+    personalNoteId?: string;
+  }>();
   const navigate = useNavigate();
   const { currentPage, currentContent, fetchPage, isLoading, error, refreshPageTree, updateMetadata } = usePageStore();
-  const { setCurrentSpace } = useSpaceStore();
+  const { currentSpace, pageTree, setCurrentSpace } = useSpaceStore();
+  const personalSpaceSlug = usePersonalStore((state) => state.spaceSlug);
+  const personalNotes = usePersonalStore((state) => state.notes);
+  const fetchPersonalOverview = usePersonalStore((state) => state.fetchOverview);
+  const isPersonalNote = !!personalNoteId;
+  const pageId = personalNoteId || routePageId;
+  const activeSpaceSlug = isPersonalNote ? personalSpaceSlug : spaceSlug;
+  const breadcrumbSpaceSlug = spaceSlug || currentSpace?.slug || '';
+  const personalNotePath = personalNoteId ? findPersonalNotePath(personalNotes, personalNoteId) || [] : [];
+  const personalTrail = personalNotePath.slice(0, -1).map((note) => ({
+    label: note.title || '未命名笔记',
+    onClick: () => navigate(`/personal/notes/${note.id}`),
+  }));
   const codeTheme = usePreferenceStore((state) => state.getCodeTheme());
 
   useEffect(() => {
-    if (!spaceSlug || !pageId) return;
+    if (!pageId) return;
     const startedAt = performance.now();
-    console.debug('[page-debug] PageViewPage.effect start', { spaceSlug, pageId });
+    console.debug('[page-debug] PageViewPage.effect start', { spaceSlug, pageId, personalNoteId });
     const controller = new AbortController();
     // 延迟到下一个微任务，让导航先生效；如果组件已卸载则不发出请求
     const timer = setTimeout(async () => {
+      let contentSpaceSlug = spaceSlug;
+      if (isPersonalNote) {
+        contentSpaceSlug = usePersonalStore.getState().spaceSlug;
+        if (!contentSpaceSlug) {
+          await usePersonalStore.getState().fetchOverview();
+          contentSpaceSlug = usePersonalStore.getState().spaceSlug;
+        }
+      }
+      if (!contentSpaceSlug) return;
       console.debug('[page-debug] PageViewPage.effect timer-fired', {
-        spaceSlug,
+        spaceSlug: contentSpaceSlug,
         pageId,
         elapsedMs: Math.round(performance.now() - startedAt),
       });
-      await fetchPage(spaceSlug, pageId, controller.signal);
+      await fetchPage(contentSpaceSlug, pageId, controller.signal);
       console.debug('[page-debug] PageViewPage.effect fetchPage-returned', {
-        spaceSlug,
+        spaceSlug: contentSpaceSlug,
         pageId,
         aborted: controller.signal.aborted,
         elapsedMs: Math.round(performance.now() - startedAt),
       });
       // fetchRecent 在 fetchPage 完成后调用，确保 TouchAccess 已更新
-      useSpaceStore.getState().fetchRecent(spaceSlug);
+      if (!isPersonalNote) {
+        useSpaceStore.getState().fetchRecent(contentSpaceSlug);
+      }
     }, 0);
-    const spaces = useSpaceStore.getState().spaces;
-    const space = spaces.find((s) => s.slug === spaceSlug);
-    if (space) {
-      setCurrentSpace(space);
+    if (!isPersonalNote && spaceSlug) {
+      const spaces = useSpaceStore.getState().spaces;
+      const space = spaces.find((s) => s.slug === spaceSlug);
+      if (space) {
+        setCurrentSpace(space);
+      }
+      usePreferenceStore.getState().setLastViewedPage(spaceSlug, pageId);
     }
-    usePreferenceStore.getState().setLastViewedPage(spaceSlug, pageId);
     return () => {
       console.debug('[page-debug] PageViewPage.effect cleanup', {
         spaceSlug,
@@ -69,7 +116,7 @@ export default function PageViewPage() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [spaceSlug, pageId, fetchPage, setCurrentSpace]);
+  }, [spaceSlug, pageId, isPersonalNote, fetchPage, setCurrentSpace]);
 
   const titleRef = useRef<HTMLHeadingElement>(null);
   const pageMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -87,7 +134,10 @@ export default function PageViewPage() {
   // Skip entirely when the space has git disabled — backend returns 403 and
   // we want the feature to look fully absent.
   const refreshGit = useCallback(async () => {
-    if (!spaceSlug) return;
+    if (isPersonalNote || !spaceSlug) {
+      setGitState(null);
+      return;
+    }
     const space = useSpaceStore.getState().spaces.find((s) => s.slug === spaceSlug);
     if (!space?.feature_flags?.git) {
       setGitState(null);
@@ -99,7 +149,7 @@ export default function PageViewPage() {
     } catch {
       // Not a git repo / network error — leave gitState as-is (or null).
     }
-  }, [spaceSlug]);
+  }, [isPersonalNote, spaceSlug]);
 
   useEffect(() => {
     refreshGit();
@@ -229,7 +279,7 @@ export default function PageViewPage() {
   }, [syncStatus, refreshGit]);
 
   const handleCommitPage = useCallback(async () => {
-    if (!spaceSlug || !currentPage?.file_path || committing) return;
+    if (isPersonalNote || !spaceSlug || !currentPage?.file_path || committing) return;
     setCommitting(true);
     try {
       // Strip "<spaceSlug>/" prefix — git paths are relative to repo root,
@@ -244,7 +294,7 @@ export default function PageViewPage() {
     } finally {
       setCommitting(false);
     }
-  }, [spaceSlug, currentPage, committing, refreshGit]);
+  }, [isPersonalNote, spaceSlug, currentPage, committing, refreshGit]);
 
   // page.file_path is relative to docsDir (e.g. "DLPPlus/重要通知.md"), but
   // git status paths are relative to the repo root (= spaceDir, e.g. just
@@ -284,10 +334,10 @@ export default function PageViewPage() {
   // Subscribe to syncModule events for syncing/synced status
   useEffect(() => {
     const pageIdStr = pageId || '';
-    if (!spaceSlug || !pageIdStr) return;
+    if (!activeSpaceSlug || !pageIdStr) return;
 
     const unsubscribe = onSyncStatusChange((event) => {
-      if (event.spaceSlug === spaceSlug && event.pageId === pageIdStr) {
+      if (event.spaceSlug === activeSpaceSlug && event.pageId === pageIdStr) {
         if (event.type === 'syncing') {
           setSyncStatus('syncing');
         } else if (event.type === 'synced') {
@@ -297,34 +347,34 @@ export default function PageViewPage() {
       }
     });
     return unsubscribe;
-  }, [spaceSlug, pageId]);
+  }, [activeSpaceSlug, pageId]);
 
   // On page load: check for pending mirrors from previous sessions
   useEffect(() => {
-    if (!spaceSlug || !pageId) return;
-    getLatestMirror(spaceSlug, pageId).then(mirror => {
+    if (!activeSpaceSlug || !pageId) return;
+    getLatestMirror(activeSpaceSlug, pageId).then(mirror => {
       if (mirror && !mirror.synced) {
         // There is unsynced content from a previous session — trigger immediate sync
         flushSync();
         setSyncStatus('syncing');
       }
     });
-  }, [spaceSlug, pageId]);
+  }, [activeSpaceSlug, pageId]);
 
   const handleFullPageToggle = useCallback(async () => {
-    if (!spaceSlug || !pageId || !currentPage || currentPage.is_locked) return;
+    if (!activeSpaceSlug || !pageId || !currentPage || currentPage.is_locked) return;
     const newFullPage = !currentPage.full_page;
-    await updateMetadata(spaceSlug, pageId, { full_page: newFullPage });
-  }, [spaceSlug, pageId, currentPage, updateMetadata]);
+    await updateMetadata(activeSpaceSlug, pageId, { full_page: newFullPage });
+  }, [activeSpaceSlug, pageId, currentPage, updateMetadata]);
 
   const handleLockedToggle = useCallback(async () => {
-    if (!spaceSlug || !pageId || !currentPage) return;
+    if (!activeSpaceSlug || !pageId || !currentPage) return;
     const newLocked = !currentPage.is_locked;
-    await updateMetadata(spaceSlug, pageId, { is_locked: newLocked });
+    await updateMetadata(activeSpaceSlug, pageId, { is_locked: newLocked });
     if (newLocked) {
       titleRef.current?.blur();
     }
-  }, [spaceSlug, pageId, currentPage, updateMetadata]);
+  }, [activeSpaceSlug, pageId, currentPage, updateMetadata]);
 
   const syncPageMenuPosition = useCallback(() => {
     const rect = pageMenuButtonRef.current?.getBoundingClientRect();
@@ -360,13 +410,17 @@ export default function PageViewPage() {
     if (currentPage?.is_locked) return;
     const newTitle = titleRef.current?.textContent?.trim() || '';
     const currentTitle = usePageStore.getState().currentPage?.title;
-    if (newTitle && newTitle !== currentTitle && spaceSlug && pageId) {
-      await updateMetadata(spaceSlug, pageId, { title: newTitle });
-      await refreshPageTree();
+    if (newTitle && newTitle !== currentTitle && activeSpaceSlug && pageId) {
+      await updateMetadata(activeSpaceSlug, pageId, { title: newTitle });
+      if (isPersonalNote) {
+        await fetchPersonalOverview();
+      } else {
+        await refreshPageTree();
+      }
     } else if (!newTitle && titleRef.current) {
       titleRef.current.textContent = currentTitle || '未命名页面';
     }
-  }, [currentPage?.is_locked, spaceSlug, pageId, updateMetadata, refreshPageTree]);
+  }, [currentPage?.is_locked, activeSpaceSlug, pageId, updateMetadata, refreshPageTree, isPersonalNote, fetchPersonalOverview]);
 
   const handleTitleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (currentPage?.is_locked) return;
@@ -392,6 +446,30 @@ export default function PageViewPage() {
       document.dispatchEvent(new CustomEvent('title-enter-pressed'));
     }
   }, [currentPage?.is_locked]);
+
+  const editorPageContext = useMemo<EditorPageContextValue | undefined>(() => {
+    const contextPageId = currentPage?.id || pageId;
+    if (!activeSpaceSlug || !contextPageId) return undefined;
+    return {
+      spaceSlug: activeSpaceSlug,
+      currentPageId: contextPageId,
+      pageTree: isPersonalNote ? personalNotes : pageTree,
+      pagePath: (targetPageId) => isPersonalNote
+        ? `/personal/notes/${targetPageId}`
+        : `/s/${spaceSlug}/p/${targetPageId}`,
+      createSubpage: (title, parentId) => pagesApi.create(activeSpaceSlug, {
+        title,
+        parent_id: parentId,
+      }),
+      refreshPageTree: async () => {
+        if (isPersonalNote) {
+          await fetchPersonalOverview();
+        } else {
+          await refreshPageTree();
+        }
+      },
+    };
+  }, [activeSpaceSlug, currentPage?.id, pageId, isPersonalNote, personalNotes, pageTree, spaceSlug, fetchPersonalOverview, refreshPageTree]);
 
   if (isLoading) {
     return (
@@ -500,7 +578,9 @@ export default function PageViewPage() {
       {/* Breadcrumb — 固定在顶部，不随内容滚动 */}
       <Breadcrumb
         pageTitle={currentPage.title}
-        spaceSlug={spaceSlug!}
+        spaceSlug={breadcrumbSpaceSlug}
+        rootLabel={isPersonalNote ? '个人空间' : undefined}
+        trail={personalTrail.length > 0 ? personalTrail : undefined}
         actions={
           <div className="flex items-center gap-2">
             {syncStatus === 'unsaved' && (
@@ -567,7 +647,7 @@ export default function PageViewPage() {
             <CoverImage
               coverUrl={currentPage.cover_url}
               coverOffset={currentPage.cover_offset}
-              spaceSlug={spaceSlug!}
+              spaceSlug={activeSpaceSlug || ''}
               pageId={currentPage.id}
             />
           </div>
@@ -583,7 +663,7 @@ export default function PageViewPage() {
                 <PageIcon
                   icon={currentPage.icon}
                   iconLarge={currentPage.icon_large}
-                  spaceSlug={spaceSlug!}
+                  spaceSlug={activeSpaceSlug || ''}
                   pageId={currentPage.id}
                 />
               </div>
@@ -593,7 +673,7 @@ export default function PageViewPage() {
                   <CoverImage
                     coverUrl={currentPage.cover_url}
                     coverOffset={currentPage.cover_offset}
-                    spaceSlug={spaceSlug!}
+                    spaceSlug={activeSpaceSlug || ''}
                     pageId={currentPage.id}
                   />
                 </div>
@@ -607,14 +687,14 @@ export default function PageViewPage() {
             <div className={`flex items-center gap-0.5 transition-opacity duration-100 py-3 ${currentPage.is_locked ? 'opacity-0 pointer-events-none' : 'opacity-0 hover:opacity-100'}`}>
               <PageIcon
                 icon={currentPage.icon}
-                spaceSlug={spaceSlug!}
+                spaceSlug={activeSpaceSlug || ''}
                 pageId={currentPage.id}
               />
               {!showCover && !currentPage.is_locked && (
                 <CoverImage
                   coverUrl={currentPage.cover_url}
                   coverOffset={currentPage.cover_offset}
-                  spaceSlug={spaceSlug!}
+                  spaceSlug={activeSpaceSlug || ''}
                   pageId={currentPage.id}
                 />
               )}
@@ -640,7 +720,8 @@ export default function PageViewPage() {
             <PageEditor
               key={`${currentPage.id}:${codeTheme}`}
               initialContent={currentContent}
-              pageIdentity={{ spaceSlug: spaceSlug!, pageId: currentPage.id }}
+              pageIdentity={{ spaceSlug: activeSpaceSlug || '', pageId: currentPage.id }}
+              pageContext={editorPageContext}
               onSyncStatusChange={handleSyncStatusChange}
               readOnly={!!currentPage.is_locked}
               codeTheme={codeTheme}

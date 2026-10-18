@@ -46,6 +46,7 @@ import './findReplace.css';
 import { getBlockDragData, markDragHandled } from './blockDragState';
 import { pageMetaCache } from './PageMetaCache';
 import { mentionMetaCache } from './MentionMetaCache';
+import { setEditorPageContext, type EditorPageContextValue } from './EditorPageContext';
 import { pagesApi } from '../../api/pages';
 import { syncedBlocksApi } from '../../api/syncedBlocks';
 import { uploadApi } from '../../api/upload';
@@ -2609,6 +2610,7 @@ interface PageEditorProps {
   registerMarkdownGetter?: (getter: (() => string) | null) => void;
   /** 行页面：由外层负责保存，跳过内部的镜像写入（默认 false，普通页面行为不变） */
   disableMirror?: boolean;
+  pageContext?: EditorPageContextValue;
   onSyncStatusChange?: (status: 'unsaved' | 'syncing' | 'synced') => void;
   readOnly?: boolean;
   codeTheme?: CodeThemeValue;
@@ -2630,7 +2632,7 @@ const IMAGE_TOOLBAR_ICONS = {
   replace: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5L5 13l2.5-2.5"/><path d="M5 3v10"/><path d="M13.5 5.5L11 3 8.5 5.5"/><path d="M11 13V3"/></svg>`,
 };
 
-export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, registerMarkdownGetter, disableMirror = false, readOnly = false, codeTheme }: PageEditorProps) {
+export function PageEditor({ initialContent, pageIdentity, pageContext, onSyncStatusChange, registerMarkdownGetter, disableMirror = false, readOnly = false, codeTheme }: PageEditorProps) {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const immediateSyncInFlightRef = useRef<Promise<void> | null>(null);
   const immediateSyncQueuedRef = useRef(false);
@@ -2700,6 +2702,9 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
     open: false,
     mode: 'find',
   });
+  if (pageContext) {
+    setEditorPageContext(editor, pageContext);
+  }
   const [pageContextMenu, setPageContextMenu] = useState<{ top: number; left: number } | null>(null);
   const pageContextMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -2794,7 +2799,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
 
       // Record undo action: if moved from another parent, undo should move back
       if (fromParentId) {
-        const slug = useSpaceStore.getState().currentSpace?.slug;
+        const slug = identityRef.current.spaceSlug;
         if (slug) {
           setSubpageUndoAction(pageId, { action: 'moveBack', spaceSlug: slug, fromParentId });
         }

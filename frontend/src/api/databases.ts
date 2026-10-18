@@ -98,6 +98,9 @@ export const databasesApi = {
   async deleteRow(spaceSlug: string, dbId: string, rowId: string): Promise<void> {
     await apiClient.delete(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}`);
   },
+  async deleteRowPermanent(spaceSlug: string, dbId: string, rowId: string): Promise<void> {
+    await apiClient.delete(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}/permanent`);
+  },
   async getRowPage(spaceSlug: string, dbId: string, rowId: string): Promise<{ markdown: string; title: string }> {
     const res = await apiClient.get(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}/page`);
     return res.data;

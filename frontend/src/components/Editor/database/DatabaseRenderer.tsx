@@ -121,6 +121,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
+  const [pendingPermanentDeleteRows, setPendingPermanentDeleteRows] = useState<string[] | null>(null);
+  const [permanentlyDeletingRows, setPermanentlyDeletingRows] = useState(false);
   const [rowOpenPosition, setRowOpenPosition] = useState<{ top: number; left: number } | null>(null);
   const [tableWrapWidth, setTableWrapWidth] = useState(0);
   const rowOpenPositionRef = useRef<{ top: number; left: number } | null>(null);
@@ -883,12 +885,24 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     requestDeleteRows([rowId]);
   };
 
+  const permanentDeleteRowById = async (rowId: string) => {
+    closeRowContextMenu();
+    requestPermanentDeleteRows([rowId]);
+  };
+
   function requestDeleteRows(rowIDs: string[]) {
     if (readonly) return;
     const ids = rowIDs.filter(Boolean);
     if (ids.length === 0) return;
     setPendingDeleteRows(ids);
   };
+
+  function requestPermanentDeleteRows(rowIDs: string[]) {
+    if (readonly) return;
+    const ids = rowIDs.filter(Boolean);
+    if (ids.length === 0) return;
+    setPendingPermanentDeleteRows(ids);
+  }
 
   function requestDeleteSelectedRows() {
     if (readonly || selectedRowIDs.size === 0) return;
@@ -909,6 +923,23 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
       requestDatabaseImmediateSync();
     } finally {
       setDeletingRows(false);
+    }
+  }
+
+  async function confirmPermanentDeleteRows() {
+    if (readonly || !pendingPermanentDeleteRows?.length) return;
+    setPermanentlyDeletingRows(true);
+    const ids = pendingPermanentDeleteRows;
+    const idSet = new Set(ids);
+    try {
+      await Promise.all(ids.map((rowId) => databasesApi.deleteRowPermanent(spaceSlug, dbId, rowId)));
+      setRows((prev) => prev.filter((row) => !idSet.has(row.uuid)));
+      setSelectedRowIDs((current) => new Set(Array.from(current).filter((id) => !idSet.has(id))));
+      setPendingPermanentDeleteRows(null);
+      closeRowContextMenu();
+      requestDatabaseImmediateSync();
+    } finally {
+      setPermanentlyDeletingRows(false);
     }
   }
 
@@ -2076,6 +2107,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
             onCopyLink={() => void copyRowLink(rowContextMenu.row)}
             onDuplicate={() => void duplicateRow(rowContextMenu.row)}
             onDelete={() => void deleteRowById(rowContextMenu.row.uuid)}
+            onPermanentDelete={() => void permanentDeleteRowById(rowContextMenu.row.uuid)}
           />,
           document.body,
         )}
@@ -2114,6 +2146,18 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
               if (!deletingRows) setPendingDeleteRows(null);
             }}
             onConfirm={confirmDeleteRows}
+          />,
+          document.body,
+        )}
+        {pendingPermanentDeleteRows && createPortal(
+          <DeleteRowsDialog
+            count={pendingPermanentDeleteRows.length}
+            loading={permanentlyDeletingRows}
+            permanent
+            onCancel={() => {
+              if (!permanentlyDeletingRows) setPendingPermanentDeleteRows(null);
+            }}
+            onConfirm={confirmPermanentDeleteRows}
           />,
           document.body,
         )}
@@ -2156,7 +2200,8 @@ function DeleteColumnDialog({ column, loading, onCancel, onConfirm }: { column: 
   );
 }
 
-function DeleteRowsDialog({ count, loading, onCancel, onConfirm }: { count: number; loading: boolean; onCancel: () => void; onConfirm: () => void }) {
+function DeleteRowsDialog({ count, loading, permanent = false, onCancel, onConfirm }: { count: number; loading: boolean; permanent?: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const actionLabel = permanent ? '永久删除' : '删除';
   return (
     <div className="akdb-dialog-backdrop" role="presentation" onMouseDown={onCancel}>
       <div
@@ -2166,15 +2211,15 @@ function DeleteRowsDialog({ count, loading, onCancel, onConfirm }: { count: numb
         aria-labelledby="akdb-delete-rows-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="akdb-bind-dialog-title" id="akdb-delete-rows-title">删除行</div>
+        <div className="akdb-bind-dialog-title" id="akdb-delete-rows-title">{permanent ? '永久删除行' : '删除行'}</div>
         <div className="akdb-bind-dialog-body">
-          <span>确定要删除选中的 {count} 行吗？</span>
-          <span>这些行对应的数据页会进入回收站，可以之后恢复。</span>
+          <span>确定要{actionLabel}选中的 {count} 行吗？</span>
+          <span>{permanent ? '这些行的数据和正文页会被直接删除，无法恢复。' : '这些行对应的数据页会进入回收站，可以之后恢复。'}</span>
         </div>
         <div className="akdb-bind-dialog-actions">
           <button type="button" className="akdb-dialog-ghost" disabled={loading} onClick={onCancel}>取消</button>
           <button type="button" className="akdb-dialog-danger" disabled={loading} onClick={onConfirm}>
-            {loading ? '删除中...' : '删除'}
+            {loading ? `${actionLabel}中...` : actionLabel}
           </button>
         </div>
       </div>
@@ -2981,7 +3026,8 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
   onCopyLink: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
-}>(({ row, style, onOpen, onCopyLink, onDuplicate, onDelete }, ref) => {
+  onPermanentDelete: () => void;
+}>(({ row, style, onOpen, onCopyLink, onDuplicate, onDelete, onPermanentDelete }, ref) => {
   return (
     <div
       ref={ref}
@@ -3007,6 +3053,10 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
         <button type="button" className="akdb-row-context-item" onClick={onDelete}>
           <Trash2 size={16} />
           <span>移到垃圾箱</span>
+        </button>
+        <button type="button" className="akdb-row-context-item is-danger" onClick={onPermanentDelete}>
+          <Trash2 size={16} />
+          <span>永久删除</span>
         </button>
       </div>
     </div>

@@ -40,6 +40,8 @@ type CreateSpaceRequest struct {
 	Name        string `json:"name"`
 	Icon        string `json:"icon"`
 	Description string `json:"description"`
+	SourcePath  string `json:"source_path,omitempty"`
+	ImportMode  string `json:"import_mode,omitempty"`
 }
 
 type UpdateSpaceRequest struct {

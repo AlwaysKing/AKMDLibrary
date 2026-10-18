@@ -4,6 +4,7 @@ import { AlertTriangle, ExternalLink, RefreshCw, Repeat2 } from 'lucide-react';
 import { syncedBlocksApi, type SyncedBlockQuote } from '../../api/syncedBlocks';
 import { useSpaceStore } from '../../stores/spaceStore';
 import { markdownToBlocks, blocksToMarkdown } from '../../utils/markdown';
+import { getEditorPageContext } from './EditorPageContext';
 
 const pendingSyncedBlockSaves = new Map<string, () => Promise<void>>();
 
@@ -64,11 +65,12 @@ function SyncedBlockSourceComponent({ block }: any) {
 
 function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
   const { currentSpace } = useSpaceStore();
-  const slug = currentSpace?.slug || '';
+  const pageContext = getEditorPageContext(outerEditor);
+  const slug = pageContext?.spaceSlug || currentSpace?.slug || '';
   const sourcePageId = block.props?.sourcePageId || '';
   const sourceBlockId = block.props?.sourceBlockId || '';
   const syncId = block.props?.syncId || '';
-  const currentPageId = block.props?.pageId || currentPageIdFromPath();
+  const currentPageId = block.props?.pageId || pageContext?.currentPageId || currentPageIdFromPath();
   const [sourceTitle, setSourceTitle] = useState('');
   const [state, setState] = useState<'loading' | 'live' | 'saving' | 'saved' | 'broken' | 'error'>('loading');
   const loadedRef = useRef(false);
@@ -249,7 +251,11 @@ function SyncedBlockMirrorComponent({ block, editor: outerEditor }: any) {
             <button
               type="button"
               className="bn-synced-block-icon-btn"
-              onClick={() => { if (slug) window.location.href = `/s/${slug}/p/${sourcePageId}`; }}
+              onClick={() => {
+                const targetPath = pageContext?.pagePath(sourcePageId);
+                if (targetPath) window.location.href = targetPath;
+                else if (slug) window.location.href = `/s/${slug}/p/${sourcePageId}`;
+              }}
               aria-label="跳转到源页面"
             >
               <ExternalLink size={13} />

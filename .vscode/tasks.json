@@ -36,6 +36,29 @@
         "reveal": "always",
         "panel": "dedicated"
       }
+    },
+    {
+      "label": "Build, Sign and Install Desktop App",
+      "type": "shell",
+      "command": "AKMDL_INSTALL_DIR=/Applications ./scripts/build-desktop-macos.sh",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Run Desktop Debug",
+      "type": "shell",
+      "command": "./scripts/run-desktop-debug-macos.sh",
+      "isBackground": true,
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
     }
   ]
 }

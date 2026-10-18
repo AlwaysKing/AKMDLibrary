@@ -1,0 +1,2659 @@
+diff --git a/.gitignore b/.gitignore
+index ac9ea03..a6ff17b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -32,6 +32,7 @@ docs/*
+ !docs/STRUCTURE.md
+ # 项目设计文档与 superpowers 计划文档
+ !docs/DESIGN.md
++!docs/DESKTOP-APP.md
+ !docs/PLAN.md
+ !docs/PWA-SUPPORT-DESIGN.md
+ !docs/SYNCED-BLOCK-DESIGN.md
+diff --git a/.vscode/tasks.json b/.vscode/tasks.json
+index 43564fe..643ca76 100644
+--- a/.vscode/tasks.json
++++ b/.vscode/tasks.json
+@@ -36,6 +36,29 @@
+         "reveal": "always",
+         "panel": "dedicated"
+       }
++    },
++    {
++      "label": "Build, Sign and Install Desktop App",
++      "type": "shell",
++      "command": "AKMDL_INSTALL_DIR=/Applications ./scripts/build-desktop-macos.sh",
++      "problemMatcher": [],
++      "group": "build",
++      "presentation": {
++        "reveal": "always",
++        "panel": "dedicated"
++      }
++    },
++    {
++      "label": "Run Desktop Debug",
++      "type": "shell",
++      "command": "./scripts/run-desktop-debug-macos.sh",
++      "isBackground": true,
++      "problemMatcher": [],
++      "group": "build",
++      "presentation": {
++        "reveal": "always",
++        "panel": "dedicated"
++      }
+     }
+   ]
+ }
+diff --git a/README.md b/README.md
+index 34ceaa7..a1be998 100644
+--- a/README.md
++++ b/README.md
+@@ -83,6 +83,20 @@ docker compose up -d
+ docker compose pull && docker compose up -d
+ ```
+ 
++### macOS 桌面版
++
++桌面版复用同一套 Go 后端和 React 前端，数据默认存放在 `~/Library/Application Support/AKMDLibrary`。
++
++```bash
++cd frontend
++npm ci
++cd ..
++./scripts/build-desktop-macos.sh
++```
++
++构建产物默认输出到 `/tmp/AKMDLibrary/desktop/AKMDLibrary.app`。详细说明见
++[docs/DESKTOP-APP.md](docs/DESKTOP-APP.md)。
++
+ ### 查看日志 / 运维
+ 
+ ```bash
+diff --git a/backend/cmd/server/main.go b/backend/cmd/server/main.go
+index aab6e33..68d29a9 100644
+--- a/backend/cmd/server/main.go
++++ b/backend/cmd/server/main.go
+@@ -2,414 +2,32 @@ package main
+ 
+ import (
+ 	"log"
+-	"net/http"
+ 	"os"
+-	"path/filepath"
+-	"strings"
+-	"time"
+ 
+-	"github.com/go-chi/chi/v5"
+-	chimw "github.com/go-chi/chi/v5/middleware"
+-	"github.com/go-chi/cors"
+ 	"github.com/joho/godotenv"
+ 
+-	"github.com/alwaysking/akmdlibrary/internal/handler"
+-	"github.com/alwaysking/akmdlibrary/internal/middleware"
+-	"github.com/alwaysking/akmdlibrary/internal/repository"
+-	"github.com/alwaysking/akmdlibrary/internal/service"
+-	"github.com/alwaysking/akmdlibrary/internal/service/claude"
++	"github.com/alwaysking/akmdlibrary/internal/app"
+ )
+ 
+ func main() {
+-	// 加载项目根的 .env 文件（调试时使用），没文件不报错
+-	// godotenv.Load 任一文件失败会提前返回，所以手动按优先级找第一个存在的
+-	for _, f := range []string{".env", "../.env", "../../.env"} {
+-		if _, err := os.Stat(f); err == nil {
+-			_ = godotenv.Load(f)
+-			break
+-		}
+-	}
+-
+-	port := getEnv("PORT", "8080")
+-	docsDir := getEnv("DOCS_DIR", "/app/docs")
+-	dataDir := getEnv("DATA_DIR", "/app/data")
+-	jwtSecret := getEnv("JWT_SECRET", "dev-secret-change-me")
+-	frontendDist := getEnv("FRONTEND_DIST", "/app/html")
+-
+-	// Ensure directories exist
+-	os.MkdirAll(docsDir, 0755)
+-	os.MkdirAll(dataDir, 0755)
+-	uploadDir := filepath.Join(dataDir, "uploads")
+-	os.MkdirAll(uploadDir, 0755)
+-	iconDir := filepath.Join(dataDir, "icons")
+-	os.MkdirAll(iconDir, 0755)
+-	coverDir := filepath.Join(dataDir, "covers")
+-	os.MkdirAll(coverDir, 0755)
+-	siteDir := filepath.Join(dataDir, "site")
+-	os.MkdirAll(siteDir, 0755)
++	loadEnv()
+ 
+-	// Initialize database
+-	db, err := repository.NewDB(dataDir)
++	application, err := app.NewFromEnv()
+ 	if err != nil {
+-		log.Fatalf("Failed to initialize database: %v", err)
+-	}
+-	defer db.Close()
+-
+-	// Initialize repositories
+-	userRepo := repository.NewUserRepository(db)
+-	spaceRepo := repository.NewSpaceRepository(db)
+-	memberRepo := repository.NewMemberRepository(db)
+-	prefRepo := repository.NewPreferenceRepository(db)
+-	siteSettingRepo := repository.NewSiteSettingRepository(db)
+-	bookmarkRepo := repository.NewBookmarkRepository(db.DB)
+-
+-	// Initialize services
+-	authService := service.NewAuthService(userRepo, jwtSecret)
+-	userService := service.NewUserService(userRepo, authService)
+-	gitService := service.NewGitService(docsDir)
+-	gitService.SetCredentialStore(service.NewCredentialStore(filepath.Join(dataDir, "git_credentials")))
+-	gitSyncWorker := service.NewGitSyncWorker(gitService)
+-	// When config changes, invalidate the worker's cache so new auto-commit
+-	// settings apply immediately instead of after the TTL.
+-	gitService.SetOnConfigChange(gitSyncWorker.InvalidateConfig)
+-	gitSyncWorker.Start()
+-	defer gitSyncWorker.Stop()
+-	pageService := service.NewPageService(docsDir)
+-	pageService.SetGitSyncWorker(gitSyncWorker)
+-	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageService, docsDir)
+-	spaceService.SetGitSyncWorker(gitSyncWorker)
+-	// Inject feature-flag probe so the worker skips spaces with git disabled.
+-	// Must run after spaceService is constructed to avoid a circular import.
+-	gitSyncWorker.SetGitFeatureProbe(func(slug string) bool {
+-		space, err := spaceService.GetBySlug(slug)
+-		if err != nil {
+-			return false
+-		}
+-		return space.ParseFeatureFlags().Git
+-	})
+-	prefService := service.NewPreferenceService(prefRepo)
+-	siteSettingService := service.NewSiteSettingService(siteSettingRepo)
+-	// Claude config store
+-	claudeConfigStore := claude.NewConfigStore(dataDir, siteSettingRepo)
+-	if err := claudeConfigStore.EnsureDefaults(); err != nil {
+-		log.Printf("Warning: failed to init claude config: %v", err)
++		log.Fatalf("Failed to initialize application: %v", err)
+ 	}
+-	claudeManager := claude.NewManager(claudeConfigStore, memberRepo, spaceRepo, pageService, authService, docsDir)
+-	bookmarkService := service.NewBookmarkService(bookmarkRepo)
+-	searchService := service.NewSearchService(docsDir)
+-	databaseService := service.NewDatabaseService(docsDir)
+-	databaseService.SetGitSyncWorker(gitSyncWorker)
+-	pageService.SetDatabaseTrashRestorer(databaseService.RestoreTrashedRow)
+-
+-	// Sync spaces from filesystem on startup
+-	if err := spaceService.SyncFromFS(); err != nil {
+-		log.Printf("Warning: failed to sync spaces from filesystem: %v", err)
+-	}
+-
+-	// Migrate page IDs from integer to UUID (one-time)
+-	if err := pageService.MigrateToUUIDs(); err != nil {
+-		log.Printf("Warning: failed to migrate page IDs to UUID: %v", err)
+-	}
+-
+-	// Initialize handlers
+-	authHandler := handler.NewAuthHandler(authService)
+-	userHandler := handler.NewUserHandler(userService)
+-	spaceHandler := handler.NewSpaceHandler(spaceService, authService)
+-	pageHandler := handler.NewPageHandler(pageService, spaceService, authService)
+-	uploadHandler := handler.NewUploadHandler(pageService, uploadDir, iconDir, coverDir)
+-	prefHandler := handler.NewPreferenceHandler(prefService)
+-	siteSettingHandler := handler.NewSiteSettingHandler(siteSettingService, siteDir)
+-	bookmarkHandler := handler.NewBookmarkHandler(bookmarkService)
+-	claudeHandler := handler.NewClaudeHandler(claudeConfigStore, claudeManager)
+-	unsplashHandler := handler.NewUnsplashHandler(prefService)
+-	gitHandler := handler.NewGitHandler(gitService, spaceService)
+-	searchHandler := handler.NewSearchHandler(searchService, spaceService)
+-	filesHandler := handler.NewFilesHandler(docsDir, spaceService)
+-	syncedBlockHandler := handler.NewSyncedBlockHandler(pageService, spaceService)
+-	databaseHandler := handler.NewDatabaseHandler(databaseService, spaceService)
+-
+-	// Initialize middleware
+-	authMiddleware := middleware.NewAuthMiddleware(authService)
+-	featureFlagMiddleware := middleware.NewFeatureFlagMiddleware(spaceService)
+-
+-	// Router
+-	r := chi.NewRouter()
+-	r.Use(chimw.Logger)
+-	r.Use(chimw.Recoverer)
+-	r.Use(pageDebugRequestLogger)
+-	r.Use(middleware.ErrorLogging)
+-	r.Use(cors.Handler(cors.Options{
+-		AllowedOrigins:   []string{"*"},
+-		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+-		ExposedHeaders:   []string{"Link"},
+-		AllowCredentials: true,
+-		MaxAge:           300,
+-	}))
+-
+-	// Public routes
+-	r.Post("/api/auth/login", authHandler.Login)
+-	r.Post("/api/auth/refresh", authHandler.Refresh)
+-	r.Post("/api/auth/logout", authHandler.Logout)
+-	r.Get("/api/site-settings", siteSettingHandler.Get)
+-	// Claude WebSocket（独立鉴权——浏览器 WS 不能用 Authorization header）
+-	r.Get("/api/spaces/{slug}/claude/ws", claudeHandler.ChatWS)
+-	// Claude 附件上传（multipart，5MB 上限，鉴权同 WS：query param ?token=）
+-	r.Post("/api/spaces/{slug}/claude/attachments", claudeHandler.UploadAttachment)
+-
+-	// Protected routes
+-	r.Group(func(r chi.Router) {
+-		r.Use(authMiddleware.RequireAuth)
+-
+-		r.Get("/api/auth/me", authHandler.Me)
+-		r.Put("/api/auth/profile", authHandler.UpdateProfile)
+-		r.Put("/api/auth/password", authHandler.ChangePassword)
+-
+-		// Preferences
+-		r.Get("/api/user/preferences", prefHandler.Get)
+-		r.Put("/api/user/preferences", prefHandler.Update)
+-
+-		// Spaces
+-		r.Get("/api/spaces", spaceHandler.List)
+-		r.Get("/api/spaces/{slug}", spaceHandler.Get)
+-		r.Post("/api/spaces", spaceHandler.Create)
+-		r.Put("/api/spaces/{slug}", spaceHandler.Update)
+-		r.Delete("/api/spaces/{slug}", spaceHandler.Delete)
+-		r.Post("/api/spaces/{slug}/refresh", spaceHandler.Refresh)
+-		r.Put("/api/spaces/{slug}/feature-flags", spaceHandler.UpdateFeatureFlags)
+-
+-		// Space members
+-		r.Get("/api/spaces/{slug}/members", spaceHandler.ListMembers)
+-		r.Post("/api/spaces/{slug}/members", spaceHandler.AddMember)
+-		r.Put("/api/spaces/{slug}/members/{id}", spaceHandler.UpdateMember)
+-		r.Delete("/api/spaces/{slug}/members/{id}", spaceHandler.RemoveMember)
+-
+-		// Pages
+-		r.Get("/api/spaces/{slug}/pages", pageHandler.GetTree)
+-		r.Get("/api/spaces/{slug}/pages/starred", pageHandler.ListStarred)
+-		r.Get("/api/spaces/{slug}/pages/recent", pageHandler.ListRecent)
+-		r.Get("/api/spaces/{slug}/pages/{id}", pageHandler.GetByID)
+-		r.Post("/api/spaces/{slug}/pages", pageHandler.Create)
+-		r.Put("/api/spaces/{slug}/pages/{id}", pageHandler.Update)
+-		r.Put("/api/spaces/{slug}/pages/{id}/meta", pageHandler.UpdateMeta)
+-		r.Post("/api/spaces/{slug}/pages/{id}/duplicate", pageHandler.Duplicate)
+-		r.Post("/api/spaces/{slug}/pages/{id}/restore", pageHandler.RestoreByPageID)
+-		r.Put("/api/spaces/{slug}/pages/{id}/move", pageHandler.Move)
+-		r.Delete("/api/spaces/{slug}/pages/{id}", pageHandler.Delete)
+-
+-		// Synced blocks
+-		r.Get("/api/spaces/{slug}/synced-block", syncedBlockHandler.Get)
+-		r.Put("/api/spaces/{slug}/synced-block/{sourceBlockId}", syncedBlockHandler.Update)
+-		r.Post("/api/spaces/{slug}/synced-block/wrap-source", syncedBlockHandler.WrapSource)
+-		r.Delete("/api/spaces/{slug}/synced-block/{sourceBlockId}", syncedBlockHandler.Delete)
+-
+-		// Trash
+-		r.Get("/api/spaces/{slug}/trash", pageHandler.ListTrash)
+-		r.Post("/api/spaces/{slug}/trash/restore", pageHandler.RestoreFromTrash)
+-		r.Post("/api/spaces/{slug}/trash/delete", pageHandler.PermanentDelete)
+-
+-		// Git (per-space; UI hides these when space isn't a git repo).
+-		// RequireGitFeature returns 403 when feature_flags.git is off.
+-		r.Group(func(r chi.Router) {
+-			r.Use(featureFlagMiddleware.RequireGitFeature)
+-			r.Get("/api/spaces/{slug}/git/state", gitHandler.State)
+-			r.Post("/api/spaces/{slug}/git/commit", gitHandler.Commit)
+-			r.Post("/api/spaces/{slug}/git/restore", gitHandler.Restore)
+-			r.Post("/api/spaces/{slug}/git/push", gitHandler.Push)
+-			r.Post("/api/spaces/{slug}/git/pull", gitHandler.Pull)
+-			r.Get("/api/spaces/{slug}/git/config", gitHandler.GetConfig)
+-			r.Put("/api/spaces/{slug}/git/config", gitHandler.SetConfig)
+-			r.Get("/api/spaces/{slug}/git/credentials", gitHandler.GetCredential)
+-			r.Put("/api/spaces/{slug}/git/credentials", gitHandler.SetCredential)
+-			r.Delete("/api/spaces/{slug}/git/credentials", gitHandler.DeleteCredential)
+-		})
+-
+-		// Search (per-space, streamed as NDJSON)
+-		r.Get("/api/spaces/{slug}/search/stream", searchHandler.Stream)
+-
+-		// Files (per-space shared file pool under <space>/_files/)
+-		r.Get("/api/spaces/{slug}/files", filesHandler.List)
+-		r.Get("/api/spaces/{slug}/files/content", filesHandler.GetContent)
+-		r.Put("/api/spaces/{slug}/files/content", filesHandler.PutContent)
+-		r.Get("/api/spaces/{slug}/files/download", filesHandler.Download)
+-		r.Get("/api/spaces/{slug}/files/check", filesHandler.CheckName)
+-		r.Post("/api/spaces/{slug}/files/upload", filesHandler.Upload)
+-		r.Put("/api/spaces/{slug}/files/rename", filesHandler.Rename)
+-		r.Delete("/api/spaces/{slug}/files", filesHandler.Delete)
+-
+-		// Databases (per-space file-backed data sources under <space>/_database/)
+-		r.Get("/api/spaces/{slug}/databases", databaseHandler.List)
+-		r.Post("/api/spaces/{slug}/databases", databaseHandler.Create)
+-		r.Get("/api/spaces/{slug}/databases/{dbId}", databaseHandler.Get)
+-		r.Patch("/api/spaces/{slug}/databases/{dbId}", databaseHandler.Update)
+-		r.Delete("/api/spaces/{slug}/databases/{dbId}", databaseHandler.Delete)
+-		r.Post("/api/spaces/{slug}/databases/{dbId}/columns", databaseHandler.AddColumn)
+-		r.Patch("/api/spaces/{slug}/databases/{dbId}/columns/{colId}", databaseHandler.UpdateColumn)
+-		r.Delete("/api/spaces/{slug}/databases/{dbId}/columns/{colId}", databaseHandler.DeleteColumn)
+-		r.Post("/api/spaces/{slug}/databases/{dbId}/columns/reorder", databaseHandler.ReorderColumns)
+-		r.Get("/api/spaces/{slug}/databases/{dbId}/rows", databaseHandler.ListRows)
+-		r.Post("/api/spaces/{slug}/databases/{dbId}/rows", databaseHandler.CreateRow)
+-		r.Post("/api/spaces/{slug}/databases/{dbId}/rows/reorder", databaseHandler.ReorderRows)
+-		r.Get("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.GetRow)
+-		r.Patch("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.UpdateRow)
+-		r.Delete("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}", databaseHandler.DeleteRow)
+-		r.Get("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}/page", databaseHandler.GetRowPage)
+-		r.Put("/api/spaces/{slug}/databases/{dbId}/rows/{rowId}/page", databaseHandler.PutRowPage)
+-
+-		// Bookmark
+-		r.Get("/api/bookmark/meta", bookmarkHandler.GetMeta)
+-
+-		// Unsplash 代理（按用户偏好里的 key 转发，前端不接触 key）
+-		r.Get("/api/unsplash/status", unsplashHandler.Status)
+-		r.Get("/api/unsplash/search", unsplashHandler.Search)
+-
+-		// Users (admin only)
+-		r.Group(func(r chi.Router) {
+-			r.Use(authMiddleware.RequireAdmin)
+-			r.Get("/api/users", userHandler.List)
+-			r.Put("/api/site-settings/name", siteSettingHandler.UpdateSiteName)
+-			r.Post("/api/site-settings/favicon", siteSettingHandler.UploadFavicon)
+-			r.Post("/api/site-settings/favicon/reset", siteSettingHandler.ResetFavicon)
+-			r.Post("/api/site-settings/logo", siteSettingHandler.UploadLogo)
+-			r.Post("/api/site-settings/logo/reset", siteSettingHandler.ResetLogo)
+-			r.Post("/api/users", userHandler.Create)
+-			r.Get("/api/users/{id}", userHandler.GetByID)
+-			r.Put("/api/users/{id}", userHandler.Update)
+-			r.Delete("/api/users/{id}", userHandler.Delete)
+-			r.Put("/api/users/{id}/password", userHandler.ResetPassword)
++	defer application.Close()
+ 
+-			// Claude admin config
+-			r.Get("/api/admin/claude/config", claudeHandler.GetConfig)
+-			r.Put("/api/admin/claude/config", claudeHandler.UpdateConfig)
+-		})
+-
+-		// Upload
+-		r.Post("/api/upload", uploadHandler.Upload)
+-
+-		// Icon library
+-		r.Get("/api/icons", uploadHandler.ListIcons)
+-		r.Get("/api/icons/check", uploadHandler.CheckIconName)
+-		r.Post("/api/icons/use", uploadHandler.UseIcon)
+-		r.Post("/api/icons/upload", uploadHandler.UploadIcon)
+-		r.Post("/api/icons/delete", uploadHandler.DeleteIcon)
+-		r.Put("/api/icons/rename", uploadHandler.RenameIcon)
+-
+-		// Cover library
+-		r.Get("/api/covers", uploadHandler.ListCovers)
+-		r.Get("/api/covers/check", uploadHandler.CheckCoverName)
+-		r.Post("/api/covers/use", uploadHandler.UseCover)
+-		r.Post("/api/covers/upload", uploadHandler.UploadCover)
+-		r.Post("/api/covers/delete", uploadHandler.DeleteCover)
+-		r.Put("/api/covers/rename", uploadHandler.RenameCover)
+-	})
+-
+-	// Public upload files
+-	r.Get("/api/upload/{filename}", uploadHandler.ServeUpload)
+-
+-	// Public icon library files
+-	r.Get("/api/icons/*", uploadHandler.ServeIcon)
+-
+-	// Public cover library files
+-	r.Get("/api/covers/*", uploadHandler.ServeCover)
+-
+-	// Public site assets (favicon, logo)
+-	// IMPORTANT: literal PWA-icon paths must be registered before `{filename}`
+-	// so chi matches them precisely rather than falling through to the wildcard.
+-	r.Get("/api/site-assets/pwa-icon-192.png", siteSettingHandler.ServePWAIconSizedStatic("192"))
+-	r.Get("/api/site-assets/pwa-icon-512.png", siteSettingHandler.ServePWAIconSizedStatic("512"))
+-	r.Get("/api/site-assets/pwa-icon-512-maskable.png", siteSettingHandler.ServePWAIconSizedStatic("512-maskable"))
+-	r.Get("/api/site-assets/{filename}", siteSettingHandler.ServeAsset)
+-
+-	// Public PWA manifest (dynamic — reflects current site name + favicon)
+-	r.Get("/api/manifest.webmanifest", siteSettingHandler.ServeManifest)
+-
+-	// Public page assets (cover images, etc.) — no auth needed for CSS background-image
+-	r.Get("/api/spaces/{slug}/pages/{id}/assets/*", pageHandler.ServeAsset)
+-
+-	// Serve frontend static files + SPA fallback
+-	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+-		// Don't serve SPA for API routes — return 404 instead
+-		if strings.HasPrefix(r.URL.Path, "/api/") {
+-			http.NotFound(w, r)
+-			return
+-		}
+-		// Clean the path
+-		cleanPath := strings.TrimPrefix(r.URL.Path, "/")
+-		if cleanPath == "" {
+-			cleanPath = "index.html"
+-		}
+-
+-		// Try to serve the exact file first
+-		filePath := filepath.Join(frontendDist, cleanPath)
+-		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+-			http.ServeFile(w, r, filePath)
+-			return
+-		}
+-
+-		// SPA fallback: serve index.html for client-side routing
+-		indexPath := filepath.Join(frontendDist, "index.html")
+-		if _, err := os.Stat(indexPath); err == nil {
+-			http.ServeFile(w, r, indexPath)
+-			return
+-		}
+-
+-		http.NotFound(w, r)
+-	})
+-	log.Printf("Serving frontend from %s", frontendDist)
+-
+-	log.Printf("Server starting on :%s", port)
+-	log.Printf("Docs dir: %s", docsDir)
+-	log.Printf("Data dir: %s", dataDir)
+-	log.Printf("Default admin: username=admin, password=admin123")
+-	if err := http.ListenAndServe(":"+port, r); err != nil {
++	if err := application.ListenAndServe(); err != nil {
+ 		log.Fatalf("Server failed: %v", err)
+ 	}
+ }
+ 
+-func pageDebugRequestLogger(next http.Handler) http.Handler {
+-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		if !isPageDebugPath(r.URL.Path) {
+-			next.ServeHTTP(w, r)
++func loadEnv() {
++	for _, file := range []string{".env", "../.env", "../../.env"} {
++		if _, err := os.Stat(file); err == nil {
++			_ = godotenv.Load(file)
+ 			return
+ 		}
+-		start := time.Now()
+-		log.Printf("[page-debug] http.start method=%s path=%s rawQuery=%s remote=%s contentLength=%d", r.Method, r.URL.Path, r.URL.RawQuery, r.RemoteAddr, r.ContentLength)
+-		next.ServeHTTP(w, r)
+-		log.Printf("[page-debug] http.done method=%s path=%s elapsed=%s", r.Method, r.URL.Path, time.Since(start))
+-	})
+-}
+-
+-func isPageDebugPath(path string) bool {
+-	return strings.HasPrefix(path, "/api/spaces/") &&
+-		strings.Contains(path, "/pages/") &&
+-		!strings.Contains(path, "/pages/starred") &&
+-		!strings.Contains(path, "/pages/recent")
+-}
+-
+-func getEnv(key, defaultVal string) string {
+-	if val := os.Getenv(key); val != "" {
+-		return val
+-	}
+-	return defaultVal
+-}
+-
+-// FileServer conveniently sets up a http.FileServer handler to serve
+-// static files from a http.FileSystem.
+-func FileServer(r chi.Router, path string, root http.FileSystem) {
+-	if strings.ContainsAny(path, "{}*") {
+-		panic("FileServer does not permit any URL parameters.")
+ 	}
+-
+-	if path != "/" && path[len(path)-1] != '/' {
+-		r.Get(path, http.RedirectHandler(path+"/", http.StatusMovedPermanently).ServeHTTP)
+-		path += "/"
+-	}
+-	path += "*"
+-
+-	r.Get(path, func(w http.ResponseWriter, r *http.Request) {
+-		rctx := chi.RouteContext(r.Context())
+-		pathPrefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+-		fs := http.StripPrefix(pathPrefix, http.FileServer(root))
+-		fs.ServeHTTP(w, r)
+-	})
+ }
+diff --git a/backend/go.mod b/backend/go.mod
+index 5d683a3..3af332b 100644
+--- a/backend/go.mod
++++ b/backend/go.mod
+@@ -9,11 +9,41 @@ require (
+ 	github.com/google/uuid v1.6.0
+ 	github.com/joho/godotenv v1.5.1
+ 	github.com/mattn/go-sqlite3 v1.14.44
+-	golang.org/x/crypto v0.50.0
++	golang.org/x/crypto v0.53.0
+ 	gopkg.in/yaml.v3 v3.0.1
+ )
+ 
+ require (
+ 	github.com/coder/websocket v1.8.15
++	github.com/wailsapp/wails/v2 v2.16.0
+ 	golang.org/x/image v0.44.0
+ )
++
++require (
++	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
++	github.com/bep/debounce v1.2.1 // indirect
++	github.com/go-ole/go-ole v1.3.0 // indirect
++	github.com/godbus/dbus/v5 v5.1.0 // indirect
++	github.com/gorilla/websocket v1.5.3 // indirect
++	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
++	github.com/labstack/echo/v4 v4.13.3 // indirect
++	github.com/labstack/gommon v0.4.2 // indirect
++	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
++	github.com/leaanthony/gosod v1.0.4 // indirect
++	github.com/leaanthony/slicer v1.6.0 // indirect
++	github.com/leaanthony/u v1.1.1 // indirect
++	github.com/mattn/go-colorable v0.1.13 // indirect
++	github.com/mattn/go-isatty v0.0.20 // indirect
++	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
++	github.com/pkg/errors v0.9.1 // indirect
++	github.com/rivo/uniseg v0.4.7 // indirect
++	github.com/samber/lo v1.49.1 // indirect
++	github.com/tkrajina/go-reflector v0.5.8 // indirect
++	github.com/valyala/bytebufferpool v1.0.0 // indirect
++	github.com/valyala/fasttemplate v1.2.2 // indirect
++	github.com/wailsapp/go-webview2 v1.0.22 // indirect
++	github.com/wailsapp/mimetype v1.4.1 // indirect
++	golang.org/x/net v0.56.0 // indirect
++	golang.org/x/sys v0.46.0 // indirect
++	golang.org/x/text v0.40.0 // indirect
++)
+diff --git a/backend/go.sum b/backend/go.sum
+index 74a124c..9c774b1 100644
+--- a/backend/go.sum
++++ b/backend/go.sum
+@@ -1,22 +1,104 @@
++git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 h1:N3IGoHHp9pb6mj1cbXbuaSXV/UMKwmbKLf53nQmtqMA=
++git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3/go.mod h1:QtOLZGz8olr4qH2vWK0QH0w0O4T9fEIjMuWpKUsH7nc=
++github.com/bep/debounce v1.2.1 h1:v67fRdBA9UQu2NhLFXrSg0Brw7CexQekrBwDMM8bzeY=
++github.com/bep/debounce v1.2.1/go.mod h1:H8yggRPQKLUhUoqrJC1bO2xNya7vanpDl7xR3ISbCJ0=
+ github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+ github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
++github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
++github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+ github.com/go-chi/chi/v5 v5.2.5 h1:Eg4myHZBjyvJmAFjFvWgrqDTXFyOzjj7YIm3L3mu6Ug=
+ github.com/go-chi/chi/v5 v5.2.5/go.mod h1:X7Gx4mteadT3eDOMTsXzmI4/rwUpOwBHLpAfupzFJP0=
+ github.com/go-chi/cors v1.2.2 h1:Jmey33TE+b+rB7fT8MUy1u0I4L+NARQlK6LhzKPSyQE=
+ github.com/go-chi/cors v1.2.2/go.mod h1:sSbTewc+6wYHBBCW7ytsFSn836hqM7JxpglAy2Vzc58=
++github.com/go-ole/go-ole v1.3.0 h1:Dt6ye7+vXGIKZ7Xtk4s6/xVdGDQynvom7xCFEdWr6uE=
++github.com/go-ole/go-ole v1.3.0/go.mod h1:5LS6F96DhAwUc7C+1HLexzMXY1xGRSryjyPPKW6zv78=
++github.com/godbus/dbus/v5 v5.1.0 h1:4KLkAxT3aOY8Li4FRJe/KvhoNFFxo0m6fNuFUO8QJUk=
++github.com/godbus/dbus/v5 v5.1.0/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
+ github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
+ github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+ github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
++github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
++github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
++github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e h1:Q3+PugElBCf4PFpxhErSzU3/PY5sFL5Z6rfv4AbGAck=
++github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e/go.mod h1:alcuEEnZsY1WQsagKhZDsoPCRoOijYqhZvPwLG0kzVs=
+ github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
+ github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
++github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
++github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
++github.com/labstack/echo/v4 v4.13.3 h1:pwhpCPrTl5qry5HRdM5FwdXnhXSLSY+WE+YQSeCaafY=
++github.com/labstack/echo/v4 v4.13.3/go.mod h1:o90YNEeQWjDozo584l7AwhJMHN0bOC4tAfg+Xox9q5g=
++github.com/labstack/gommon v0.4.2 h1:F8qTUNXgG1+6WQmqoUWnz8WiEU60mXVVw0P4ht1WRA0=
++github.com/labstack/gommon v0.4.2/go.mod h1:QlUFxVM+SNXhDL/Z7YhocGIBYOiwB0mXm1+1bAPHPyU=
++github.com/leaanthony/debme v1.2.1 h1:9Tgwf+kjcrbMQ4WnPcEIUcQuIZYqdWftzZkBr+i/oOc=
++github.com/leaanthony/debme v1.2.1/go.mod h1:3V+sCm5tYAgQymvSOfYQ5Xx2JCr+OXiD9Jkw3otUjiA=
++github.com/leaanthony/go-ansi-parser v1.6.1 h1:xd8bzARK3dErqkPFtoF9F3/HgN8UQk0ed1YDKpEz01A=
++github.com/leaanthony/go-ansi-parser v1.6.1/go.mod h1:+vva/2y4alzVmmIEpk9QDhA7vLC5zKDTRwfZGOp3IWU=
++github.com/leaanthony/gosod v1.0.4 h1:YLAbVyd591MRffDgxUOU1NwLhT9T1/YiwjKZpkNFeaI=
++github.com/leaanthony/gosod v1.0.4/go.mod h1:GKuIL0zzPj3O1SdWQOdgURSuhkF+Urizzxh26t9f1cw=
++github.com/leaanthony/slicer v1.6.0 h1:1RFP5uiPJvT93TAHi+ipd3NACobkW53yUiBqZheE/Js=
++github.com/leaanthony/slicer v1.6.0/go.mod h1:o/Iz29g7LN0GqH3aMjWAe90381nyZlDNquK+mtH2Fj8=
++github.com/leaanthony/u v1.1.1 h1:TUFjwDGlNX+WuwVEzDqQwC2lOv0P4uhTQw7CMFdiK7M=
++github.com/leaanthony/u v1.1.1/go.mod h1:9+o6hejoRljvZ3BzdYlVL0JYCwtnAsVuN9pVTQcaRfI=
++github.com/matryer/is v1.4.0/go.mod h1:8I/i5uYgLzgsgEloJE1U6xx5HkBQpAZvepWuujKwMRU=
++github.com/matryer/is v1.4.1 h1:55ehd8zaGABKLXQUe2awZ99BD/PTc2ls+KV/dXphgEQ=
++github.com/matryer/is v1.4.1/go.mod h1:8I/i5uYgLzgsgEloJE1U6xx5HkBQpAZvepWuujKwMRU=
++github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
++github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
++github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=
++github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
++github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
+ github.com/mattn/go-sqlite3 v1.14.44 h1:3VSe+xafpbzsLbdr2AWlAZk9yRHiBhTBakioXaCKTF8=
+ github.com/mattn/go-sqlite3 v1.14.44/go.mod h1:pjEuOr8IwzLJP2MfGeTb0A35jauH+C2kbHKBr7yXKVQ=
+-golang.org/x/crypto v0.50.0 h1:zO47/JPrL6vsNkINmLoo/PH1gcxpls50DNogFvB5ZGI=
+-golang.org/x/crypto v0.50.0/go.mod h1:3muZ7vA7PBCE6xgPX7nkzzjiUq87kRItoJQM1Yo8S+Q=
++github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e h1:fD57ERR4JtEqsWbfPhv4DMiApHyliiK5xCTNVSPiaAs=
++github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e/go.mod h1:zD1mROLANZcx1PVRCS0qkT7pwLkGfwJo4zjcN/Tysno=
++github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
++github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
++github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
++github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
++github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
++github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
++github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
++github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
++github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
++github.com/samber/lo v1.49.1 h1:4BIFyVfuQSEpluc7Fua+j1NolZHiEHEpaSEKdsH0tew=
++github.com/samber/lo v1.49.1/go.mod h1:dO6KHFzUKXgP8LDhU0oI8d2hekjXnGOu0DB8Jecxd6o=
++github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
++github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
++github.com/tkrajina/go-reflector v0.5.8 h1:yPADHrwmUbMq4RGEyaOUpz2H90sRsETNVpjzo3DLVQQ=
++github.com/tkrajina/go-reflector v0.5.8/go.mod h1:ECbqLgccecY5kPmPmXg1MrHW585yMcDkVl6IvJe64T4=
++github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=
++github.com/valyala/bytebufferpool v1.0.0/go.mod h1:6bBcMArwyJ5K/AmCkWv1jt77kVWyCJ6HpOuEn7z0Csc=
++github.com/valyala/fasttemplate v1.2.2 h1:lxLXG0uE3Qnshl9QyaK6XJxMXlQZELvChBOCmQD0Loo=
++github.com/valyala/fasttemplate v1.2.2/go.mod h1:KHLXt3tVN2HBp8eijSv/kGJopbvo7S+qRAEEKiv+SiQ=
++github.com/wailsapp/go-webview2 v1.0.22 h1:YT61F5lj+GGaat5OB96Aa3b4QA+mybD0Ggq6NZijQ58=
++github.com/wailsapp/go-webview2 v1.0.22/go.mod h1:qJmWAmAmaniuKGZPWwne+uor3AHMB5PFhqiK0Bbj8kc=
++github.com/wailsapp/mimetype v1.4.1 h1:pQN9ycO7uo4vsUUuPeHEYoUkLVkaRntMnHJxVwYhwHs=
++github.com/wailsapp/mimetype v1.4.1/go.mod h1:9aV5k31bBOv5z6u+QP8TltzvNGJPmNJD4XlAL3U+j3o=
++github.com/wailsapp/wails/v2 v2.16.0 h1:hLYrSHUUq6hRXl3rWT9ZXiyFIgM94nVN9Ns6iEJzxyw=
++github.com/wailsapp/wails/v2 v2.16.0/go.mod h1:scxrgwfsv6yR6fE6cCF+Flfl+JeU+SR87T9x4kILJ6M=
++golang.org/x/crypto v0.53.0 h1:QZ4Muo8THX6CizN2vPPd5fBGHyogrdK9fG4wLPFUsto=
++golang.org/x/crypto v0.53.0/go.mod h1:DNLU434OwVakk9PzuwV8w62mAJpRJL3vsgcfp4Qnsio=
+ golang.org/x/image v0.44.0 h1:+tDekMZED9+LrtB3G5xzRggpVh9CARjZqROla3R3R+I=
+ golang.org/x/image v0.44.0/go.mod h1:V8K3KE9KKKE+pLpQDOeN18w9oacNSvy1tDOirTu4xtY=
+-gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
++golang.org/x/net v0.0.0-20210505024714-0287a6fb4125/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
++golang.org/x/net v0.56.0 h1:Rw8j/hFzGvJUZwNBXnAtf5sVDVt+65SK2C7IxCxZt5o=
++golang.org/x/net v0.56.0/go.mod h1:D3Ku6r+V6JROoZK144D2XfMHFcMq/0zSfLelVTCFKec=
++golang.org/x/sys v0.0.0-20200810151505-1b9f1253b3ed/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
++golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.1.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
++golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
++golang.org/x/sys v0.46.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
++golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
++golang.org/x/text v0.3.6/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
++golang.org/x/text v0.40.0 h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
++golang.org/x/text v0.40.0/go.mod h1:hpnzDAfGV753zIKo+wk3u1bVKCGPbrnF7+7LBF/UHVY=
++golang.org/x/tools v0.0.0-20180917221912-90fa682c2a6e/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
++gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f h1:BLraFXnmrev5lT+xlilqcH8XK9/i0At2xKjWk4p6zsU=
++gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+ gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+diff --git a/backend/internal/handler/database_handler.go b/backend/internal/handler/database_handler.go
+index 54cfacf..ea9ea6b 100644
+--- a/backend/internal/handler/database_handler.go
++++ b/backend/internal/handler/database_handler.go
+@@ -202,6 +202,17 @@ func (h *DatabaseHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	w.WriteHeader(http.StatusNoContent)
+ }
++func (h *DatabaseHandler) PermanentDeleteRow(w http.ResponseWriter, r *http.Request) {
++	if !h.check(w, r, true) {
++		return
++	}
++	err := h.databaseService.PermanentDeleteRow(chi.URLParam(r, "slug"), chi.URLParam(r, "dbId"), chi.URLParam(r, "rowId"))
++	if err != nil {
++		http.Error(w, err.Error(), http.StatusInternalServerError)
++		return
++	}
++	w.WriteHeader(http.StatusNoContent)
++}
+ func (h *DatabaseHandler) GetRowPage(w http.ResponseWriter, r *http.Request) {
+ 	if !h.check(w, r, false) {
+ 		return
+diff --git a/backend/internal/handler/files_handler.go b/backend/internal/handler/files_handler.go
+index 10eb31b..b790941 100644
+--- a/backend/internal/handler/files_handler.go
++++ b/backend/internal/handler/files_handler.go
+@@ -106,14 +106,30 @@ func (h *FilesHandler) List(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
+ 	items := []fileItem{}
+-	if _, statErr := os.Stat(root); os.IsNotExist(statErr) {
++	rootInfo, statErr := os.Stat(root)
++	if os.IsNotExist(statErr) {
+ 		w.Header().Set("Content-Type", "application/json")
+ 		json.NewEncoder(w).Encode(items)
+ 		return
+ 	}
++	if statErr != nil {
++		http.Error(w, statErr.Error(), http.StatusInternalServerError)
++		return
++	}
++	if !rootInfo.IsDir() {
++		http.Error(w, "_files is not a directory", http.StatusBadRequest)
++		return
++	}
+ 
+-	spaceDir := filepath.Join(h.docsDir, slug)
+-	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
++	// _files itself may be a symlink. filepath.Walk does not traverse a
++	// symlinked root, so walk the resolved target while keeping client paths
++	// rooted at the logical _files directory.
++	walkRoot, err := filepath.EvalSymlinks(root)
++	if err != nil {
++		http.Error(w, err.Error(), http.StatusInternalServerError)
++		return
++	}
++	err = filepath.Walk(walkRoot, func(path string, info os.FileInfo, walkErr error) error {
+ 		if walkErr != nil {
+ 			return walkErr
+ 		}
+@@ -129,11 +145,11 @@ func (h *FilesHandler) List(w http.ResponseWriter, r *http.Request) {
+ 		if info.IsDir() {
+ 			return nil
+ 		}
+-		rel, relErr := filepath.Rel(spaceDir, path)
++		rel, relErr := filepath.Rel(walkRoot, path)
+ 		if relErr != nil {
+ 			return nil
+ 		}
+-		rel = filepath.ToSlash(rel)
++		rel = filepath.ToSlash(filepath.Join("_files", rel))
+ 		items = append(items, fileItem{
+ 			Path:  rel,
+ 			Name:  info.Name(),
+diff --git a/backend/internal/handler/space_handler.go b/backend/internal/handler/space_handler.go
+index 4b39143..acadfcf 100644
+--- a/backend/internal/handler/space_handler.go
++++ b/backend/internal/handler/space_handler.go
+@@ -2,8 +2,12 @@ package handler
+ 
+ import (
+ 	"encoding/json"
++	"errors"
+ 	"net/http"
++	"os"
++	"path/filepath"
+ 	"strconv"
++	"strings"
+ 
+ 	"github.com/alwaysking/akmdlibrary/internal/middleware"
+ 	"github.com/alwaysking/akmdlibrary/internal/model"
+@@ -14,12 +18,14 @@ import (
+ type SpaceHandler struct {
+ 	spaceService *service.SpaceService
+ 	authService  *service.AuthService
++	desktopMode  bool
+ }
+ 
+-func NewSpaceHandler(spaceService *service.SpaceService, authService *service.AuthService) *SpaceHandler {
++func NewSpaceHandler(spaceService *service.SpaceService, authService *service.AuthService, desktopMode bool) *SpaceHandler {
+ 	return &SpaceHandler{
+ 		spaceService: spaceService,
+ 		authService:  authService,
++		desktopMode:  desktopMode,
+ 	}
+ }
+ 
+@@ -72,6 +78,22 @@ func (h *SpaceHandler) Create(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
+ 	userID := middleware.GetUserID(r)
++	if req.SourcePath != "" || req.ImportMode != "" {
++		user, err := h.authService.Me(userID)
++		if err != nil || user.Role != "admin" {
++			http.Error(w, "Admin required", http.StatusForbidden)
++			return
++		}
++	}
++	if err := validateSpaceImportRequest(&req, h.desktopMode); err != nil {
++		if errors.Is(err, errDesktopOnly) {
++			http.Error(w, err.Error(), http.StatusForbidden)
++		} else {
++			http.Error(w, err.Error(), http.StatusBadRequest)
++		}
++		return
++	}
++
+ 	space, err := h.spaceService.Create(&req, userID)
+ 	if err != nil {
+ 		http.Error(w, err.Error(), http.StatusInternalServerError)
+@@ -83,6 +105,36 @@ func (h *SpaceHandler) Create(w http.ResponseWriter, r *http.Request) {
+ 	json.NewEncoder(w).Encode(space)
+ }
+ 
++var errDesktopOnly = errors.New("local folder import is only available in the desktop app")
++
++func validateSpaceImportRequest(req *model.CreateSpaceRequest, desktopMode bool) error {
++	req.SourcePath = strings.TrimSpace(req.SourcePath)
++	req.ImportMode = strings.TrimSpace(req.ImportMode)
++	if req.SourcePath == "" && req.ImportMode == "" {
++		return nil
++	}
++	if !desktopMode {
++		return errDesktopOnly
++	}
++	if req.SourcePath == "" || req.ImportMode == "" {
++		return errors.New("source_path and import_mode must be provided together")
++	}
++	if req.ImportMode != "copy" && req.ImportMode != "link" {
++		return errors.New("import_mode must be copy or link")
++	}
++	if !filepath.IsAbs(req.SourcePath) {
++		return errors.New("source_path must be absolute")
++	}
++	info, err := os.Stat(req.SourcePath)
++	if err != nil {
++		return errors.New("source_path does not exist")
++	}
++	if !info.IsDir() {
++		return errors.New("source_path must be a directory")
++	}
++	return nil
++}
++
+ func (h *SpaceHandler) Update(w http.ResponseWriter, r *http.Request) {
+ 	slug := chi.URLParam(r, "slug")
+ 
+diff --git a/backend/internal/model/space.go b/backend/internal/model/space.go
+index 3a7a001..bd07107 100644
+--- a/backend/internal/model/space.go
++++ b/backend/internal/model/space.go
+@@ -40,6 +40,8 @@ type CreateSpaceRequest struct {
+ 	Name        string `json:"name"`
+ 	Icon        string `json:"icon"`
+ 	Description string `json:"description"`
++	SourcePath  string `json:"source_path,omitempty"`
++	ImportMode  string `json:"import_mode,omitempty"`
+ }
+ 
+ type UpdateSpaceRequest struct {
+diff --git a/backend/internal/repository/db.go b/backend/internal/repository/db.go
+index b643db4..025e6e8 100644
+--- a/backend/internal/repository/db.go
++++ b/backend/internal/repository/db.go
+@@ -6,10 +6,12 @@ import (
+ 	"strings"
+ 	"time"
+ 
+-	_ "github.com/mattn/go-sqlite3"
+ 	"github.com/google/uuid"
++	_ "github.com/mattn/go-sqlite3"
+ )
+ 
++const CurrentSchemaVersion = 1
++
+ type DB struct {
+ 	*sql.DB
+ }
+@@ -124,6 +126,10 @@ func (db *DB) migrate() error {
+ 			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+ 			expires_at DATETIME NOT NULL
+ 		)`,
++		`CREATE TABLE IF NOT EXISTS schema_migrations (
++			version INTEGER PRIMARY KEY,
++			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
++		)`,
+ 	}
+ 
+ 	for _, schema := range schemas {
+@@ -178,6 +184,33 @@ func (db *DB) migrate() error {
+ 		}
+ 	}
+ 
++	if err := ensureSchemaVersion(db.DB); err != nil {
++		return err
++	}
++
++	return nil
++}
++
++func ensureSchemaVersion(db *sql.DB) error {
++	var version int
++	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
++		return fmt.Errorf("failed to read schema version: %w", err)
++	}
++	if version > CurrentSchemaVersion {
++		return fmt.Errorf(
++			"database schema version %d is newer than supported version %d",
++			version,
++			CurrentSchemaVersion,
++		)
++	}
++	if version < CurrentSchemaVersion {
++		if _, err := db.Exec(
++			`INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)`,
++			CurrentSchemaVersion,
++		); err != nil {
++			return fmt.Errorf("failed to record schema version: %w", err)
++		}
++	}
+ 	return nil
+ }
+ 
+diff --git a/backend/internal/service/database_service.go b/backend/internal/service/database_service.go
+index 131cab3..ea37349 100644
+--- a/backend/internal/service/database_service.go
++++ b/backend/internal/service/database_service.go
+@@ -597,6 +597,15 @@ func (s *DatabaseService) UpdateRow(spaceSlug, dbID, rowID, username string, val
+ }
+ 
+ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
++	return s.removeRow(spaceSlug, dbID, rowID, true)
++}
++
++// PermanentDeleteRow 直接从磁盘删除行数据与行正文页（含子页面），不写入回收站，删除后无法恢复。
++func (s *DatabaseService) PermanentDeleteRow(spaceSlug, dbID, rowID string) error {
++	return s.removeRow(spaceSlug, dbID, rowID, false)
++}
++
++func (s *DatabaseService) removeRow(spaceSlug, dbID, rowID string, toTrash bool) error {
+ 	root, dir, cfg, err := s.findDB(spaceSlug, dbID)
+ 	if err != nil {
+ 		return err
+@@ -618,8 +627,10 @@ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
+ 	if deletedRow == nil {
+ 		return errors.New("row not found")
+ 	}
+-	if err := s.writeRowTrashPackage(spaceSlug, root, dir, cfg, rowID, deletedRow); err != nil {
+-		return err
++	if toTrash {
++		if err := s.writeRowTrashPackage(spaceSlug, root, dir, cfg, rowID, deletedRow); err != nil {
++			return err
++		}
+ 	}
+ 	err = s.rewriteRows(filepath.Join(root, dir), cfg, func(rows []map[string]string) []map[string]string {
+ 		next := rows[:0]
+@@ -634,7 +645,12 @@ func (s *DatabaseService) DeleteRow(spaceSlug, dbID, rowID string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_ = os.Remove(filepath.Join(root, dir, "subpages", rowID+".md"))
++	pagePath := filepath.Join(dbDir, "subpages", rowID+".md")
++	_ = os.Remove(pagePath)
++	if !toTrash {
++		// 进回收站时子页面目录已随行一起挪进 .trash；永久删除则连带子页面一起删掉
++		_ = os.RemoveAll(strings.TrimSuffix(pagePath, ".md"))
++	}
+ 	_ = s.rebuildAllLinked(spaceSlug)
+ 	s.markGitDirty(spaceSlug)
+ 	return nil
+diff --git a/backend/internal/service/space_service.go b/backend/internal/service/space_service.go
+index 003769e..5566226 100644
+--- a/backend/internal/service/space_service.go
++++ b/backend/internal/service/space_service.go
+@@ -4,8 +4,10 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 
+ 	"github.com/alwaysking/akmdlibrary/internal/model"
+ 	"github.com/alwaysking/akmdlibrary/internal/repository"
+@@ -74,28 +76,68 @@ func (s *SpaceService) Create(req *model.CreateSpaceRequest, creatorID int) (*mo
+ 		return nil, errors.New("space with this name already exists")
+ 	}
+ 
+-	// Create directory
+ 	spacePath := filepath.Join(s.docsDir, req.Name)
+-	if err := os.MkdirAll(spacePath, 0755); err != nil {
+-		return nil, fmt.Errorf("failed to create space directory: %w", err)
++	if _, err := os.Lstat(spacePath); err == nil {
++		return nil, errors.New("space directory already exists")
++	} else if !os.IsNotExist(err) {
++		return nil, fmt.Errorf("failed to check space directory: %w", err)
+ 	}
+ 
+-	// Create README.md
+-	readmePath := filepath.Join(spacePath, "README.md")
+-	if err := os.WriteFile(readmePath, []byte("# "+req.Name), 0644); err != nil {
+-		return nil, fmt.Errorf("failed to create README: %w", err)
++	sourcePath := strings.TrimSpace(req.SourcePath)
++	importMode := strings.TrimSpace(req.ImportMode)
++	if sourcePath != "" {
++		resolvedSource, err := filepath.EvalSymlinks(sourcePath)
++		if err != nil {
++			return nil, fmt.Errorf("failed to resolve source folder: %w", err)
++		}
++		if err := validateSpaceImportPaths(resolvedSource, spacePath, s.docsDir); err != nil {
++			return nil, err
++		}
++		sourcePath = resolvedSource
++	}
++
++	switch {
++	case importMode == "link":
++		if sourcePath == "" {
++			return nil, errors.New("source folder is required for reference mode")
++		}
++		if err := os.Symlink(sourcePath, spacePath); err != nil {
++			return nil, fmt.Errorf("failed to create space symlink: %w", err)
++		}
++	case importMode == "copy":
++		if sourcePath == "" {
++			return nil, errors.New("source folder is required for copy mode")
++		}
++		if err := os.MkdirAll(spacePath, 0755); err != nil {
++			return nil, fmt.Errorf("failed to create space directory: %w", err)
++		}
++		if err := copyDirectoryContents(sourcePath, spacePath); err != nil {
++			_ = os.RemoveAll(spacePath)
++			return nil, fmt.Errorf("failed to copy source folder: %w", err)
++		}
++	case sourcePath != "" || importMode != "":
++		return nil, errors.New("source_path and import_mode must be provided together")
++	default:
++		if err := os.MkdirAll(spacePath, 0755); err != nil {
++			return nil, fmt.Errorf("failed to create space directory: %w", err)
++		}
++		if err := os.WriteFile(filepath.Join(spacePath, "README.md"), []byte("# "+req.Name), 0644); err != nil {
++			_ = os.RemoveAll(spacePath)
++			return nil, fmt.Errorf("failed to create README: %w", err)
++		}
+ 	}
+ 
+ 	space, err := s.spaceRepo.Create(req, slug)
+ 	if err != nil {
+-		// Rollback directory creation
+-		os.RemoveAll(spacePath)
++		_ = os.RemoveAll(spacePath)
+ 		return nil, fmt.Errorf("failed to create space: %w", err)
+ 	}
+ 
+ 	// Add creator as admin
+ 	_, err = s.memberRepo.Add(space.ID, creatorID, "admin")
+ 	if err != nil {
++		_ = s.spaceRepo.Delete(space.ID)
++		_ = os.RemoveAll(spacePath)
+ 		return nil, fmt.Errorf("failed to add creator as admin: %w", err)
+ 	}
+ 
+@@ -106,6 +148,97 @@ func (s *SpaceService) Create(req *model.CreateSpaceRequest, creatorID int) (*mo
+ 	return space, nil
+ }
+ 
++func validateSpaceImportPaths(sourcePath, spacePath, docsDir string) error {
++	sourceAbs, err := filepath.Abs(sourcePath)
++	if err != nil {
++		return err
++	}
++	spaceAbs, err := filepath.Abs(spacePath)
++	if err != nil {
++		return err
++	}
++	docsAbs, err := filepath.Abs(docsDir)
++	if err != nil {
++		return err
++	}
++	sourceAbs = filepath.Clean(sourceAbs)
++	spaceAbs = filepath.Clean(spaceAbs)
++	docsAbs = filepath.Clean(docsAbs)
++
++	if pathWithin(spaceAbs, sourceAbs) {
++		return errors.New("space directory cannot be inside the source folder")
++	}
++	if sourceAbs == docsAbs {
++		return errors.New("source folder cannot be the docs root")
++	}
++	return nil
++}
++
++func pathWithin(path, parent string) bool {
++	rel, err := filepath.Rel(parent, path)
++	if err != nil {
++		return false
++	}
++	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
++}
++
++func copyDirectoryContents(source, destination string) error {
++	entries, err := os.ReadDir(source)
++	if err != nil {
++		return err
++	}
++	for _, entry := range entries {
++		if err := copyPath(filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++func copyPath(source, destination string) error {
++	info, err := os.Lstat(source)
++	if err != nil {
++		return err
++	}
++
++	switch {
++	case info.Mode()&os.ModeSymlink != 0:
++		target, err := os.Readlink(source)
++		if err != nil {
++			return err
++		}
++		return os.Symlink(target, destination)
++	case info.IsDir():
++		if err := os.MkdirAll(destination, info.Mode().Perm()); err != nil {
++			return err
++		}
++		return copyDirectoryContents(source, destination)
++	case info.Mode().IsRegular():
++		return copyRegularFile(source, destination, info.Mode().Perm())
++	default:
++		return fmt.Errorf("unsupported file type: %s", source)
++	}
++}
++
++func copyRegularFile(source, destination string, mode os.FileMode) error {
++	in, err := os.Open(source)
++	if err != nil {
++		return err
++	}
++	defer in.Close()
++
++	out, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
++	if err != nil {
++		return err
++	}
++	defer out.Close()
++
++	if _, err := io.Copy(out, in); err != nil {
++		return err
++	}
++	return out.Close()
++}
++
+ func (s *SpaceService) Update(slug string, req *model.UpdateSpaceRequest) (*model.Space, error) {
+ 	space, err := s.spaceRepo.GetBySlug(slug)
+ 	if err != nil {
+diff --git a/frontend/index.html b/frontend/index.html
+index 3a9c53b..8e08787 100644
+--- a/frontend/index.html
++++ b/frontend/index.html
+@@ -8,6 +8,7 @@
+     <link rel="mask-icon" href="/vite.svg" color="#4F46E5" />
+     <link rel="manifest" href="/api/manifest.webmanifest" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
++    <meta name="color-scheme" content="light" />
+     <meta name="theme-color" content="#ffffff" />
+     <meta name="description" content="MD Library — self-hosted markdown library" />
+     <meta name="apple-mobile-web-app-capable" content="yes" />
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index fad9657..33cd8db 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -13,6 +13,7 @@ import FilesPage from './pages/FilesPage';
+ import DatabasesPage from './pages/DatabasesPage';
+ import DatabaseDetailPage from './pages/DatabaseDetailPage';
+ import DatabaseRowPage from './pages/DatabaseRowPage';
++import EmbedDatabaseRowPage from './pages/EmbedDatabaseRowPage';
+ import { useAuthStore } from './stores/authStore';
+ import { useSpaceStore } from './stores/spaceStore';
+ import { usePreferenceStore } from './stores/preferenceStore';
+@@ -165,6 +166,15 @@ function App() {
+           <Route index element={<WelcomePage />} />
+         </Route>
+         <Route path="/" element={<HomeRedirect />} />
++        {/* 浮层 iframe 专用：不带 App 外壳，独立文档里只有行页面（这样才能拿到原生块把手） */}
++        <Route
++          path="/embed/s/:spaceSlug/db/:dbId/row/:rowId"
++          element={
++            <ProtectedRoute>
++              <EmbedDatabaseRowPage />
++            </ProtectedRoute>
++          }
++        />
+       </Routes>
+     </BrowserRouter>
+   );
+diff --git a/frontend/src/api/databases.ts b/frontend/src/api/databases.ts
+index af432bc..d1eca88 100644
+--- a/frontend/src/api/databases.ts
++++ b/frontend/src/api/databases.ts
+@@ -98,6 +98,9 @@ export const databasesApi = {
+   async deleteRow(spaceSlug: string, dbId: string, rowId: string): Promise<void> {
+     await apiClient.delete(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}`);
+   },
++  async deleteRowPermanent(spaceSlug: string, dbId: string, rowId: string): Promise<void> {
++    await apiClient.delete(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}/permanent`);
++  },
+   async getRowPage(spaceSlug: string, dbId: string, rowId: string): Promise<{ markdown: string; title: string }> {
+     const res = await apiClient.get(`/spaces/${spaceSlug}/databases/${dbId}/rows/${rowId}/page`);
+     return res.data;
+diff --git a/frontend/src/api/spaces.ts b/frontend/src/api/spaces.ts
+index 43d40d2..ba2ddda 100644
+--- a/frontend/src/api/spaces.ts
++++ b/frontend/src/api/spaces.ts
+@@ -29,6 +29,13 @@ export interface SpaceMember {
+   created_at: string;
+ }
+ 
++export type SpaceImportMode = 'copy' | 'link';
++
++export interface CreateSpaceData extends Partial<Space> {
++  source_path?: string;
++  import_mode?: SpaceImportMode;
++}
++
+ export const spacesApi = {
+   list: async (): Promise<Space[]> => {
+     const response = await apiClient.get<Space[]>('/spaces');
+@@ -45,7 +52,7 @@ export const spacesApi = {
+     return response.data;
+   },
+ 
+-  create: async (data: Partial<Space>): Promise<Space> => {
++  create: async (data: CreateSpaceData): Promise<Space> => {
+     const response = await apiClient.post<Space>('/spaces', data);
+     return response.data;
+   },
+diff --git a/frontend/src/components/Editor/DatabaseBlock.tsx b/frontend/src/components/Editor/DatabaseBlock.tsx
+index a14b1ed..c724a34 100644
+--- a/frontend/src/components/Editor/DatabaseBlock.tsx
++++ b/frontend/src/components/Editor/DatabaseBlock.tsx
+@@ -9,7 +9,6 @@ import { type User } from '../../api/auth';
+ import { useSpaceStore } from '../../stores/spaceStore';
+ import PageIcon from './PageIcon';
+ import DatabaseRenderer, { ColumnIconGlyph, ColumnIconPopover, ColumnPropertySubmenu, OptionTag, PersonTag, createOptionConfig, defaultColumnIconID, requestDatabaseImmediateSync } from './database/DatabaseRenderer';
+-import DatabaseRowView from './database/DatabaseRowView';
+ import { defaultView, parseDatabaseMarkdown, serializeDatabaseMarkdown, type DatabaseViewConfig, type DatabaseViewType, type ViewAdvancedFilterGroup, type ViewAdvancedFilterNode, type ViewColumnRule, type ViewConditionalColorRule, type ViewFilterRule, type ViewSortRule } from './database/viewConfig';
+ import './database/database.css';
+ 
+@@ -118,6 +117,27 @@ function DatabaseBlockComponent({ block, editor }: any) {
+     }
+     setRowPeek({ rowId, mode: rowOpenMode });
+   };
++
++  // 浮层 iframe 内的行页面通过 postMessage 通知：关闭 / 全局展开
++  useEffect(() => {
++    const handleMessage = (event: MessageEvent) => {
++      if (event.origin !== window.location.origin) return;
++      const data = event.data;
++      if (!data || data.source !== 'akmd-row-embed') return;
++      if (data.type === 'close') {
++        setRowPeek(null);
++        return;
++      }
++      if (data.type === 'open-full') {
++        const rowId = rowPeek?.rowId;
++        if (!rowId || !activeSource) return;
++        setRowPeek(null);
++        navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
++      }
++    };
++    window.addEventListener('message', handleMessage);
++    return () => window.removeEventListener('message', handleMessage);
++  }, [rowPeek, activeSource, slug, navigate]);
+   const showDatabaseTitle = activeView?.showSourceTitle !== false;
+   const usedSourceIds = useMemo(() => Array.from(new Set(parsed.views.map((view) => view.source).filter((source): source is string => !!source))), [parsed.views]);
+   const usedSources = useMemo(() => sources.filter((source) => usedSourceIds.includes(source.id)), [sources, usedSourceIds]);
+@@ -1323,34 +1343,14 @@ function DatabaseBlockComponent({ block, editor }: any) {
+         rowPeek.mode === 'center' ? (
+           <div className="akdb-row-overlay-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRowPeek(null); }}>
+             <div className="akdb-row-overlay akdb-row-overlay-center" role="dialog" aria-modal="true" aria-label="行页面">
+-              <DatabaseRowView
+-                spaceSlug={slug}
+-                dbId={activeSource}
+-                rowId={rowPeek.rowId}
+-                onClose={() => setRowPeek(null)}
+-                onOpenFull={() => {
+-                  const rowId = rowPeek.rowId;
+-                  setRowPeek(null);
+-                  navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+-                }}
+-              />
++              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}`} />
+             </div>
+           </div>
+         ) : (
+           <>
+             <div className="akdb-row-overlay-scrim" onMouseDown={() => setRowPeek(null)} />
+             <div className="akdb-row-overlay akdb-row-overlay-peek" role="dialog" aria-modal="true" aria-label="行页面">
+-              <DatabaseRowView
+-                spaceSlug={slug}
+-                dbId={activeSource}
+-                rowId={rowPeek.rowId}
+-                onClose={() => setRowPeek(null)}
+-                onOpenFull={() => {
+-                  const rowId = rowPeek.rowId;
+-                  setRowPeek(null);
+-                  navigate(`/s/${slug}/db/${activeSource}/row/${rowId}`);
+-                }}
+-              />
++              <iframe className="akdb-row-overlay-frame" title="行页面" src={`/embed/s/${slug}/db/${activeSource}/row/${rowPeek.rowId}`} />
+             </div>
+           </>
+         ),
+diff --git a/frontend/src/components/Editor/PageEditor.tsx b/frontend/src/components/Editor/PageEditor.tsx
+index 898f3ae..d5b7226 100644
+--- a/frontend/src/components/Editor/PageEditor.tsx
++++ b/frontend/src/components/Editor/PageEditor.tsx
+@@ -2605,6 +2605,10 @@ function buildInternalLinkDecorations(doc: any, spaceSlug: string, _editorView?:
+ interface PageEditorProps {
+   initialContent: string;
+   pageIdentity: { spaceSlug: string; pageId: string };
++  /** 暴露“读取当前 markdown”的函数（行页面自建保存通道时用，不改变默认行为） */
++  registerMarkdownGetter?: (getter: (() => string) | null) => void;
++  /** 行页面：由外层负责保存，跳过内部的镜像写入（默认 false，普通页面行为不变） */
++  disableMirror?: boolean;
+   onSyncStatusChange?: (status: 'unsaved' | 'syncing' | 'synced') => void;
+   readOnly?: boolean;
+   codeTheme?: CodeThemeValue;
+@@ -2626,7 +2630,7 @@ const IMAGE_TOOLBAR_ICONS = {
+   replace: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5L5 13l2.5-2.5"/><path d="M5 3v10"/><path d="M13.5 5.5L11 3 8.5 5.5"/><path d="M11 13V3"/></svg>`,
+ };
+ 
+-export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, readOnly = false, codeTheme }: PageEditorProps) {
++export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, registerMarkdownGetter, disableMirror = false, readOnly = false, codeTheme }: PageEditorProps) {
+   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+   const immediateSyncInFlightRef = useRef<Promise<void> | null>(null);
+   const immediateSyncQueuedRef = useRef(false);
+@@ -5256,6 +5260,22 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     return blocksToMarkdown(blocks);
+   }, [editor]);
+ 
++  // 行页面用：暴露“读取当前 markdown”，便于和 frontmatter 一起写回
++  const registerMarkdownGetterRef = useRef(registerMarkdownGetter);
++  registerMarkdownGetterRef.current = registerMarkdownGetter;
++  useEffect(() => {
++    registerMarkdownGetterRef.current?.(() => serializeEditorMarkdown(editor.document));
++    return () => registerMarkdownGetterRef.current?.(null);
++  }, [editor, serializeEditorMarkdown]);
++
++  // 行页面（disableMirror=true）由外层负责保存，这里跳过镜像写入
++  const disableMirrorRef = useRef(disableMirror);
++  disableMirrorRef.current = disableMirror;
++  const writeMirror = useCallback((slug: string, id: string, markdown: string) => {
++    if (disableMirrorRef.current) return Promise.resolve();
++    return createMirror(slug, id, markdown);
++  }, []);
++
+   // Write mirror to IndexedDB — fast, local, no network
+   const triggerMirror = useCallback(async () => {
+     if (!hasChangesRef.current || readOnlyRef.current) return;
+@@ -5267,7 +5287,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     // before syncModule ships the page markdown that references them.
+     await persistFileContentBlocks(currentBlocks, spaceSlug);
+     const markdown = serializeEditorMarkdown(currentBlocks);
+-    await createMirror(spaceSlug, pageId, markdown);
++    await writeMirror(spaceSlug, pageId, markdown);
+ 
+     hasChangesRef.current = false;
+     onSyncStatusChangeRef.current?.('syncing');
+@@ -5289,7 +5309,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+             // and page stay consistent on the backend.
+             await persistFileContentBlocks(currentBlocks, spaceSlug);
+             const markdown = serializeEditorMarkdown(editor.document);
+-            await createMirror(spaceSlug, pageId, markdown);
++            await writeMirror(spaceSlug, pageId, markdown);
+             hasChangesRef.current = false;
+             onSyncStatusChangeRef.current?.('syncing');
+             await flushSync();
+@@ -5473,7 +5493,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         await flushAllSyncedBlockSaves(currentBlocks, spaceSlug, pageId);
+         await persistFileContentBlocks(currentBlocks, spaceSlug);
+         const markdown = serializeEditorMarkdown(currentBlocks);
+-        await createMirror(spaceSlug, pageId, markdown);
++        await writeMirror(spaceSlug, pageId, markdown);
+         hasChangesRef.current = false;
+         onSyncStatusChangeRef.current?.('syncing');
+         await flushSync();
+@@ -5590,7 +5610,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+     await flushAllSyncedBlockSaves(editor.document, spaceSlug, pageId);
+     await persistFileContentBlocks(editor.document, spaceSlug);
+     const markdown = serializeEditorMarkdown(editor.document);
+-    await createMirror(spaceSlug, pageId, markdown);
++    await writeMirror(spaceSlug, pageId, markdown);
+     hasChangesRef.current = false;
+     await flushSync();
+     await useSpaceStore.getState().refreshAll();
+@@ -5900,7 +5920,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+           // 立即保存，让 backend maintainSubpageBlocks 在 sidebar 刷新前修正 sort_order
+           await persistFileContentBlocks(editor.document, currentSpaceSlug);
+           const markdown = serializeEditorMarkdown(editor.document);
+-          await createMirror(currentSpaceSlug, currentPageId, markdown);
++          await writeMirror(currentSpaceSlug, currentPageId, markdown);
+           hasChangesRef.current = false;
+           await flushSync();
+           await useSpaceStore.getState().refreshAll();
+@@ -8166,7 +8186,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+       if (!hasChangesRef.current || readOnlyRef.current) return;
+       const { spaceSlug, pageId } = identityRef.current;
+       const markdown = serializeEditorMarkdown(editor.document);
+-      await createMirror(spaceSlug, pageId, markdown);
++      await writeMirror(spaceSlug, pageId, markdown);
+       hasChangesRef.current = false;
+     });
+     return () => {
+@@ -8185,7 +8205,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+         try {
+           const currentBlocks = editor.document;
+           const markdown = serializeEditorMarkdown(currentBlocks);
+-          createMirror(spaceSlug, pageId, markdown);
++          writeMirror(spaceSlug, pageId, markdown);
+         } catch (error) {
+           console.error('Failed to create mirror on unmount:', error);
+         }
+@@ -8201,7 +8221,7 @@ export function PageEditor({ initialContent, pageIdentity, onSyncStatusChange, r
+           const currentBlocks = editor.document;
+           const markdown = serializeEditorMarkdown(currentBlocks);
+           const { spaceSlug, pageId } = identityRef.current;
+-          createMirror(spaceSlug, pageId, markdown);
++          writeMirror(spaceSlug, pageId, markdown);
+         } catch {
+           // Best effort — IndexedDB write may not complete in all browsers
+         }
+diff --git a/frontend/src/components/Editor/database/DatabaseRenderer.tsx b/frontend/src/components/Editor/database/DatabaseRenderer.tsx
+index da25b04..a33910d 100644
+--- a/frontend/src/components/Editor/database/DatabaseRenderer.tsx
++++ b/frontend/src/components/Editor/database/DatabaseRenderer.tsx
+@@ -121,6 +121,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
+   const [rowDragPreview, setRowDragPreview] = useState<{ left: number; top: number; width: number; height: number; cells: Array<{ width: number; text: string }> } | null>(null);
+   const [pendingDeleteRows, setPendingDeleteRows] = useState<string[] | null>(null);
+   const [deletingRows, setDeletingRows] = useState(false);
++  const [pendingPermanentDeleteRows, setPendingPermanentDeleteRows] = useState<string[] | null>(null);
++  const [permanentlyDeletingRows, setPermanentlyDeletingRows] = useState(false);
+   const [rowOpenPosition, setRowOpenPosition] = useState<{ top: number; left: number } | null>(null);
+   const [tableWrapWidth, setTableWrapWidth] = useState(0);
+   const rowOpenPositionRef = useRef<{ top: number; left: number } | null>(null);
+@@ -883,6 +885,11 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
+     requestDeleteRows([rowId]);
+   };
+ 
++  const permanentDeleteRowById = async (rowId: string) => {
++    closeRowContextMenu();
++    requestPermanentDeleteRows([rowId]);
++  };
++
+   function requestDeleteRows(rowIDs: string[]) {
+     if (readonly) return;
+     const ids = rowIDs.filter(Boolean);
+@@ -890,6 +897,13 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
+     setPendingDeleteRows(ids);
+   };
+ 
++  function requestPermanentDeleteRows(rowIDs: string[]) {
++    if (readonly) return;
++    const ids = rowIDs.filter(Boolean);
++    if (ids.length === 0) return;
++    setPendingPermanentDeleteRows(ids);
++  }
++
+   function requestDeleteSelectedRows() {
+     if (readonly || selectedRowIDs.size === 0) return;
+     requestDeleteRows(Array.from(selectedRowIDs));
+@@ -912,6 +926,23 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
+     }
+   }
+ 
++  async function confirmPermanentDeleteRows() {
++    if (readonly || !pendingPermanentDeleteRows?.length) return;
++    setPermanentlyDeletingRows(true);
++    const ids = pendingPermanentDeleteRows;
++    const idSet = new Set(ids);
++    try {
++      await Promise.all(ids.map((rowId) => databasesApi.deleteRowPermanent(spaceSlug, dbId, rowId)));
++      setRows((prev) => prev.filter((row) => !idSet.has(row.uuid)));
++      setSelectedRowIDs((current) => new Set(Array.from(current).filter((id) => !idSet.has(id))));
++      setPendingPermanentDeleteRows(null);
++      closeRowContextMenu();
++      requestDatabaseImmediateSync();
++    } finally {
++      setPermanentlyDeletingRows(false);
++    }
++  }
++
+   const beginRowDrag = (row: DatabaseRow, index: number, event: ReactPointerEvent<HTMLElement>) => {
+     if (event.button !== 0 || readonly) return;
+     const matchingRows = Array.from(tableWrapRef.current?.querySelectorAll<HTMLTableRowElement>(`tr[data-akdb-row-id="${CSS.escape(row.uuid)}"]`) || []);
+@@ -2076,6 +2107,7 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
+             onCopyLink={() => void copyRowLink(rowContextMenu.row)}
+             onDuplicate={() => void duplicateRow(rowContextMenu.row)}
+             onDelete={() => void deleteRowById(rowContextMenu.row.uuid)}
++            onPermanentDelete={() => void permanentDeleteRowById(rowContextMenu.row.uuid)}
+           />,
+           document.body,
+         )}
+@@ -2117,6 +2149,18 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
+           />,
+           document.body,
+         )}
++        {pendingPermanentDeleteRows && createPortal(
++          <DeleteRowsDialog
++            count={pendingPermanentDeleteRows.length}
++            loading={permanentlyDeletingRows}
++            permanent
++            onCancel={() => {
++              if (!permanentlyDeletingRows) setPendingPermanentDeleteRows(null);
++            }}
++            onConfirm={confirmPermanentDeleteRows}
++          />,
++          document.body,
++        )}
+       </div>
+     </div>
+   );
+@@ -2156,7 +2200,8 @@ function DeleteColumnDialog({ column, loading, onCancel, onConfirm }: { column:
+   );
+ }
+ 
+-function DeleteRowsDialog({ count, loading, onCancel, onConfirm }: { count: number; loading: boolean; onCancel: () => void; onConfirm: () => void }) {
++function DeleteRowsDialog({ count, loading, permanent = false, onCancel, onConfirm }: { count: number; loading: boolean; permanent?: boolean; onCancel: () => void; onConfirm: () => void }) {
++  const actionLabel = permanent ? '永久删除' : '删除';
+   return (
+     <div className="akdb-dialog-backdrop" role="presentation" onMouseDown={onCancel}>
+       <div
+@@ -2166,15 +2211,15 @@ function DeleteRowsDialog({ count, loading, onCancel, onConfirm }: { count: numb
+         aria-labelledby="akdb-delete-rows-title"
+         onMouseDown={(event) => event.stopPropagation()}
+       >
+-        <div className="akdb-bind-dialog-title" id="akdb-delete-rows-title">删除行</div>
++        <div className="akdb-bind-dialog-title" id="akdb-delete-rows-title">{permanent ? '永久删除行' : '删除行'}</div>
+         <div className="akdb-bind-dialog-body">
+-          <span>确定要删除选中的 {count} 行吗？</span>
+-          <span>这些行对应的数据页会进入回收站，可以之后恢复。</span>
++          <span>确定要{actionLabel}选中的 {count} 行吗？</span>
++          <span>{permanent ? '这些行的数据和正文页会被直接删除，无法恢复。' : '这些行对应的数据页会进入回收站，可以之后恢复。'}</span>
+         </div>
+         <div className="akdb-bind-dialog-actions">
+           <button type="button" className="akdb-dialog-ghost" disabled={loading} onClick={onCancel}>取消</button>
+           <button type="button" className="akdb-dialog-danger" disabled={loading} onClick={onConfirm}>
+-            {loading ? '删除中...' : '删除'}
++            {loading ? `${actionLabel}中...` : actionLabel}
+           </button>
+         </div>
+       </div>
+@@ -2981,7 +3026,8 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
+   onCopyLink: () => void;
+   onDuplicate: () => void;
+   onDelete: () => void;
+-}>(({ row, style, onOpen, onCopyLink, onDuplicate, onDelete }, ref) => {
++  onPermanentDelete: () => void;
++}>(({ row, style, onOpen, onCopyLink, onDuplicate, onDelete, onPermanentDelete }, ref) => {
+   return (
+     <div
+       ref={ref}
+@@ -3008,6 +3054,10 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
+           <Trash2 size={16} />
+           <span>移到垃圾箱</span>
+         </button>
++        <button type="button" className="akdb-row-context-item is-danger" onClick={onPermanentDelete}>
++          <Trash2 size={16} />
++          <span>永久删除</span>
++        </button>
+       </div>
+     </div>
+   );
+diff --git a/frontend/src/components/Editor/database/DatabaseRowView.tsx b/frontend/src/components/Editor/database/DatabaseRowView.tsx
+index 9a8967d..3f2dbc5 100644
+--- a/frontend/src/components/Editor/database/DatabaseRowView.tsx
++++ b/frontend/src/components/Editor/database/DatabaseRowView.tsx
+@@ -1,15 +1,20 @@
+-import { useEffect, useMemo, useRef, useState } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { createPortal } from 'react-dom';
+-import { ArrowLeft, Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Maximize2, MessageSquare, MoreHorizontal, Pencil, SlidersHorizontal, Trash2, X } from 'lucide-react';
++import { ArrowLeft, Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Maximize2, MessageSquare, MoreHorizontal, Pencil, Save, SlidersHorizontal, Trash2, UploadCloud, X } from 'lucide-react';
+ import { databasesApi, type DatabaseColumn, type DatabaseDetail, type DatabaseRow } from '../../../api/databases';
++import { gitApi, type GitRepoState } from '../../../api/git';
+ import { usersApi } from '../../../api/users';
+ import { type User } from '../../../api/auth';
++import { useSpaceStore } from '../../../stores/spaceStore';
++import PageEditor from '../PageEditor';
+ import {
+   buildFormulaProps,
+   ColumnIconGlyph,
+   OptionSelect,
+   OptionMultiSelect,
++  OptionTag,
+   PersonSelect,
++  PersonTag,
+   createOptionConfig,
+   defaultColumnIconID,
+   parseMultiSelectValue,
+@@ -28,41 +33,47 @@ interface Props {
+   onBack?: () => void;
+   /** 浮层内：左侧显示关闭按钮 */
+   onClose?: () => void;
+-  /** 全屏路由：左侧显示返回而不是展开 */
+   className?: string;
+ }
+ 
+ /**
+- * 数据库行（subpage）页面。
+- * 顶部工具栏（左侧全局展开 / 右侧保存与菜单）+ 标题 + 属性列表 + 正文，
++ * 数据库行（subpage）页面 —— 定制版普通页面。
++ * 顶部工具栏与普通页面一致（同步状态 / 立即同步 / git 提交 / 全宽 / 锁定），
++ * 正文复用 PageEditor；差异仅在标题与正文之间插入了属性展示。
+  * 居中弹层、右侧抽屉、全屏页三种打开方式共用这一份实现。
+  */
+ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, onBack, onClose, className }: Props) {
+   const [schema, setSchema] = useState<DatabaseDetail | null>(null);
+   const [row, setRow] = useState<DatabaseRow | null>(null);
+-  const [pageTitle, setPageTitle] = useState('');
+-  const [markdown, setMarkdown] = useState('');
+   const [frontmatter, setFrontmatter] = useState('');
++  const [body, setBody] = useState('');
+   const [users, setUsers] = useState<User[]>([]);
+   const [loading, setLoading] = useState(true);
+-  const [saving, setSaving] = useState(false);
+-  const [dirty, setDirty] = useState(false);
+   const [error, setError] = useState('');
+-  /** 被折叠进“更多”的属性（只影响这个行页面的展示，存 subpage frontmatter） */
++  const [syncStatus, setSyncStatus] = useState<'unsaved' | 'syncing' | 'synced' | null>(null);
++  const [locked, setLocked] = useState(false);
++  const [fullPage, setFullPage] = useState(false);
+   const [foldedPropertyIds, setFoldedPropertyIds] = useState<string[]>([]);
+   const [revealFolded, setRevealFolded] = useState(false);
+   const [propertyMenu, setPropertyMenu] = useState<{ columnId: string; top: number; left: number } | null>(null);
++  const [pageMenu, setPageMenu] = useState<{ top: number; left: number } | null>(null);
+   const [renamingColumnId, setRenamingColumnId] = useState<string | null>(null);
+   const [renameDraft, setRenameDraft] = useState('');
+-  const [menuOpen, setMenuOpen] = useState(false);
+-  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+-  const [menuRect, setMenuRect] = useState<{ top: number; left: number } | null>(null);
++  const [gitState, setGitState] = useState<GitRepoState | null>(null);
++  const [committing, setCommitting] = useState(false);
++  const pageMenuButtonRef = useRef<HTMLButtonElement | null>(null);
++  const titleRef = useRef<HTMLHeadingElement | null>(null);
++  const rowPageRef = useRef<HTMLDivElement | null>(null);
++  const markdownGetterRef = useRef<(() => string) | null>(null);
++  /** 行页面在镜像/同步链路里的身份（与普通页面 pageId 区分，避免冲突） */
++  const rowPageId = `${dbId}:${rowId}`;
++  const frontmatterRef = useRef(frontmatter);
++  frontmatterRef.current = frontmatter;
+ 
+   useEffect(() => {
+     let alive = true;
+     setLoading(true);
+     setError('');
+-    setDirty(false);
+     Promise.all([
+       databasesApi.get(spaceSlug, dbId),
+       databasesApi.listRows(spaceSlug, dbId, { limit: 0 }),
+@@ -72,10 +83,11 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+         if (!alive) return;
+         setSchema(detail);
+         setRow((rowsRes.rows || []).find((item) => item.uuid === rowId) || null);
+-        setPageTitle(page.title);
+         const split = splitFrontmatter(page.markdown);
+         setFrontmatter(split.frontmatter);
+-        setMarkdown(split.body);
++        setBody(split.body);
++        setLocked(readFrontmatterFlag(split.frontmatter, 'locked'));
++        setFullPage(readFrontmatterFlag(split.frontmatter, 'full_page'));
+         setFoldedPropertyIds(readFoldedProperties(split.frontmatter));
+       })
+       .catch((err) => {
+@@ -93,6 +105,18 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+     return () => { alive = false; };
+   }, []);
+ 
++  // 浮层打开期间抬高 BlockNote 浮层基准层级：它把菜单/block handler 挂在 body 下，
++  // 默认层级(20/80)会低于本行页面浮层(119/120)，导致菜单被盖住。
++  useEffect(() => {
++    const root = document.documentElement;
++    const previous = root.style.getPropertyValue('--bn-ui-base-z-index');
++    root.style.setProperty('--bn-ui-base-z-index', '120');
++    return () => {
++      if (previous) root.style.setProperty('--bn-ui-base-z-index', previous);
++      else root.style.removeProperty('--bn-ui-base-z-index');
++    };
++  }, []);
++
+   const usersByUUID = useMemo(() => new Map(users.map((user) => [user.uuid, user])), [users]);
+   const props = useMemo(
+     () => buildFormulaProps(schema?.columns || [], row || { uuid: rowId, values: {} }),
+@@ -102,29 +126,126 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+     () => (schema?.columns || []).filter((column) => !column.auto && column.type !== 'formula' && column.type !== 'created_time' && column.type !== 'last_edited_time' && column.type !== 'last_edited_user' && column.type !== 'linked'),
+     [schema?.columns],
+   );
++  const titleColumn = useMemo(
++    () => editableColumns.find((column) => column.type === 'text') || editableColumns[0],
++    [editableColumns],
++  );
++  const titleValue = titleColumn ? String(row?.values?.[titleColumn.id] ?? '') : '';
++
+   const foldedSet = useMemo(() => new Set(foldedPropertyIds), [foldedPropertyIds]);
+   const foldedColumns = editableColumns.filter((column) => foldedSet.has(column.id));
+-  // 折叠只控制“是否渲染”，属性顺序始终按 table 的列顺序；展开后回到原位。
++  /** 折叠只控制“是否渲染”，顺序始终按 table 列顺序；展开后回到原位 */
+   const displayColumns = revealFolded ? editableColumns : editableColumns.filter((column) => !foldedSet.has(column.id));
+-  const titleValue = editableColumns[0] ? String(row?.values?.[editableColumns[0].id] || '') : '';
+ 
+-  const save = async () => {
+-    if (saving || loading) return;
+-    setSaving(true);
++  /** 行页面文件在 git 仓库内的相对路径 */
++  const rowRepoPath = schema?.dir_name ? `_database/${schema.dir_name}/subpages/${rowId}.md` : '';
++  const rowDirty = !!(gitState?.is_repo && rowRepoPath && (gitState.files || []).some((file) => file.path === rowRepoPath));
++
++  const refreshGit = useCallback(async () => {
++    // 与普通页面一致：空间未开启 git 功能时不请求（避免无意义的 403）
++    const space = useSpaceStore.getState().spaces.find((item) => item.slug === spaceSlug);
++    if (!space?.feature_flags?.git) {
++      setGitState(null);
++      return;
++    }
+     try {
+-      // 保留 frontmatter，只回写正文
+-      await databasesApi.putRowPage(spaceSlug, dbId, rowId, frontmatter + markdown);
+-      setDirty(false);
+-      setError('');
+-    } catch (err: any) {
+-      setError(err?.response?.data?.error || '保存失败');
+-    } finally {
+-      setSaving(false);
++      setGitState(await gitApi.state(spaceSlug));
++    } catch {
++      setGitState(null);
++    }
++  }, [spaceSlug]);
++
++  useEffect(() => { void refreshGit(); }, [refreshGit]);
++
++  /**
++   * 行页面自己的保存通道：直接 putRowPage 写回这个 subpage（frontmatter + 正文），
++   * 不走普通页面的镜像/同步管道，避免影响到父页面。
++   */
++  const saveNow = useCallback(async (nextFrontmatter?: string) => {
++    const fm = nextFrontmatter ?? frontmatterRef.current;
++    const currentBody = markdownGetterRef.current?.() ?? body;
++    setSyncStatus('syncing');
++    try {
++      await databasesApi.putRowPage(spaceSlug, dbId, rowId, `${fm}${currentBody}`);
++      setSyncStatus('synced');
++      void refreshGit();
++    } catch {
++      setSyncStatus('unsaved');
++      setError('保存失败');
+     }
++  }, [spaceSlug, dbId, rowId, body, refreshGit]);
++
++  const saveTimerRef = useRef<number | null>(null);
++  /** 正文变化后延迟一点合并保存（等同普通页面的自动保存体验） */
++  const scheduleSave = useCallback(() => {
++    setSyncStatus('unsaved');
++    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
++    saveTimerRef.current = window.setTimeout(() => {
++      saveTimerRef.current = null;
++      void saveNow();
++    }, 1200);
++  }, [saveNow]);
++
++  // 关掉浮层/切走时，把待保存内容立刻写掉
++  useEffect(() => () => {
++    if (saveTimerRef.current) {
++      window.clearTimeout(saveTimerRef.current);
++      saveTimerRef.current = null;
++      void saveNow();
++    }
++  }, [saveNow]);
++
++  // Cmd/Ctrl+S：立即保存（行页面走自己的通道）
++  useEffect(() => {
++    const onKeyDown = (event: KeyboardEvent) => {
++      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
++      event.preventDefault();
++      if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
++      void saveNow();
++    };
++    document.addEventListener('keydown', onKeyDown);
++    return () => document.removeEventListener('keydown', onKeyDown);
++  }, [saveNow]);
++
++  /** frontmatter 变更（折叠/全宽/锁定/标题）：带上当前正文一起写回 */
++  const persistFrontmatter = (nextFrontmatter: string) => {
++    setFrontmatter(nextFrontmatter);
++    if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
++    void saveNow(nextFrontmatter);
++  };
++
++  // 属性是否可见（行页面）：折叠名单只属于这个行页面，存 subpage frontmatter
++  const setPropertyFolded = (column: DatabaseColumn, folded: boolean) => {
++    const current = new Set(foldedPropertyIds);
++    if (folded) current.add(column.id);
++    else current.delete(column.id);
++    const nextIds = editableColumns.map((item) => item.id).filter((id) => current.has(id));
++    setFoldedPropertyIds(nextIds);
++    persistFrontmatter(writeFoldedProperties(frontmatterRef.current, nextIds));
++  };
++
++  const toggleFullPage = () => {
++    const next = !fullPage;
++    setFullPage(next);
++    persistFrontmatter(writeFrontmatterFlag(frontmatterRef.current, 'full_page', next));
++  };
++
++  const toggleLocked = () => {
++    const next = !locked;
++    setLocked(next);
++    persistFrontmatter(writeFrontmatterFlag(frontmatterRef.current, 'locked', next));
++  };
++
++  const commitTitle = async () => {
++    const next = (titleRef.current?.innerText || '').trim();
++    if (!titleColumn || next === titleValue) return;
++    if (titleRef.current) titleRef.current.innerText = next || titleValue;
++    await updateCell(titleColumn, next);
++    persistFrontmatter(writeFrontmatterValue(frontmatterRef.current, 'title', next));
+   };
+ 
+   const updateCell = async (column: DatabaseColumn, value: string) => {
+-    if (column.readonly) return;
++    if (locked || column.readonly) return;
+     setRow((current) => current ? { ...current, values: { ...current.values, [column.id]: value } } : current);
+     try {
+       const next = await databasesApi.updateRow(spaceSlug, dbId, rowId, { [column.id]: value });
+@@ -134,7 +255,7 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+     }
+   };
+ 
+-  // 选项类属性：新建选项要写回列 schema（config.options）。
++  // 选项类属性：新建选项要写回列 schema（config.options）
+   const createOption = async (column: DatabaseColumn, label: string) => {
+     const options = Array.isArray(column.config?.options) ? [...column.config!.options] : [];
+     const option = createOptionConfig(label, options);
+@@ -144,25 +265,12 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+     return option;
+   };
+ 
+-  // 属性是否可见（行页面）：折叠名单只属于这个行页面，存 subpage frontmatter（folded_properties）。
+-  const setPropertyFolded = (column: DatabaseColumn, folded: boolean) => {
+-    const current = new Set(foldedPropertyIds);
+-    if (folded) current.add(column.id);
+-    else current.delete(column.id);
+-    const nextIds = editableColumns.map((item) => item.id).filter((id) => current.has(id));
+-    const nextFrontmatter = writeFoldedProperties(frontmatter, nextIds);
+-    setFoldedPropertyIds(nextIds);
+-    setFrontmatter(nextFrontmatter);
+-    void databasesApi.putRowPage(spaceSlug, dbId, rowId, nextFrontmatter + markdown).catch(() => setError('属性显示设置保存失败'));
+-  };
+-
+   const commitRename = async (column: DatabaseColumn) => {
+     const nextName = renameDraft.trim();
+     setRenamingColumnId(null);
+     if (!nextName || nextName === column.name) return;
+     try {
+-      const next = await databasesApi.updateColumn(spaceSlug, dbId, column.id, { name: nextName });
+-      setSchema(next);
++      setSchema(await databasesApi.updateColumn(spaceSlug, dbId, column.id, { name: nextName }));
+     } catch {
+       setError('属性重命名失败');
+     }
+@@ -170,33 +278,33 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+ 
+   const deleteProperty = async (column: DatabaseColumn) => {
+     try {
+-      const next = await databasesApi.deleteColumn(spaceSlug, dbId, column.id);
+-      setSchema(next);
++      setSchema(await databasesApi.deleteColumn(spaceSlug, dbId, column.id));
+     } catch {
+       setError('删除属性失败');
+     }
+   };
+ 
+-  useEffect(() => {
+-    if (!menuOpen) return;
+-    const close = (event: MouseEvent) => {
+-      if ((event.target as Element | null)?.closest('.akdb-row-view-menu, .akdb-row-view-menu-btn')) return;
+-      setMenuOpen(false);
+-    };
+-    document.addEventListener('mousedown', close);
+-    return () => document.removeEventListener('mousedown', close);
+-  }, [menuOpen]);
++  const handleCommitRow = async () => {
++    if (!rowRepoPath || committing) return;
++    setCommitting(true);
++    try {
++      await gitApi.commit(spaceSlug, `Update ${titleValue || rowRepoPath}`, [rowRepoPath]);
++      await refreshGit();
++    } catch (e) {
++      console.error('row page commit failed:', e);
++    } finally {
++      setCommitting(false);
++    }
++  };
+ 
+   useEffect(() => {
+     if (!propertyMenu) return;
+     const close = (event: MouseEvent) => {
+       const target = event.target as Element | null;
+-      if (target?.closest('.akdb-row-view-property-menu, .akdb-row-view-property-menu-btn')) return;
++      if (target?.closest('.akdb-row-view-property-menu, .akdb-row-view-property-label')) return;
+       setPropertyMenu(null);
+     };
+-    const closeOnEscape = (event: KeyboardEvent) => {
+-      if (event.key === 'Escape') setPropertyMenu(null);
+-    };
++    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPropertyMenu(null); };
+     document.addEventListener('mousedown', close);
+     document.addEventListener('keydown', closeOnEscape);
+     return () => {
+@@ -205,13 +313,30 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+     };
+   }, [propertyMenu]);
+ 
+-  const toggleMenu = () => {
+-    if (menuOpen) { setMenuOpen(false); return; }
+-    const rect = menuButtonRef.current?.getBoundingClientRect();
+-    if (rect) setMenuRect({ top: rect.bottom + 6, left: Math.max(8, rect.right - 220) });
+-    setMenuOpen(true);
++  useEffect(() => {
++    if (!pageMenu) return;
++    const close = (event: MouseEvent) => {
++      if ((event.target as Element | null)?.closest('.akdb-row-view-page-menu, .akdb-row-view-tool-btn')) return;
++      setPageMenu(null);
++    };
++    document.addEventListener('mousedown', close);
++    return () => document.removeEventListener('mousedown', close);
++  }, [pageMenu]);
++
++  const togglePageMenu = () => {
++    if (pageMenu) { setPageMenu(null); return; }
++    const rect = pageMenuButtonRef.current?.getBoundingClientRect();
++    if (rect) setPageMenu({ top: rect.bottom + 6, left: Math.max(8, rect.right - 200) });
+   };
+ 
++  const syncLabel = syncStatus === 'unsaved'
++    ? '有内容尚未同步'
++    : syncStatus === 'syncing'
++      ? '同步中'
++      : syncStatus === 'synced'
++        ? '已同步'
++        : '';
++
+   return (
+     <div className={`akdb-row-view ${className || ''}`.trim()}>
+       <div className="akdb-row-view-toolbar">
+@@ -234,17 +359,49 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+           {!onBack && !onOpenFull && <span className="akdb-row-view-tool-spacer" />}
+         </div>
+         <div className="akdb-row-view-tool-actions">
+-          <button type="button" className="akdb-row-view-save" disabled={saving || loading || !dirty} onClick={() => void save()}>
+-            {saving ? '保存中…' : '保存'}
+-          </button>
++          {syncStatus === 'unsaved' && (
++            <>
++              <span className="akdb-row-view-sync-text">{syncLabel}</span>
++              <button
++                type="button"
++                className="akdb-row-view-tool-btn"
++                aria-label="立即同步"
++                title="立即同步 (等同于 Cmd+S)"
++                onClick={() => {
++                  if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
++                  void saveNow();
++                }}
++              >
++                <Save size={15} strokeWidth={2} />
++              </button>
++            </>
++          )}
++          {syncStatus === 'syncing' && (
++            <span className="akdb-row-view-sync-text"><Loader2 size={13} className="akdb-row-view-spin" />同步中</span>
++          )}
++          {syncStatus === 'synced' && (
++            <span className="akdb-row-view-sync-text">已同步<Check size={13} strokeWidth={2} /></span>
++          )}
++          {gitState?.is_repo && rowDirty && (
++            <button
++              type="button"
++              className="akdb-row-view-tool-btn"
++              aria-label="提交此页面到 git"
++              title={`提交此页面到 git (${rowRepoPath})`}
++              disabled={committing}
++              onClick={() => void handleCommitRow()}
++            >
++              {committing ? <Loader2 size={15} className="akdb-row-view-spin" /> : <UploadCloud size={15} strokeWidth={2} />}
++            </button>
++          )}
+           <button
+-            ref={menuButtonRef}
++            ref={pageMenuButtonRef}
+             type="button"
+-            className="akdb-row-view-tool-btn akdb-row-view-menu-btn"
++            className="akdb-row-view-tool-btn"
+             aria-label="更多操作"
+             aria-haspopup="menu"
+-            aria-expanded={menuOpen}
+-            onClick={toggleMenu}
++            aria-expanded={!!pageMenu}
++            onClick={togglePageMenu}
+           >
+             <MoreHorizontal size={16} strokeWidth={2} />
+           </button>
+@@ -253,12 +410,28 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+ 
+       {error && <div className="akdb-row-view-error">{error}</div>}
+ 
+-      <div className="akdb-row-view-scroll">
++      <div className="akdb-row-view-scroll overflow-y-auto">
+         {loading ? (
+           <div className="akdb-row-view-loading"><Loader2 size={16} />加载中…</div>
+         ) : (
+-          <div className="akdb-row-view-page">
+-            <h1 className="akdb-row-view-title">{titleValue || pageTitle || '未命名'}</h1>
++          <div className={`akdb-row-view-page ${fullPage ? 'is-full-page' : ''}`} ref={rowPageRef}>
++            <h1
++              key={titleValue}
++              ref={titleRef}
++              className="akdb-row-view-title"
++              contentEditable={!locked}
++              suppressContentEditableWarning
++              spellCheck={false}
++              onBlur={commitTitle}
++              onKeyDown={(event) => {
++                if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
++                  event.preventDefault();
++                  event.currentTarget.blur();
++                }
++              }}
++            >
++              {titleValue || '未命名'}
++            </h1>
+             <div className="akdb-row-view-properties">
+               {displayColumns.map((column) => (
+                 <div className="akdb-row-view-property" key={column.id}>
+@@ -271,7 +444,7 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+                       aria-expanded={propertyMenu?.columnId === column.id}
+                       onClick={(event) => {
+                         const rect = event.currentTarget.getBoundingClientRect();
+-                        setPropertyMenu({ columnId: column.id, top: rect.bottom + 6, left: Math.min(rect.left, window.innerWidth - 228) });
++                        setPropertyMenu({ columnId: column.id, top: rect.bottom + 6, left: Math.min(rect.left, window.innerWidth - 248) });
+                       }}
+                     >
+                       <span className="akdb-row-view-property-icon"><ColumnIconGlyph icon={column.icon || defaultColumnIconID(column)} /></span>
+@@ -285,6 +458,7 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+                       value={row?.values?.[column.id] ?? ''}
+                       formulaValue={props[column.id]}
+                       usersByUUID={usersByUUID}
++                      locked={locked}
+                       onChange={(value) => void updateCell(column, value)}
+                       onCreateOption={(label) => createOption(column, label)}
+                     />
+@@ -299,26 +473,49 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+               </button>
+             )}
+             <div className="akdb-row-view-divider" />
+-            <textarea
+-              className="akdb-row-view-body"
+-              aria-label="行页面正文"
+-              value={markdown}
+-              onChange={(event) => { setMarkdown(event.currentTarget.value); setDirty(true); }}
+-              spellCheck={false}
++            <PageEditor
++              key={rowPageId}
++              initialContent={body}
++              pageIdentity={{ spaceSlug, pageId: rowPageId }}
++              onSyncStatusChange={(status) => { if (status === 'unsaved') scheduleSave(); }}
++              registerMarkdownGetter={(getter) => { markdownGetterRef.current = getter; }}
++              disableMirror
++              readOnly={locked}
+             />
+           </div>
+         )}
+       </div>
+ 
+-      {menuOpen && menuRect && createPortal(
+-        <div className="akdb-view-settings-menu akdb-row-view-menu" role="menu" style={{ position: 'fixed', top: menuRect.top, left: menuRect.left, width: 220 }}>
+-          <button type="button" className="akdb-row-context-item" role="menuitem" onClick={() => { setMenuOpen(false); void save(); }}>
+-            <Check size={16} strokeWidth={2} />
+-            <span>保存</span>
++      {pageMenu && createPortal(
++        <div
++          className="akdb-view-settings-menu akdb-row-view-page-menu"
++          role="menu"
++          style={{ position: 'fixed', zIndex: 150, top: pageMenu.top, left: pageMenu.left, width: 200 }}
++        >
++          <button
++            type="button"
++            role="menuitemcheckbox"
++            aria-checked={fullPage}
++            className="akdb-row-view-page-menu-item"
++            onClick={() => { toggleFullPage(); setPageMenu(null); }}
++          >
++            <span>全宽页面</span>
++            <span className={`akdb-row-view-switch ${fullPage ? 'is-on' : ''}`}><span /></span>
++          </button>
++          <button
++            type="button"
++            role="menuitemcheckbox"
++            aria-checked={locked}
++            className="akdb-row-view-page-menu-item"
++            onClick={() => { toggleLocked(); setPageMenu(null); }}
++          >
++            <span>锁定页面</span>
++            <span className={`akdb-row-view-switch ${locked ? 'is-on' : ''}`}><span /></span>
+           </button>
+         </div>,
+         document.body,
+       )}
++
+       {propertyMenu && (() => {
+         const column = editableColumns.find((item) => item.id === propertyMenu.columnId);
+         if (!column) return null;
+@@ -355,10 +552,7 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+                 type="button"
+                 className="akdb-row-context-item"
+                 role="menuitem"
+-                onClick={() => {
+-                  setRenameDraft(column.name);
+-                  setRenamingColumnId(column.id);
+-                }}
++                onClick={() => { setRenameDraft(column.name); setRenamingColumnId(column.id); }}
+               >
+                 <Pencil size={16} strokeWidth={2} />
+                 <span>重命名</span>
+@@ -400,11 +594,12 @@ export default function DatabaseRowView({ spaceSlug, dbId, rowId, onOpenFull, on
+   );
+ }
+ 
+-function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onCreateOption }: {
++function PropertyValue({ column, value, formulaValue, usersByUUID, locked, onChange, onCreateOption }: {
+   column: DatabaseColumn;
+   value: string;
+   formulaValue?: any;
+   usersByUUID: Map<string, User>;
++  locked?: boolean;
+   onChange: (value: string) => void;
+   onCreateOption: (label: string) => Promise<any | null>;
+ }) {
+@@ -417,11 +612,21 @@ function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onC
+     return <span className="akdb-row-view-text">{text || <Empty />}</span>;
+   }
+   if (column.type === 'checkbox') {
+-    return value === 'true'
+-      ? <button type="button" className="akdb-row-view-checkbox-btn" aria-label="取消勾选" onClick={() => onChange('false')}><Check size={15} strokeWidth={2} className="akdb-row-view-check" /></button>
+-      : <button type="button" className="akdb-row-view-checkbox-btn" aria-label="勾选" onClick={() => onChange('true')}><span className="akdb-row-view-checkbox" /></button>;
++    const checked = value === 'true';
++    return (
++      <button
++        type="button"
++        className="akdb-row-view-checkbox-btn"
++        aria-label={checked ? '取消勾选' : '勾选'}
++        disabled={locked}
++        onClick={() => onChange(checked ? 'false' : 'true')}
++      >
++        {checked ? <Check size={15} strokeWidth={2} className="akdb-row-view-check" /> : <span className="akdb-row-view-checkbox" />}
++      </button>
++    );
+   }
+   if (column.type === 'select' || column.type === 'status') {
++    if (locked) return value ? <OptionTag option={optionByID(column, value)} config={column.config || {}} /> : <Empty />;
+     return (
+       <span ref={anchorRef} className="akdb-row-view-editor">
+         <OptionSelect
+@@ -437,15 +642,17 @@ function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onC
+     );
+   }
+   if (column.type === 'multi_select') {
++    const ids = parseMultiSelectValue(value);
++    if (locked) return ids.length ? <>{ids.map((id) => <OptionTag key={id} option={optionByID(column, id)} config={column.config || {}} />)}</> : <Empty />;
+     return (
+       <span ref={anchorRef} className="akdb-row-view-editor">
+         <OptionMultiSelect
+-          ids={parseMultiSelectValue(value)}
++          ids={ids}
+           options={(column.config?.options || []) as any[]}
+           config={column.config || {}}
+           anchorRef={anchorRef}
+           onCreate={onCreateOption}
+-          onChange={(ids) => onChange(JSON.stringify(ids))}
++          onChange={(nextIDs) => onChange(JSON.stringify(nextIDs))}
+         />
+       </span>
+     );
+@@ -453,6 +660,8 @@ function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onC
+   if (column.type === 'person') {
+     const multiple = personColumnMultiple(column);
+     const ids = personValueIDs(value);
++    const displayStyle = (column.config?.display_style || 'icon_name') as 'icon' | 'name' | 'icon_name';
++    if (locked) return ids.length ? <>{ids.map((id) => <PersonTag key={id} value={id} user={usersByUUID.get(id)} displayStyle={displayStyle} />)}</> : <Empty />;
+     return (
+       <span ref={anchorRef} className="akdb-row-view-editor">
+         <PersonSelect
+@@ -460,7 +669,7 @@ function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onC
+           ids={ids}
+           userMap={usersByUUID}
+           multiple={multiple}
+-          displayStyle={column.config?.display_style || 'icon_name'}
++          displayStyle={displayStyle}
+           anchorRef={anchorRef}
+           onChange={(nextIDs) => onChange(multiple ? JSON.stringify(nextIDs) : (nextIDs[0] || ''))}
+         />
+@@ -481,12 +690,13 @@ function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onC
+       className="akdb-row-view-input"
+       value={draft}
+       placeholder="空"
++      readOnly={locked}
+       onChange={(event) => setDraft(event.currentTarget.value)}
+-      onBlur={() => { if (draft !== value) onChange(draft); }}
++      onBlur={() => { if (!locked && draft !== value) onChange(draft); }}
+       onKeyDown={(event) => {
+         if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+           event.preventDefault();
+-          if (draft !== value) onChange(draft);
++          if (!locked && draft !== value) onChange(draft);
+           event.currentTarget.blur();
+         }
+         if (event.key === 'Escape') {
+@@ -498,6 +708,11 @@ function PropertyValue({ column, value, formulaValue, usersByUUID, onChange, onC
+   );
+ }
+ 
++function optionByID(column: DatabaseColumn, id: string) {
++  const options = (column.config?.options || []) as Array<{ id: string; value: string }>;
++  return options.find((option) => option.id === id) || { id, value: id };
++}
++
+ function formatDateValue(value: string) {
+   if (!value) return '';
+   const date = new Date(value);
+@@ -505,7 +720,7 @@ function formatDateValue(value: string) {
+   return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
+ }
+ 
+-/** 把行页面的 frontmatter 与正文拆开：正文进编辑区，frontmatter 保存时原样带回。 */
++/** 把行页面的 frontmatter 与正文拆开：正文进编辑器，frontmatter 保存时原样带回。 */
+ function splitFrontmatter(markdown: string): { frontmatter: string; body: string } {
+   const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(markdown);
+   if (!match) return { frontmatter: '', body: markdown };
+@@ -530,8 +745,12 @@ function readFoldedProperties(frontmatter: string): string[] {
+   return ids;
+ }
+ 
+-/** 写入 folded_properties：空数组时删除该键。 */
+-function writeFoldedProperties(frontmatter: string, ids: string[]): string {
++function readFrontmatterFlag(frontmatter: string, key: string): boolean {
++  return new RegExp(`^${key}:\\s*true\\s*$`, 'm').test(frontmatter);
++}
++
++/** 重写 frontmatter：删除某个 key（含其后的 YAML 列表项），再按需追加新值。 */
++function rewriteFrontmatter(frontmatter: string, key: string, appended: string[]): string {
+   const newline = frontmatter.includes('\r\n') ? '\r\n' : '\n';
+   const opening = frontmatter.match(/^---\r?\n/);
+   if (!opening) return frontmatter;
+@@ -540,18 +759,31 @@ function writeFoldedProperties(frontmatter: string, ids: string[]): string {
+   const bodyLines = frontmatter.slice(opening[0].length, closingIndex).split(/\r?\n/);
+   const kept: string[] = [];
+   for (let i = 0; i < bodyLines.length; i++) {
+-    if (/^folded_properties:/.test(bodyLines[i])) {
++    if (new RegExp(`^${key}:`).test(bodyLines[i])) {
+       while (i + 1 < bodyLines.length && /^\s*-\s/.test(bodyLines[i + 1])) i += 1;
+       continue;
+     }
+     kept.push(bodyLines[i]);
+   }
+-  if (ids.length) {
+-    kept.push('folded_properties:', ...ids.map((id) => `  - ${id}`));
+-  }
++  kept.push(...appended);
+   return `---${newline}${kept.join(newline)}${newline}---${newline}`;
+ }
+ 
++/** 写入 folded_properties：空数组时删除该键。 */
++function writeFoldedProperties(frontmatter: string, ids: string[]): string {
++  return rewriteFrontmatter(frontmatter, 'folded_properties', ids.length ? ['folded_properties:', ...ids.map((id) => `  - ${id}`)] : []);
++}
++
++/** 写入布尔开关（full_page / locked）：false 时删除该键。 */
++function writeFrontmatterFlag(frontmatter: string, key: string, value: boolean): string {
++  return rewriteFrontmatter(frontmatter, key, value ? [`${key}: true`] : []);
++}
++
++/** 写入标题。 */
++function writeFrontmatterValue(frontmatter: string, key: string, value: string): string {
++  return rewriteFrontmatter(frontmatter, key, [`${key}: ${JSON.stringify(value)}`]);
++}
++
+ function Empty() {
+   return <span className="akdb-row-view-empty">空</span>;
+ }
+diff --git a/frontend/src/components/Editor/database/database.css b/frontend/src/components/Editor/database/database.css
+index 836c0bd..8a1be35 100644
+--- a/frontend/src/components/Editor/database/database.css
++++ b/frontend/src/components/Editor/database/database.css
+@@ -685,9 +685,25 @@
+ .akdb-row-overlay { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--akdb-menu-border); background: #fff; color: var(--akdb-menu-text); }
+ .akdb-row-overlay-center { width: min(1200px, calc(100vw - 64px)); height: min(820px, calc(100vh - 56px)); border-radius: 12px; box-shadow: 0 18px 44px rgba(15,23,42,.18), 0 2px 8px rgba(15,23,42,.10); }
+ .akdb-row-overlay-peek { position: fixed; top: 0; right: 0; bottom: 0; z-index: 119; width: min(1040px, calc(100vw - 240px)); border-width: 0 0 0 1px; box-shadow: -18px 0 44px rgba(15,23,42,.16); }
++.akdb-row-overlay-frame { display: block; flex: 1 1 auto; width: 100%; height: 100%; border: 0; background: #fff; }
++/* 行页面浮层打开时，抬高 BlockNote 的浮层（/ 菜单、块菜单等）：
++   它的 z-index 是写死的（菜单 80 / 侧边把手 20），否则会被浮层(119/120)盖住 */
++body:has(.akdb-row-overlay-peek) [data-floating-ui-focusable],
++body:has(.akdb-row-overlay-center) [data-floating-ui-focusable] { z-index: 130 !important; }
+ .akdb-row-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; background: #fff; color: var(--akdb-menu-text); }
++/* iframe 内需要撑满视口，否则编辑器下方空白不属于滚动容器，点击/框选会失效 */
++.akdb-row-embed-root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+ .akdb-row-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; height: 45px; border-bottom: 1px solid var(--akdb-menu-divider); padding: 0 12px; }
+ .akdb-row-view-tool-left { display: flex; align-items: center; gap: 2px; }
++.akdb-row-view-sync-text { display: inline-flex; align-items: center; gap: 4px; color: var(--akdb-menu-text-secondary); font-size: 12px; line-height: 16px; white-space: nowrap; }
++.akdb-row-view-spin { animation: akdb-row-view-spin 1s linear infinite; }
++@keyframes akdb-row-view-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
++.akdb-row-view-page-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: var(--akdb-menu-item-height); border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-text); cursor: pointer; padding: 0 8px; text-align: left; font: inherit; font-size: 13px; font-weight: 400; line-height: 1.2; }
++.akdb-row-view-page-menu-item:hover { background: var(--akdb-menu-hover-bg); }
++.akdb-row-view-switch { position: relative; flex: 0 0 auto; box-sizing: content-box; width: 26px; height: 14px; border-radius: 999px; background: rgba(42,28,0,.18); padding: 2px; transition: background .16s ease; }
++.akdb-row-view-switch > span { display: block; width: 14px; height: 14px; border-radius: 999px; background: #fff; transition: transform .16s ease; }
++.akdb-row-view-switch.is-on { background: var(--c-bluTexAccPri, #2383e2); }
++.akdb-row-view-switch.is-on > span { transform: translateX(12px); }
+ .akdb-row-view-tool-actions { display: flex; align-items: center; gap: 6px; }
+ .akdb-row-view-tool-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: var(--akdb-menu-item-radius); background: transparent; color: var(--akdb-menu-icon-secondary); cursor: pointer; padding: 0; }
+ .akdb-row-view-tool-btn:hover { background: var(--akdb-menu-hover-bg); color: var(--akdb-menu-icon); }
+@@ -699,6 +715,7 @@
+ .akdb-row-view-loading { display: flex; align-items: center; gap: 6px; padding: 16px 12px; color: var(--akdb-menu-text-tertiary); font-size: 13px; }
+ .akdb-row-view-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+ .akdb-row-view-page { width: 100%; max-width: 912px; box-sizing: border-box; margin: 0 auto; padding: 40px 48px 80px; }
++.akdb-row-view-page.is-full-page { max-width: none; padding-left: 96px; padding-right: 96px; }
+ .akdb-row-view-title { margin: 0 0 10px; color: var(--akdb-menu-text); font-size: 34px; font-weight: 700; line-height: 1.25; word-break: break-word; }
+ .akdb-row-view-properties { display: grid; grid-template-columns: minmax(0, 1fr); }
+ .akdb-row-view-property { display: grid; grid-template-columns: 128px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 32px; }
+@@ -741,6 +758,7 @@
+ .akdb-row-view-rename input { width: 100%; height: var(--akdb-menu-control-height); border: 1px solid rgba(35,131,226,.85); border-radius: var(--akdb-menu-control-radius); background: var(--akdb-menu-input-bg); color: var(--akdb-menu-text); font: inherit; font-size: 13px; outline: none; padding: 0 6px; }
+ .akdb-row-view-divider { margin: 18px 0 0; border-top: 1px solid var(--akdb-menu-divider); }
+ .akdb-row-view-body { width: 100%; min-height: 320px; margin-top: 18px; border: 0; background: transparent; color: var(--akdb-menu-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 22px; outline: none; padding: 0; resize: vertical; }
++/* 行页面正文的块把手（自建：＋ 与六点菜单），层级高于浮层 */
+ @media (max-width: 720px) {
+   .akdb-row-view-properties { grid-template-columns: minmax(0, 1fr); }
+   .akdb-row-view-page { padding: 28px 24px 64px; }
+diff --git a/frontend/src/hooks/useClaudeChat.ts b/frontend/src/hooks/useClaudeChat.ts
+index 279e1c6..71684ab 100644
+--- a/frontend/src/hooks/useClaudeChat.ts
++++ b/frontend/src/hooks/useClaudeChat.ts
+@@ -1,5 +1,6 @@
+ import { useCallback, useEffect, useRef, useState } from 'react';
+ import { claudeApi } from '../api/claude';
++import { getWebSocketURL } from '../utils/desktopRuntime';
+ 
+ export type ChatStatus = 'idle' | 'answering' | 'error';
+ 
+@@ -118,7 +119,7 @@ export function useClaudeChat({ spaceSlug, enabled, onToolFileChanged }: UseClau
+     const token = localStorage.getItem('token');
+     if (!token) return;
+ 
+-    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/spaces/${encodeURIComponent(slug)}/claude/ws?token=${encodeURIComponent(token)}`;
++    const wsUrl = getWebSocketURL(`/api/spaces/${encodeURIComponent(slug)}/claude/ws?token=${encodeURIComponent(token)}`);
+     console.log('[useClaudeChat] connecting to', wsUrl);
+     const ws = new WebSocket(wsUrl);
+     wsRef.current = ws;
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+index 54f1fa3..5d38983 100644
+--- a/frontend/src/main.tsx
++++ b/frontend/src/main.tsx
+@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
+ import { createRoot } from 'react-dom/client'
+ import './styles/globals.css'
+ import App from './App.tsx'
++import { isDesktopRuntime } from './utils/desktopRuntime'
+ 
+ createRoot(document.getElementById('root')!).render(
+   <StrictMode>
+@@ -11,7 +12,7 @@ createRoot(document.getElementById('root')!).render(
+ 
+ // Register the PWA service worker (production only — HMR + SW don't mix).
+ // On update, skip waiting and reload so the new App Shell takes effect.
+-if ('serviceWorker' in navigator && import.meta.env.PROD) {
++if ('serviceWorker' in navigator && import.meta.env.PROD && !isDesktopRuntime()) {
+   navigator.serviceWorker.register('/sw.js').then((reg) => {
+     reg.addEventListener('updatefound', () => {
+       const installing = reg.installing
+diff --git a/frontend/src/pages/AdminPage.tsx b/frontend/src/pages/AdminPage.tsx
+index 5b38821..049ba43 100644
+--- a/frontend/src/pages/AdminPage.tsx
++++ b/frontend/src/pages/AdminPage.tsx
+@@ -2,18 +2,19 @@ import { useEffect, useState, useRef, Fragment } from 'react';
+ import { useLocation } from 'react-router-dom';
+ import { useAuthStore } from '../stores/authStore';
+ import { usersApi } from '../api/users';
+-import { spacesApi, Space, SpaceMember, FeatureFlags } from '../api/spaces';
++import { spacesApi, Space, SpaceMember, FeatureFlags, SpaceImportMode } from '../api/spaces';
+ import { authApi } from '../api/auth';
+ import { fetchIconLibrary, uploadToIconLibrary, deleteIcon, renameIcon, IconLibraryItem } from '../api/icons';
+ import { fetchCoverLibrary, uploadToCoverLibrary, deleteCover, renameCover, CoverLibraryItem } from '../api/covers';
+ import { siteSettingsApi, SiteSettings } from '../api/siteSettings';
+ import { claudeApi, ClaudeAdminConfig } from '../api/claude';
+-import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen } from 'lucide-react';
++import { Trash2, Edit2, Plus, X, UserPlus, Smile, ChevronDown, ChevronUp, Check, PlusCircle, Key, RefreshCw, Upload, Download, Image, ImageIcon, BookOpen, Folder } from 'lucide-react';
+ import PageIcon from '../components/Editor/PageIcon';
+ import ConfirmDialog from '../components/ConfirmDialog';
+ import { usePreferenceStore } from '../stores/preferenceStore';
+ import apiClient from '../api/client';
+ import { CODE_THEME_OPTIONS, CODE_THEME_PREVIEW_SNIPPET, getCodeThemeRegistration, normalizeCodeTheme } from '../utils/codeTheme';
++import { isDesktopRuntime } from '../utils/desktopRuntime';
+ 
+ interface EditingUser {
+   id: number;
+@@ -25,6 +26,15 @@ interface EditingUser {
+   updated_at: string;
+ }
+ 
++interface SpaceFormData {
++  name: string;
++  icon: string;
++  description: string;
++  feature_flags: FeatureFlags;
++  source_path?: string;
++  import_mode?: SpaceImportMode;
++}
++
+ const ICON_OPTIONS = ['📚', '📝', '💼', '🏠', '🎨', '🔬', '📊', '🗂️', '💡', '🚀', '🎯', '✅', '📋', '📁', '🔧', '💬', '🌟', '🎓', '🎵', '🌍', '🔒', '📱', '☕', '🔮'];
+ 
+ const roleLabels: Record<string, string> = {
+@@ -120,9 +130,11 @@ export default function AdminPage() {
+   const [spacesLoading, setSpacesLoading] = useState(false);
+   // 统一面板: null=关闭, 'new'=创建, slug=编辑
+   const [spacePanelSlug, setSpacePanelSlug] = useState<string | null>(null);
+-  const [spaceFormData, setSpaceFormData] = useState<{ name: string; icon: string; description: string; feature_flags: FeatureFlags }>({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
++  const [spaceFormData, setSpaceFormData] = useState<SpaceFormData>({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
+   const [showIconPicker, setShowIconPicker] = useState(false);
+   const iconPickerRef = useRef<HTMLDivElement>(null);
++  const [folderPickerLoading, setFolderPickerLoading] = useState(false);
++  const [showImportModeDialog, setShowImportModeDialog] = useState(false);
+   const [pendingDeleteSpace, setPendingDeleteSpace] = useState<Space | null>(null);
+   const [deletingSpace, setDeletingSpace] = useState(false);
+ 
+@@ -606,6 +618,7 @@ export default function AdminPage() {
+   // ---- 空间面板操作 ----
+   const openCreatePanel = () => {
+     setSpaceFormData({ name: '', icon: '', description: '', feature_flags: { git: false, claude: false } });
++    setShowImportModeDialog(false);
+     setMembers([]);
+     setSpacePanelSlug('new');
+     setIsAddingMember(false);
+@@ -616,7 +629,8 @@ export default function AdminPage() {
+       closePanel();
+       return;
+     }
+-    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false, claude: false }) } });
++    setSpaceFormData({ name: space.name, icon: space.icon || '', description: space.description || '', feature_flags: { ...(space.feature_flags ?? { git: false, claude: false }) }, source_path: undefined, import_mode: undefined });
++    setShowImportModeDialog(false);
+     setSpacePanelSlug(space.slug);
+     setIsAddingMember(false);
+     await fetchMembers(space.slug);
+@@ -630,16 +644,46 @@ export default function AdminPage() {
+     setShowUserDropdown(false);
+     setShowNewRoleDropdown(false);
+     setOpenMemberRoleId(null);
++    setShowImportModeDialog(false);
++  };
++
++  const handleChooseFolder = async () => {
++    if (!isDesktopRuntime() || folderPickerLoading) return;
++    setFolderPickerLoading(true);
++    try {
++      const response = await apiClient.post<{ path?: string; cancelled?: boolean }>('/desktop/choose-folder');
++      if (response.data.path) {
++        setSpaceFormData(prev => ({
++          ...prev,
++          source_path: response.data.path,
++          import_mode: undefined,
++        }));
++        setShowImportModeDialog(true);
++      }
++    } catch (err: any) {
++      setError(err?.response?.data || err.message);
++    } finally {
++      setFolderPickerLoading(false);
++    }
+   };
+ 
+   const handleSavePanel = async (e: React.FormEvent) => {
+     e.preventDefault();
+     if (!spaceFormData.name.trim()) return;
++    if (spacePanelSlug === 'new' && spaceFormData.source_path && !spaceFormData.import_mode) {
++      setError('请先选择迁入或引用方式');
++      return;
++    }
+     try {
+       if (spacePanelSlug === 'new') {
+         await spacesApi.create(spaceFormData);
+       } else {
+-        await spacesApi.update(spacePanelSlug!, spaceFormData);
++        await spacesApi.update(spacePanelSlug!, {
++          name: spaceFormData.name,
++          icon: spaceFormData.icon,
++          description: spaceFormData.description,
++          feature_flags: spaceFormData.feature_flags,
++        });
+       }
+       closePanel();
+       fetchSpaces();
+@@ -1198,11 +1242,40 @@ export default function AdminPage() {
+             placeholder="描述（可选）"
+             className="flex-1 px-2 py-1.5 border border-notion-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+           />
++          {isDesktopRuntime() && (
++            <button
++              type="button"
++              onClick={handleChooseFolder}
++              disabled={folderPickerLoading}
++              className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors disabled:opacity-50"
++              title="选择本地文件夹"
++            >
++              {folderPickerLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Folder className="w-4 h-4" />}
++            </button>
++          )}
+           <button type="submit" className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="创建"><Check className="w-4 h-4" /></button>
+           <button type="button" onClick={closePanel} className="p-1 text-notion-textSecondary hover:text-notion-text transition-colors" title="取消"><X className="w-4 h-4" /></button>
+         </div>
+         )}
+ 
++        {!isEditing && spaceFormData.source_path && (
++          <div className="mt-3 flex items-center gap-2 rounded border border-notion-border bg-notion-sidebarBg/40 px-3 py-2 text-xs text-notion-textSecondary">
++            <Folder className="w-3.5 h-3.5 flex-shrink-0" />
++            <span className="flex-shrink-0 text-notion-text">
++              {spaceFormData.import_mode === 'copy' ? '迁入' : spaceFormData.import_mode === 'link' ? '引用' : '待选择方式'}
++            </span>
++            <span className="min-w-0 flex-1 truncate" title={spaceFormData.source_path}>{spaceFormData.source_path}</span>
++            <button
++              type="button"
++              onClick={() => setSpaceFormData(prev => ({ ...prev, source_path: undefined, import_mode: undefined }))}
++              className="p-0.5 hover:text-notion-text"
++              title="清除"
++            >
++              <X className="w-3.5 h-3.5" />
++            </button>
++          </div>
++        )}
++
+         {/* 功能开关（仅编辑模式） */}
+         {isEditing && (
+           <div className="mb-3 pb-3 border-b border-notion-border flex items-center gap-6">
+@@ -1341,6 +1414,51 @@ export default function AdminPage() {
+           </div>
+         )}
+ 
++        {showImportModeDialog && spaceFormData.source_path && (
++          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 p-4">
++            <div className="w-full max-w-md rounded-xl border border-notion-border bg-white p-5 shadow-xl">
++              <h3 className="text-base font-semibold text-notion-text">选择导入方式</h3>
++              <p className="mt-1 break-all text-xs text-notion-textSecondary">{spaceFormData.source_path}</p>
++              <div className="mt-5 grid gap-3">
++                <button
++                  type="button"
++                  onClick={() => {
++                    setSpaceFormData(prev => ({ ...prev, import_mode: 'copy' }));
++                    setShowImportModeDialog(false);
++                  }}
++                  className="rounded-lg border border-notion-border px-4 py-3 text-left transition-colors hover:bg-notion-hover"
++                >
++                  <span className="block text-sm font-medium text-notion-text">迁入</span>
++                  <span className="mt-1 block text-xs text-notion-textSecondary">复制文件夹内容到空间目录，不修改源文件夹。</span>
++                </button>
++                <button
++                  type="button"
++                  onClick={() => {
++                    setSpaceFormData(prev => ({ ...prev, import_mode: 'link' }));
++                    setShowImportModeDialog(false);
++                  }}
++                  className="rounded-lg border border-notion-border px-4 py-3 text-left transition-colors hover:bg-notion-hover"
++                >
++                  <span className="block text-sm font-medium text-notion-text">引用</span>
++                  <span className="mt-1 block text-xs text-notion-textSecondary">在空间根目录创建软链接，内容仍保存在原文件夹。</span>
++                </button>
++              </div>
++              <div className="mt-4 flex justify-end">
++                <button
++                  type="button"
++                  onClick={() => {
++                    setSpaceFormData(prev => ({ ...prev, source_path: undefined, import_mode: undefined }));
++                    setShowImportModeDialog(false);
++                  }}
++                  className="rounded px-3 py-1.5 text-sm text-notion-textSecondary hover:bg-notion-hover"
++                >
++                  取消
++                </button>
++              </div>
++            </div>
++          </div>
++        )}
++
+       </form>
+     );
+   };
+diff --git a/frontend/src/pages/EmbedDatabaseRowPage.tsx b/frontend/src/pages/EmbedDatabaseRowPage.tsx
+new file mode 100644
+index 0000000..0b8ba38
+--- /dev/null
++++ b/frontend/src/pages/EmbedDatabaseRowPage.tsx
+@@ -0,0 +1,39 @@
++import { useEffect } from 'react';
++import { useParams } from 'react-router-dom';
++import DatabaseRowView from '../components/Editor/database/DatabaseRowView';
++
++/**
++ * 行页面的“嵌入”渲染：不带 App 外壳，专供浮层里的 iframe 使用。
++ * 独立文档 = 独立 BlockNote 运行环境，因此浮层里也能拿到原生块把手。
++ * 与父页面之间通过 postMessage 通信（关闭 / 全局展开）。
++ */
++export default function EmbedDatabaseRowPage() {
++  const { spaceSlug, dbId, rowId } = useParams<{ spaceSlug: string; dbId: string; rowId: string }>();
++
++  useEffect(() => {
++    document.documentElement.style.background = '#fff';
++    document.body.style.margin = '0';
++    return () => {
++      document.documentElement.style.removeProperty('background');
++      document.body.style.removeProperty('margin');
++    };
++  }, []);
++
++  if (!spaceSlug || !dbId || !rowId) return null;
++
++  const notify = (type: 'close' | 'open-full') => {
++    window.parent?.postMessage({ source: 'akmd-row-embed', type }, window.location.origin);
++  };
++
++  return (
++    <div className="akdb-row-embed-root">
++      <DatabaseRowView
++        spaceSlug={spaceSlug}
++        dbId={dbId}
++        rowId={rowId}
++        onClose={() => notify('close')}
++        onOpenFull={() => notify('open-full')}
++      />
++    </div>
++  );
++}
+diff --git a/frontend/src/vite-env.d.ts b/frontend/src/vite-env.d.ts
+index 58a52d7..2ae67e4 100644
+--- a/frontend/src/vite-env.d.ts
++++ b/frontend/src/vite-env.d.ts
+@@ -2,3 +2,11 @@
+ 
+ // 由 vite.config.ts 的 define 注入的编译时间（ISO 字符串）
+ declare const __BUILD_TIME__: string;
++
++interface Window {
++  __AKMD_DESKTOP__?: boolean;
++  __AKMD_WS_BASE__?: string;
++  runtime?: {
++    BrowserOpenURL?: (url: string) => void;
++  };
++}
+diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
+index 9082ff5..0120a25 100644
+--- a/frontend/vite.config.ts
++++ b/frontend/vite.config.ts
+@@ -14,7 +14,7 @@ export default defineConfig({
+     },
+     proxy: {
+       '/api': {
+-        target: 'http://localhost:8801',
++        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8801',
+         changeOrigin: true,
+         ws: true,
+       },

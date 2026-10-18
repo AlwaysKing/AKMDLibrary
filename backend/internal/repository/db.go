@@ -6,9 +6,11 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 )
+
+const CurrentSchemaVersion = 1
 
 type DB struct {
 	*sql.DB
@@ -124,6 +126,10 @@ func (db *DB) migrate() error {
 			fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			expires_at DATETIME NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	for _, schema := range schemas {
@@ -178,6 +184,33 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	if err := ensureSchemaVersion(db.DB); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureSchemaVersion(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
+		return fmt.Errorf("failed to read schema version: %w", err)
+	}
+	if version > CurrentSchemaVersion {
+		return fmt.Errorf(
+			"database schema version %d is newer than supported version %d",
+			version,
+			CurrentSchemaVersion,
+		)
+	}
+	if version < CurrentSchemaVersion {
+		if _, err := db.Exec(
+			`INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)`,
+			CurrentSchemaVersion,
+		); err != nil {
+			return fmt.Errorf("failed to record schema version: %w", err)
+		}
+	}
 	return nil
 }
 

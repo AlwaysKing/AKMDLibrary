@@ -14,10 +14,12 @@ import DatabasesPage from './pages/DatabasesPage';
 import DatabaseDetailPage from './pages/DatabaseDetailPage';
 import DatabaseRowPage from './pages/DatabaseRowPage';
 import EmbedDatabaseRowPage from './pages/EmbedDatabaseRowPage';
+import PersonalHomePage from './pages/PersonalHomePage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 import { usePreferenceStore } from './stores/preferenceStore';
 import { siteSettingsApi } from './api/siteSettings';
+import { isDesktopRuntime } from './utils/desktopRuntime';
 
 function HomeRedirect() {
   const { isAuthenticated } = useAuthStore();
@@ -63,7 +65,7 @@ function HomeRedirect() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-notion-bg">
+    <div className="min-h-full flex items-center justify-center bg-notion-bg">
       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-notion-text"></div>
     </div>
   );
@@ -71,6 +73,7 @@ function HomeRedirect() {
 
 function App() {
   const { isAuthenticated } = useAuthStore();
+  const isDesktopShell = isDesktopRuntime();
 
   useEffect(() => {
     useAuthStore.getState().initialize();
@@ -114,68 +117,92 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route
-          path="/login"
-          element={!isAuthenticated ? <LoginPage /> : <HomeRedirect />}
-        />
-        <Route
-          path="/s/:spaceSlug"
-          element={
-            <ProtectedRoute>
-              <AppLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<SpacePage />} />
-          <Route path="trash" element={<TrashPage />} />
-          <Route path="git" element={<GitPage />} />
-          <Route path="files" element={<FilesPage />} />
-          <Route path="databases" element={<DatabasesPage />} />
-          <Route path="databases/:dbId" element={<DatabaseDetailPage />} />
-          <Route path="db/:dbId/row/:rowId" element={<DatabaseRowPage />} />
-        </Route>
-        <Route
-          path="/s/:spaceSlug/p/:pageId"
-          element={
-            <ProtectedRoute>
-              <AppLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<PageViewPage />} />
-        </Route>
-        <Route
-          path="/admin"
-          element={
-            <ProtectedRoute>
-              <AppLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<AdminPage />} />
-        </Route>
-        <Route
-          path="/welcome"
-          element={
-            <ProtectedRoute>
-              <AppLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<WelcomePage />} />
-        </Route>
-        <Route path="/" element={<HomeRedirect />} />
-        {/* 浮层 iframe 专用：不带 App 外壳，独立文档里只有行页面（这样才能拿到原生块把手） */}
-        <Route
-          path="/embed/s/:spaceSlug/db/:dbId/row/:rowId"
-          element={
-            <ProtectedRoute>
-              <EmbedDatabaseRowPage />
-            </ProtectedRoute>
-          }
-        />
-      </Routes>
+      <div className={`flex h-full flex-col ${isDesktopShell ? 'desktop-runtime' : ''}`}>
+        <div className="min-h-0 flex-1">
+          <Routes>
+            <Route
+              path="/login"
+              element={!isAuthenticated ? <LoginPage /> : <HomeRedirect />}
+            />
+            <Route
+              path="/s/:spaceSlug"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<SpacePage />} />
+              <Route path="trash" element={<TrashPage />} />
+              <Route path="git" element={<GitPage />} />
+              <Route path="files" element={<FilesPage />} />
+              <Route path="databases" element={<DatabasesPage />} />
+              <Route path="databases/:dbId" element={<DatabaseDetailPage />} />
+              <Route path="db/:dbId/row/:rowId" element={<DatabaseRowPage />} />
+            </Route>
+            <Route
+              path="/s/:spaceSlug/p/:pageId"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<PageViewPage />} />
+            </Route>
+            <Route
+              path="/personal"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<PersonalHomePage />} />
+            </Route>
+            <Route
+              path="/personal/notes/:personalNoteId"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<PageViewPage />} />
+            </Route>
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<AdminPage />} />
+            </Route>
+            <Route
+              path="/welcome"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<WelcomePage />} />
+            </Route>
+            <Route path="/" element={<HomeRedirect />} />
+            {/* 浮层 iframe 专用：不带 App 外壳，独立文档里只有行页面（这样才能拿到原生块把手） */}
+            <Route
+              path="/embed/s/:spaceSlug/db/:dbId/row/:rowId"
+              element={
+                <ProtectedRoute>
+                  <EmbedDatabaseRowPage />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </div>
+      </div>
     </BrowserRouter>
   );
 }

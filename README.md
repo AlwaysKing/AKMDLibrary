@@ -83,6 +83,20 @@ docker compose up -d
 docker compose pull && docker compose up -d
 ```
 
+### macOS 桌面版
+
+桌面版复用同一套 Go 后端和 React 前端，数据默认存放在 `~/Library/Application Support/AKMDLibrary`。
+
+```bash
+cd frontend
+npm ci
+cd ..
+./scripts/build-desktop-macos.sh
+```
+
+构建产物默认输出到 `/tmp/AKMDLibrary/desktop/AKMDLibrary.app`。详细说明见
+[docs/DESKTOP-APP.md](docs/DESKTOP-APP.md)。
+
 ### 查看日志 / 运维
 
 ```bash

@@ -202,6 +202,17 @@ func (h *DatabaseHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+func (h *DatabaseHandler) PermanentDeleteRow(w http.ResponseWriter, r *http.Request) {
+	if !h.check(w, r, true) {
+		return
+	}
+	err := h.databaseService.PermanentDeleteRow(chi.URLParam(r, "slug"), chi.URLParam(r, "dbId"), chi.URLParam(r, "rowId"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 func (h *DatabaseHandler) GetRowPage(w http.ResponseWriter, r *http.Request) {
 	if !h.check(w, r, false) {
 		return
