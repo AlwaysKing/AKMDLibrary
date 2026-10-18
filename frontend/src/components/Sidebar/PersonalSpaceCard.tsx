@@ -336,32 +336,41 @@ export default function PersonalSpaceCard() {
 
   return (
     <section className="mx-1 mb-2 overflow-hidden rounded-lg border border-[#dbe8f5] bg-[#eaf3fc]">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left transition-colors hover:bg-[#e3effb]"
-        aria-expanded={expanded}
-      >
-        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-[#d8eafb] text-[#2383e2]">
-          <NotebookPen className="h-4 w-4" strokeWidth={1.8} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5 text-[13px] font-medium text-notion-text">
-            个人空间
-            <LockKeyhole className="h-3 w-3 text-notion-textSecondary" strokeWidth={1.8} />
+      <div className="flex items-center gap-1 px-2.5 py-2">
+        <button
+          type="button"
+          onClick={() => navigate('/personal')}
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left"
+        >
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-[#d8eafb] text-[#2383e2]">
+            <NotebookPen className="h-4 w-4" strokeWidth={1.8} />
           </span>
-          <span className="mt-0.5 block text-[11px] text-notion-textSecondary">
-            {isLoading ? '正在加载…' : `${pendingCount} 项待办 · ${noteCount} 篇笔记`}
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1.5 text-[13px] font-medium text-notion-text">
+              个人空间
+              <LockKeyhole className="h-3 w-3 text-notion-textSecondary" strokeWidth={1.8} />
+            </span>
+            <span className="mt-0.5 block text-[11px] text-notion-textSecondary">
+              {isLoading ? '正在加载…' : `${pendingCount} 项待办 · ${noteCount} 篇笔记`}
+            </span>
           </span>
-        </span>
-        {isLoading ? (
-          <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-notion-textSecondary" />
-        ) : (
-          <ChevronDown
-            className={`h-4 w-4 flex-shrink-0 text-notion-textSecondary transition-transform ${expanded ? 'rotate-180' : ''}`}
-          />
-        )}
-      </button>
+        </button>
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-notion-textSecondary"
+          aria-expanded={expanded}
+          aria-label={expanded ? '收起个人空间' : '展开个人空间'}
+        >
+          {isLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+            />
+          )}
+        </button>
+      </div>
 
       {expanded && <div className="px-2 pb-2">
         {error && <div className="px-1 py-1 text-[11px] text-red-500">{error}</div>}
