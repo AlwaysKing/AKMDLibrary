@@ -5,6 +5,13 @@ import { pagesApi, Page } from '../../api/pages';
 import { Space } from '../../api/spaces';
 import { useState, useRef, useEffect, Fragment } from 'react';
 
+export interface BreadcrumbTrailItem {
+  label: string;
+  onClick?: () => void;
+  /** 同级页面：悬停时展开下拉，用于在平级页面之间跳转 */
+  siblings?: Array<{ label: string; onClick?: () => void; icon?: React.ReactNode; active?: boolean }>;
+}
+
 interface BreadcrumbProps {
   pageTitle?: string;
   spaceSlug: string;
@@ -13,7 +20,7 @@ interface BreadcrumbProps {
   /** 面包屑左侧的前置元素（如返回按钮） */
   leading?: React.ReactNode;
   /** 空间与当前标题之间的额外层级（如：数据库所在页面） */
-  trail?: Array<{ label: string; onClick?: () => void }>;
+  trail?: BreadcrumbTrailItem[];
 }
 
 const SUBMENU_WIDTH = 260;
@@ -252,7 +259,7 @@ function findPagePath(pages: Page[], targetId: string, path: Page[] = []): Page[
   return null;
 }
 
-type ActiveItem = 'space' | number | null;
+type ActiveItem = 'space' | number | string | null;
 
 export default function Breadcrumb({ pageTitle, spaceSlug, rootLabel, actions, leading, trail }: BreadcrumbProps) {
   const navigate = useNavigate();
@@ -406,22 +413,57 @@ export default function Breadcrumb({ pageTitle, spaceSlug, rootLabel, actions, l
           </div>
         )}
       </div>
-      {trail && trail.map((item, index) => (
-        <Fragment key={`trail:${index}`}>
-          <ChevronRight className="w-4 h-4 flex-shrink-0" />
-          {item.onClick ? (
-            <button
-              type="button"
-              className="max-w-[200px] truncate rounded px-1.5 py-0.5 text-notion-text transition-colors hover:bg-notion-hover"
-              onClick={item.onClick}
+      {trail && trail.map((item, index) => {
+        const trailKey = `trail:${index}`;
+        const hasSiblings = !!item.siblings && item.siblings.length > 0;
+        const isOpen = activeItem === trailKey;
+        return (
+          <Fragment key={trailKey}>
+            <ChevronRight className="w-4 h-4 flex-shrink-0" />
+            <div
+              className="relative"
+              onMouseEnter={() => hasSiblings && handleItemEnter(trailKey)}
+              onMouseLeave={() => hasSiblings && handleItemLeave()}
             >
-              {item.label}
-            </button>
-          ) : (
-            <span className="max-w-[200px] truncate px-1.5 py-0.5 text-notion-text">{item.label}</span>
-          )}
-        </Fragment>
-      ))}
+              {item.onClick ? (
+                <button
+                  type="button"
+                  className={`max-w-[200px] truncate rounded px-1.5 py-0.5 text-notion-text transition-colors hover:bg-notion-hover ${isOpen ? 'bg-notion-hover' : ''}`}
+                  onClick={item.onClick}
+                >
+                  {item.label}
+                </button>
+              ) : (
+                <span className="max-w-[200px] truncate px-1.5 py-0.5 text-notion-text">{item.label}</span>
+              )}
+              {hasSiblings && isOpen && (
+                <div className="absolute left-0 top-full mt-1 w-[240px] rounded-lg border border-notion-border bg-white py-1.5 px-1.5 shadow-lg z-50">
+                  {item.siblings!.map((sibling) => (
+                    <button
+                      type="button"
+                      key={sibling.label}
+                      onClick={() => {
+                        setActiveItem(null);
+                        sibling.onClick?.();
+                      }}
+                      className={`flex h-[30px] w-full items-center rounded-md px-2.5 text-left transition-colors ${
+                        sibling.active ? 'bg-[#E6F0FF]' : 'hover:bg-notion-hover'
+                      }`}
+                    >
+                      <span className="mr-2 flex h-[18px] w-[22px] flex-shrink-0 items-center justify-center text-notion-textSecondary">
+                        {sibling.icon || <FileText className="h-[18px] w-[18px] text-[#91918e]" strokeWidth={1.7} />}
+                      </span>
+                      <span className={`min-w-0 flex-1 truncate text-sm font-medium ${sibling.active ? 'text-notion-text' : 'text-notion-sidebarText'}`}>
+                        {sibling.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Fragment>
+        );
+      })}
       {pagePath && pagePath.map((page, index) => (
         <Fragment key={page.id}>
           <ChevronRight className="w-4 h-4 flex-shrink-0" />

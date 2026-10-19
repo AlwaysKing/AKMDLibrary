@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/alwaysking/akmdlibrary/internal/middleware"
 	"github.com/alwaysking/akmdlibrary/internal/model"
@@ -35,18 +34,18 @@ func (h *PersonalHandler) CreateTodo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	todos, err := h.personalService.CreateTodo(middleware.GetUserID(r), req.Text)
+	result, err := h.personalService.CreateTodo(middleware.GetUserID(r), &req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writePersonalJSON(w, todos)
+	writePersonalJSON(w, result)
 }
 
 func (h *PersonalHandler) UpdateTodo(w http.ResponseWriter, r *http.Request) {
-	index, err := strconv.Atoi(chi.URLParam(r, "index"))
-	if err != nil || index < 0 {
-		http.Error(w, "Invalid todo index", http.StatusBadRequest)
+	todoID := chi.URLParam(r, "id")
+	if todoID == "" {
+		http.Error(w, "Invalid todo id", http.StatusBadRequest)
 		return
 	}
 	var req model.UpdatePersonalTodoRequest
@@ -54,7 +53,7 @@ func (h *PersonalHandler) UpdateTodo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	todos, err := h.personalService.UpdateTodo(middleware.GetUserID(r), index, &req)
+	todos, err := h.personalService.UpdateTodo(middleware.GetUserID(r), todoID, &req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -63,12 +62,12 @@ func (h *PersonalHandler) UpdateTodo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PersonalHandler) DeleteTodo(w http.ResponseWriter, r *http.Request) {
-	index, err := strconv.Atoi(chi.URLParam(r, "index"))
-	if err != nil || index < 0 {
-		http.Error(w, "Invalid todo index", http.StatusBadRequest)
+	todoID := chi.URLParam(r, "id")
+	if todoID == "" {
+		http.Error(w, "Invalid todo id", http.StatusBadRequest)
 		return
 	}
-	todos, err := h.personalService.DeleteTodo(middleware.GetUserID(r), index)
+	todos, err := h.personalService.DeleteTodo(middleware.GetUserID(r), todoID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

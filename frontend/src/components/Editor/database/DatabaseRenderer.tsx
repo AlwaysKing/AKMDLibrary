@@ -8,6 +8,7 @@ import {
   ArrowUpDown,
   ArrowUpRight,
   CalendarDays,
+  CalendarPlus,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -20,6 +21,7 @@ import {
   Image,
   Info,
   List,
+  ListTodo,
   Lock,
   Map as MapIcon,
   MoreHorizontal,
@@ -36,6 +38,8 @@ import {
   X,
 } from 'lucide-react';
 import { databasesApi, type DatabaseColumn, type DatabaseColumnType, type DatabaseDetail, type DatabaseRow, type DatabaseSummary } from '../../../api/databases';
+import { personalApi } from '../../../api/personal';
+import { usePersonalStore } from '../../../stores/personalStore';
 import { usersApi } from '../../../api/users';
 import { type User } from '../../../api/auth';
 import { evalFormula } from '../../../formula/evaluator';
@@ -864,6 +868,28 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
     await navigator.clipboard.writeText(`${window.location.origin}/s/${spaceSlug}/db/${dbId}/row/${row.uuid}`);
     showToast('链接已复制');
     closeRowContextMenu();
+  };
+
+  const addRowAsTodo = async (row: DatabaseRow, today: boolean) => {
+    try {
+      const result = await personalApi.createTodo({
+        today,
+        link: {
+          type: 'database-row',
+          space_slug: spaceSlug,
+          database_id: dbId,
+          row_id: row.uuid,
+        },
+      });
+      await usePersonalStore.getState().fetchOverview();
+      showToast(result.created
+        ? (today ? '已添加为今日待办' : '已添加为待办')
+        : (today ? '该数据已在待办中，并设为今日' : '该数据已在待办中'));
+    } catch (error: any) {
+      showToast(error?.response?.data || '添加待办失败');
+    } finally {
+      closeRowContextMenu();
+    }
   };
 
   const duplicateRow = async (row: DatabaseRow) => {
@@ -2104,6 +2130,8 @@ export default function DatabaseRenderer({ spaceSlug, dbId, blockId, view, reado
               onOpenRow?.(rowContextMenu.row.uuid);
               closeRowContextMenu();
             }}
+            onAddTodo={() => void addRowAsTodo(rowContextMenu.row, false)}
+            onAddTodayTodo={() => void addRowAsTodo(rowContextMenu.row, true)}
             onCopyLink={() => void copyRowLink(rowContextMenu.row)}
             onDuplicate={() => void duplicateRow(rowContextMenu.row)}
             onDelete={() => void deleteRowById(rowContextMenu.row.uuid)}
@@ -3023,11 +3051,13 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
   row: DatabaseRow;
   style: CSSProperties;
   onOpen: () => void;
+  onAddTodo: () => void;
+  onAddTodayTodo: () => void;
   onCopyLink: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onPermanentDelete: () => void;
-}>(({ row, style, onOpen, onCopyLink, onDuplicate, onDelete, onPermanentDelete }, ref) => {
+}>(({ row, style, onOpen, onAddTodo, onAddTodayTodo, onCopyLink, onDuplicate, onDelete, onPermanentDelete }, ref) => {
   return (
     <div
       ref={ref}
@@ -3049,6 +3079,14 @@ const DatabaseRowContextMenu = forwardRef<HTMLDivElement, {
         <button type="button" className="akdb-row-context-item" onClick={onDuplicate}>
           <Copy size={16} />
           <span>创建副本</span>
+        </button>
+        <button type="button" className="akdb-row-context-item" onClick={onAddTodo}>
+          <ListTodo size={16} />
+          <span>添加为待办</span>
+        </button>
+        <button type="button" className="akdb-row-context-item" onClick={onAddTodayTodo}>
+          <CalendarPlus size={16} />
+          <span>添加为今日待办</span>
         </button>
         <button type="button" className="akdb-row-context-item" onClick={onDelete}>
           <Trash2 size={16} />

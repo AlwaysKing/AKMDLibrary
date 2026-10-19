@@ -2,9 +2,30 @@ import apiClient from './client';
 import { Page } from './pages';
 
 export interface PersonalTodo {
-  index: number;
+  id: string;
   text: string;
   done: boolean;
+  created_at: string;
+  today_on?: string;
+  today_set_at?: string;
+  completed_at?: string;
+  is_today: boolean;
+  overdue: boolean;
+  link?: PersonalTodoLink;
+}
+
+export interface PersonalTodoLink {
+  type: 'page' | 'database-row';
+  space_slug: string;
+  page_id?: string;
+  database_id?: string;
+  row_id?: string;
+}
+
+export interface PersonalTodoMutationResponse {
+  todo: PersonalTodo;
+  todos: PersonalTodo[];
+  created: boolean;
 }
 
 export interface PersonalNoteNode {
@@ -18,6 +39,7 @@ export interface PersonalOverview {
   space_slug: string;
   todos: PersonalTodo[];
   notes: PersonalNoteNode[];
+  recent: PersonalNoteNode[];
 }
 
 export const personalApi = {
@@ -26,18 +48,22 @@ export const personalApi = {
     return response.data;
   },
 
-  createTodo: async (text: string): Promise<PersonalTodo[]> => {
-    const response = await apiClient.post<PersonalTodo[]>('/personal/todos', { text });
+  createTodo: async (data: {
+    text?: string;
+    today?: boolean;
+    link?: PersonalTodoLink;
+  }): Promise<PersonalTodoMutationResponse> => {
+    const response = await apiClient.post<PersonalTodoMutationResponse>('/personal/todos', data);
     return response.data;
   },
 
-  updateTodo: async (index: number, data: { text?: string; done?: boolean }): Promise<PersonalTodo[]> => {
-    const response = await apiClient.patch<PersonalTodo[]>(`/personal/todos/${index}`, data);
+  updateTodo: async (id: string, data: { text?: string; done?: boolean; today?: boolean }): Promise<PersonalTodo[]> => {
+    const response = await apiClient.patch<PersonalTodo[]>(`/personal/todos/${id}`, data);
     return response.data;
   },
 
-  deleteTodo: async (index: number): Promise<PersonalTodo[]> => {
-    const response = await apiClient.delete<PersonalTodo[]>(`/personal/todos/${index}`);
+  deleteTodo: async (id: string): Promise<PersonalTodo[]> => {
+    const response = await apiClient.delete<PersonalTodo[]>(`/personal/todos/${id}`);
     return response.data;
   },
 

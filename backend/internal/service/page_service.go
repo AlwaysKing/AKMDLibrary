@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -574,6 +575,14 @@ func (s *PageService) GetByID(spaceSlug string, pageID string) (*model.Page, err
 	log.Printf("[page-debug] service.GetByID before-read-file slug=%s pageID=%s file=%s elapsed=%s", spaceSlug, pageID, filePath, time.Since(start))
 	raw, err := diagReadFile("GetByID", filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// 缓存行指向的文件已经不在磁盘上（历史删除遗留的孤儿行）。只清这一行，
+			// 子页面目录的缓存行不跟着删——它们的文件可能还在，下次拉树会按 ID 重建。
+			if cleanupErr := repo.Delete(pageID); cleanupErr != nil {
+				log.Printf("warning: failed to clean orphan page row %s (%s): %v", pageID, page.FilePath, cleanupErr)
+			}
+			return nil, fmt.Errorf("page not found")
+		}
 		log.Printf("[page-debug] service.GetByID read-file-error slug=%s pageID=%s file=%s err=%v elapsed=%s", spaceSlug, pageID, filePath, err, time.Since(start))
 		return nil, fmt.Errorf("failed to read page content: %w", err)
 	}
@@ -911,7 +920,7 @@ func (s *PageService) Delete(spaceSlug string, pageID string) error {
 	if parentRel == "" {
 		trashSub = filepath.Join("_", fileName)
 	} else {
-		trashSub = filepath.Join(strings.ReplaceAll(parentRel, "/", "_"), fileName)
+		trashSub = filepath.Join(encodeTrashDirName(parentRel), fileName)
 	}
 
 	trashDir := filepath.Join(spaceDir, ".trash", filepath.Dir(trashSub))
@@ -934,7 +943,12 @@ func (s *PageService) Delete(spaceSlug string, pageID string) error {
 		s.removeSubpageFromParent(repo, *parentID, pageID)
 	}
 
-	return repo.Delete(pageID)
+	// 子页面目录整体进了回收站，缓存行必须跟着一起清掉；只删顶层那行会留下
+	// 指向已不存在文件的孤儿行，之后任何按 ID 取页都会 404 "failed to read page content"。
+	if _, err := repo.DeleteByPathPrefix(strings.TrimSuffix(page.FilePath, ".md")); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *PageService) GetAssetPath(spaceSlug string, pageID string, assetPath string) (string, error) {
@@ -1004,6 +1018,7 @@ func (s *PageService) UploadAsset(spaceSlug string, pageID string, filename stri
 
 type TrashedItem struct {
 	Name                    string                    `json:"name"`
+	SpaceSlug               string                    `json:"space_slug"`
 	TrashPath               string                    `json:"trash_path"`
 	ParentPath              string                    `json:"parent_path"`
 	FileName                string                    `json:"file_name"`
@@ -1021,8 +1036,96 @@ type TrashedDatabaseRowField struct {
 	Value string `json:"value"`
 }
 
+// isWithinDir 判断 absPath 是否落在 baseDir 内（含 baseDir 本身）。
+func isWithinDir(baseDir, absPath string) bool {
+	rel, err := filepath.Rel(baseDir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveTrashPath 把客户端传入的 trash_path 解析成绝对路径，并校验它确实落在
+// 当前空间的 .trash 目录内。个人空间的物理目录名（.personal/<uuid>）与 slug
+// （.personal-<uuid>）不同，所以这里用 resolveSpaceDir 返回的真实目录名判断。
+func (s *PageService) resolveTrashPath(spaceSlug string, trashRelPath string) (string, string, string, error) {
+	spaceDir, dirName := s.resolveSpaceDir(spaceSlug)
+	if spaceDir == "" {
+		return "", "", "", fmt.Errorf("space not found: %s", spaceSlug)
+	}
+	trashRelDir := filepath.Join(dirName, ".trash")
+	cleaned := filepath.Clean(filepath.FromSlash(trashRelPath))
+	if !strings.HasPrefix(cleaned, trashRelDir+string(filepath.Separator)) {
+		return "", "", "", fmt.Errorf("invalid trash path")
+	}
+	absPath := filepath.Join(s.docsDir, cleaned)
+	if !isWithinDir(filepath.Join(s.docsDir, trashRelDir), absPath) {
+		return "", "", "", fmt.Errorf("invalid trash path")
+	}
+	return absPath, spaceDir, dirName, nil
+}
+
+// trashDirName 把页面相对父目录的路径编码成 .trash 下的单层目录名。
+// 旧编码直接 "/" -> "_"，父目录名里带 "_" 或 ".." 时会和层级分隔符混淆，
+// 还原时可能拼出越界路径；新编码只转义会破坏解析的字节（"_"、"~"、路径分隔符），
+// 其余字节原样保留，避免中文/大写标题把目录名撑大而超过文件名长度上限。
+func encodeTrashDirName(parentRel string) string {
+	segments := strings.Split(filepath.ToSlash(parentRel), "/")
+	for i, seg := range segments {
+		segments[i] = encodeTrashSegment(seg)
+	}
+	return strings.Join(segments, "_")
+}
+
+func encodeTrashSegment(seg string) string {
+	var b strings.Builder
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		switch c {
+		case '_', '~', '/', '\\', '.':
+			fmt.Fprintf(&b, "~%02x", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func decodeTrashDirName(dirPart string) string {
+	segments := strings.Split(dirPart, "_")
+	for i, seg := range segments {
+		segments[i] = decodeTrashSegment(seg)
+	}
+	return strings.Join(segments, "/")
+}
+
+func decodeTrashSegment(seg string) string {
+	var b strings.Builder
+	for i := 0; i < len(seg); i++ {
+		if seg[i] == '~' && i+2 < len(seg) && isHexDigit(seg[i+1]) && isHexDigit(seg[i+2]) {
+			if code, err := strconv.ParseUint(seg[i+1:i+3], 16, 8); err == nil {
+				b.WriteByte(byte(code))
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(seg[i])
+	}
+	return b.String()
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f'
+}
+
 func (s *PageService) ListTrash(spaceSlug string) ([]TrashedItem, error) {
-	trashDir := filepath.Join(s.docsDir, spaceSlug, ".trash")
+	// 个人空间的物理目录是 docs/.personal/<uuid>，与 slug（.personal-<uuid>）不同，
+	// 必须通过 resolveSpaceDir 拿到真实目录名，否则个人回收站永远读不到。
+	spaceDir, dirName := s.resolveSpaceDir(spaceSlug)
+	if spaceDir == "" {
+		return []TrashedItem{}, nil
+	}
+	trashDir := filepath.Join(spaceDir, ".trash")
 	if _, err := os.Stat(trashDir); os.IsNotExist(err) {
 		return []TrashedItem{}, nil
 	}
@@ -1045,13 +1148,14 @@ func (s *PageService) ListTrash(spaceSlug string) ([]TrashedItem, error) {
 		if dirPart == "_" {
 			parentPath = ""
 		} else {
-			parentPath = strings.ReplaceAll(dirPart, "_", "/")
+			parentPath = decodeTrashDirName(dirPart)
 		}
 
-		trashRelPath := filepath.Join(spaceSlug, ".trash", relPath)
+		trashRelPath := filepath.Join(dirName, ".trash", relPath)
 
 		item := TrashedItem{
 			Name:       pageName,
+			SpaceSlug:  spaceSlug,
 			TrashPath:  trashRelPath,
 			ParentPath: parentPath,
 			FileName:   fileName,
@@ -1204,7 +1308,10 @@ func trashTitleFromValues(values map[string]string) string {
 
 func (s *PageService) RestoreFromTrash(spaceSlug string, trashRelPath string, spaceID int) (*model.Page, error) {
 	s.markGitDirty(spaceSlug)
-	trashAbsPath := filepath.Join(s.docsDir, trashRelPath)
+	trashAbsPath, spaceDir, dirName, err := s.resolveTrashPath(spaceSlug, trashRelPath)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(trashAbsPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("trashed item not found")
 	}
@@ -1222,32 +1329,44 @@ func (s *PageService) RestoreFromTrash(spaceSlug string, trashRelPath string, sp
 		return nil, err
 	}
 
-	fileName := filepath.Base(trashRelPath)
+	fileName := filepath.Base(trashAbsPath)
 	pageName := strings.TrimSuffix(fileName, ".md")
 
-	afterTrash := strings.TrimPrefix(trashRelPath, spaceSlug+"/.trash/")
+	// 用 resolveTrashPath 清洗过的绝对路径反推相对位置，避免原始 trash_path 里
+	// "./" 之类的冗余段让前缀匹配失效、把父目录误判成根目录。
+	afterTrash, err := filepath.Rel(filepath.Join(spaceDir, ".trash"), trashAbsPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid trash path")
+	}
 	dirPart := filepath.Dir(afterTrash)
 
 	var parentPath string
 	if dirPart == "_" {
 		parentPath = ""
 	} else {
-		parentPath = strings.ReplaceAll(dirPart, "_", "/")
+		parentPath = decodeTrashDirName(dirPart)
 	}
 
 	var targetRelPath string
 	if parentPath == "" {
-		targetRelPath = filepath.Join(spaceSlug, fileName)
+		targetRelPath = filepath.Join(dirName, fileName)
 	} else {
-		parentAbsDir := filepath.Join(s.docsDir, spaceSlug, parentPath)
-		if _, err := os.Stat(parentAbsDir); err == nil {
-			targetRelPath = filepath.Join(spaceSlug, parentPath, fileName)
-		} else {
-			targetRelPath = filepath.Join(spaceSlug, fileName)
+		parentAbsDir := filepath.Join(spaceDir, parentPath)
+		if isWithinDir(spaceDir, parentAbsDir) {
+			if _, err := os.Stat(parentAbsDir); err == nil {
+				targetRelPath = filepath.Join(dirName, parentPath, fileName)
+			}
+		}
+		if targetRelPath == "" {
+			targetRelPath = filepath.Join(dirName, fileName)
 		}
 	}
 
 	targetAbsPath := filepath.Join(s.docsDir, targetRelPath)
+	// 目录名解码后再拼绝对路径，必须再确认一次没有逃出当前空间。
+	if !isWithinDir(spaceDir, targetAbsPath) {
+		return nil, fmt.Errorf("invalid trash path")
+	}
 
 	title := pageName
 	counter := 2
@@ -1339,7 +1458,10 @@ func (s *PageService) findTrashPageByID(trashDir string, spaceSlug string, pageI
 
 func (s *PageService) PermanentDelete(spaceSlug string, trashRelPath string) error {
 	s.markGitDirty(spaceSlug)
-	trashAbsPath := filepath.Join(s.docsDir, trashRelPath)
+	trashAbsPath, _, _, err := s.resolveTrashPath(spaceSlug, trashRelPath)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(trashAbsPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete: %w", err)
 	}
@@ -1705,6 +1827,15 @@ func (s *PageService) ListRecent(spaceSlug string, limit int) ([]*model.Page, er
 		limit = 10
 	}
 	return repo.ListRecent(limit)
+}
+
+// ClearRecent 把单个页面从该空间的「最近访问」中移除，不影响页面本身
+func (s *PageService) ClearRecent(spaceSlug string, pageID string) error {
+	repo, err := s.getRepo(spaceSlug)
+	if err != nil {
+		return err
+	}
+	return repo.ClearAccess(pageID)
 }
 
 // ==================== Subpage Block Maintenance ====================

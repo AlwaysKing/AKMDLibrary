@@ -39,6 +39,7 @@ export interface PageMetadata {
 
 export interface TrashedItem {
   name: string;
+  space_slug: string;
   trash_path: string;
   parent_path: string;
   file_name: string;
@@ -137,5 +138,9 @@ export const pagesApi = {
     const params = limit ? { limit } : {};
     const response = await apiClient.get<Page[]>(`/spaces/${spaceSlug}/pages/recent`, { params });
     return response.data;
+  },
+
+  clearRecent: async (spaceSlug: string, pageId: string): Promise<void> => {
+    await apiClient.delete(`/spaces/${spaceSlug}/pages/${pageId}/recent`);
   },
 };

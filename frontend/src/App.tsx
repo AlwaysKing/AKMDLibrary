@@ -15,6 +15,8 @@ import DatabaseDetailPage from './pages/DatabaseDetailPage';
 import DatabaseRowPage from './pages/DatabaseRowPage';
 import EmbedDatabaseRowPage from './pages/EmbedDatabaseRowPage';
 import PersonalHomePage from './pages/PersonalHomePage';
+import PersonalDocsPage from './pages/PersonalDocsPage';
+import PersonalTodosPage from './pages/PersonalTodosPage';
 import { useAuthStore } from './stores/authStore';
 import { useSpaceStore } from './stores/spaceStore';
 import { usePreferenceStore } from './stores/preferenceStore';
@@ -133,7 +135,8 @@ function App() {
               }
             >
               <Route index element={<SpacePage />} />
-              <Route path="trash" element={<TrashPage />} />
+              {/* 回收站已改为聚合当前团队空间与个人空间，统一走 /trash */}
+              <Route path="trash" element={<Navigate to="/trash" replace />} />
               <Route path="git" element={<GitPage />} />
               <Route path="files" element={<FilesPage />} />
               <Route path="databases" element={<DatabasesPage />} />
@@ -159,6 +162,18 @@ function App() {
               }
             >
               <Route index element={<PersonalHomePage />} />
+              <Route path="docs" element={<PersonalDocsPage />} />
+              <Route path="todos" element={<PersonalTodosPage />} />
+            </Route>
+            <Route
+              path="/trash"
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<TrashPage />} />
             </Route>
             <Route
               path="/personal/notes/:personalNoteId"

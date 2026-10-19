@@ -13,6 +13,7 @@ import (
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
 	"github.com/alwaysking/akmdlibrary/pkg/databasecsv"
+	"github.com/alwaysking/akmdlibrary/pkg/filesystem"
 	"github.com/alwaysking/akmdlibrary/pkg/frontmatter"
 	"github.com/google/uuid"
 )
@@ -65,6 +66,15 @@ func (s *DatabaseService) lockDBs(keys []string) func() {
 }
 
 func (s *DatabaseService) resolveSpaceDir(spaceSlug string) (string, string, error) {
+	// 个人空间的 slug 是 .personal-<uuid>，物理目录是 .personal/<uuid>，
+	// 必须先按个人空间解析，否则个人空间的数据库会落到错误的目录。
+	if spaceDir, ok := filesystem.PersonalWorkspacePath(s.docsDir, spaceSlug); ok {
+		if info, err := os.Stat(spaceDir); err == nil && info.IsDir() {
+			relDir, _ := filesystem.PersonalWorkspaceRelDir(spaceSlug)
+			return spaceDir, relDir, nil
+		}
+	}
+
 	exact := filepath.Join(s.docsDir, spaceSlug)
 	if info, err := os.Stat(exact); err == nil && info.IsDir() {
 		return exact, spaceSlug, nil
@@ -687,7 +697,11 @@ func (s *DatabaseService) RestoreTrashedRow(spaceSlug, trashRelPath string, tras
 		fm.DB = cfg.ID
 	}
 
-	targetRelPath := filepath.Join(spaceSlug, "_database", dir, "subpages", trash.RowID+".md")
+	_, dirName, err := s.resolveSpaceDir(spaceSlug)
+	if err != nil {
+		return nil, err
+	}
+	targetRelPath := filepath.Join(dirName, "_database", dir, "subpages", trash.RowID+".md")
 	targetAbsPath := filepath.Join(s.docsDir, targetRelPath)
 	wrotePage := false
 	if trash.RestorePageBinding {

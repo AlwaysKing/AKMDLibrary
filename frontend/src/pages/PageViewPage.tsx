@@ -7,6 +7,7 @@ import { usePersonalStore } from '../stores/personalStore';
 import { usePreferenceStore } from '../stores/preferenceStore';
 import { PersonalNoteNode } from '../api/personal';
 import Breadcrumb from '../components/Editor/Breadcrumb';
+import { personalTrail as personalTrailItems } from '../utils/personalPages';
 import CoverImage from '../components/Editor/CoverImage';
 import PageIcon from '../components/Editor/PageIcon';
 import PageEditor from '../components/Editor/PageEditor';
@@ -15,7 +16,9 @@ import { getLatestMirror } from '../services/mirrorStore';
 import { onSyncStatusChange, flushSync } from '../services/syncModule';
 import { gitApi, GitRepoState } from '../api/git';
 import { pagesApi } from '../api/pages';
-import { MoreHorizontal, Loader2, Check, Lock, UploadCloud, Save } from 'lucide-react';
+import { personalApi } from '../api/personal';
+import { showToast } from '../components/Toast';
+import { MoreHorizontal, Loader2, Check, Lock, UploadCloud, Save, ListTodo, CalendarPlus } from 'lucide-react';
 
 // 页面不存在时的提示
 function PageNotFound() {
@@ -60,10 +63,12 @@ export default function PageViewPage() {
   const activeSpaceSlug = isPersonalNote ? personalSpaceSlug : spaceSlug;
   const breadcrumbSpaceSlug = spaceSlug || currentSpace?.slug || '';
   const personalNotePath = personalNoteId ? findPersonalNotePath(personalNotes, personalNoteId) || [] : [];
-  const personalTrail = personalNotePath.slice(0, -1).map((note) => ({
-    label: note.title || '未命名笔记',
-    onClick: () => navigate(`/personal/notes/${note.id}`),
-  }));
+  const personalTrail = personalNoteId
+    ? personalTrailItems(navigate, 'docs', personalNotePath.slice(0, -1).map((note) => ({
+        label: note.title || '未命名笔记',
+        onClick: () => navigate(`/personal/notes/${note.id}`),
+      })))
+    : [];
   const codeTheme = usePreferenceStore((state) => state.getCodeTheme());
 
   useEffect(() => {
@@ -376,6 +381,27 @@ export default function PageViewPage() {
     }
   }, [activeSpaceSlug, pageId, currentPage, updateMetadata]);
 
+  const addCurrentPageAsTodo = useCallback(async (today: boolean) => {
+    if (!activeSpaceSlug || !currentPage) return;
+    try {
+      const result = await personalApi.createTodo({
+        today,
+        link: {
+          type: 'page',
+          space_slug: activeSpaceSlug,
+          page_id: currentPage.id,
+        },
+      });
+      await usePersonalStore.getState().fetchOverview();
+      showToast(result.created
+        ? (today ? '已添加为今日待办' : '已添加为待办')
+        : (today ? '该页面已在待办中，并设为今日' : '该页面已在待办中'));
+      setShowPageMenu(false);
+    } catch (error: any) {
+      showToast(error?.response?.data || '添加待办失败');
+    }
+  }, [activeSpaceSlug, currentPage]);
+
   const syncPageMenuPosition = useCallback(() => {
     const rect = pageMenuButtonRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -566,6 +592,31 @@ export default function PageViewPage() {
               <div className={`w-8 h-4 rounded-full transition-colors relative ${currentPage.is_locked ? 'bg-blue-500' : 'bg-gray-300'}`}>
                 <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${currentPage.is_locked ? 'translate-x-4' : 'translate-x-0.5'}`} />
               </div>
+            </button>
+            <div className="my-1 border-t border-notion-border" />
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void addCurrentPageAsTodo(false);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+            >
+              <ListTodo className="h-4 w-4 text-notion-textSecondary" />
+              <span>添加为待办</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void addCurrentPageAsTodo(true);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+            >
+              <CalendarPlus className="h-4 w-4 text-notion-textSecondary" />
+              <span>添加为今日待办</span>
             </button>
           </div>
         </>,

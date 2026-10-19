@@ -1,17 +1,21 @@
 package service
 
 import (
+	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/alwaysking/akmdlibrary/internal/model"
 	"github.com/alwaysking/akmdlibrary/internal/repository"
 	"github.com/alwaysking/akmdlibrary/pkg/filesystem"
 	"github.com/alwaysking/akmdlibrary/pkg/frontmatter"
+	"github.com/alwaysking/akmdlibrary/pkg/uuidutil"
 )
 
 var personalTodoLinePattern = regexp.MustCompile(`^(\s*[-*]\s+\[)([ xX])(\]\s+)(.*)$`)
@@ -21,8 +25,10 @@ type PersonalService struct {
 	spaceRepo   *repository.SpaceRepository
 	memberRepo  *repository.MemberRepository
 	pageService *PageService
+	databaseSvc *DatabaseService
 	docsDir     string
 	workspaceMu sync.Mutex
+	todoMu      sync.Mutex
 }
 
 type personalWorkspace struct {
@@ -31,11 +37,36 @@ type personalWorkspace struct {
 	path  string
 }
 
+type personalTodoXML struct {
+	ID          string               `xml:"id,attr"`
+	Done        string               `xml:"done,attr"`
+	CreatedAt   string               `xml:"created-at,attr,omitempty"`
+	TodayOn     string               `xml:"today-on,attr,omitempty"`
+	TodaySetAt  string               `xml:"today-set-at,attr,omitempty"`
+	CompletedAt string               `xml:"completed-at,attr,omitempty"`
+	Text        string               `xml:"text"`
+	Link        *personalTodoLinkXML `xml:"link,omitempty"`
+}
+
+type personalTodoLinkXML struct {
+	Type       string `xml:"type,attr"`
+	SpaceSlug  string `xml:"space-slug,attr"`
+	PageID     string `xml:"page-id,attr,omitempty"`
+	DatabaseID string `xml:"database-id,attr,omitempty"`
+	RowID      string `xml:"row-id,attr,omitempty"`
+}
+
+type personalTodoDocumentXML struct {
+	XMLName xml.Name          `xml:"personal-todos"`
+	Todos   []personalTodoXML `xml:"todo-item"`
+}
+
 func NewPersonalService(
 	userRepo *repository.UserRepository,
 	spaceRepo *repository.SpaceRepository,
 	memberRepo *repository.MemberRepository,
 	pageService *PageService,
+	databaseService *DatabaseService,
 	docsDir string,
 ) *PersonalService {
 	return &PersonalService{
@@ -43,6 +74,7 @@ func NewPersonalService(
 		spaceRepo:   spaceRepo,
 		memberRepo:  memberRepo,
 		pageService: pageService,
+		databaseSvc: databaseService,
 		docsDir:     docsDir,
 	}
 }
@@ -52,7 +84,9 @@ func (s *PersonalService) Overview(userID int) (*model.PersonalOverview, error) 
 	if err != nil {
 		return nil, err
 	}
+	s.todoMu.Lock()
 	todos, err := s.readTodos(workspace)
+	s.todoMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -67,27 +101,114 @@ func (s *PersonalService) Overview(userID int) (*model.PersonalOverview, error) 
 		SpaceSlug: workspace.slug,
 		Todos:     todos,
 		Notes:     notes,
+		Recent:    s.recentNotes(workspace.slug, notes),
 	}, nil
 }
 
-func (s *PersonalService) CreateTodo(userID int, text string) ([]model.PersonalTodo, error) {
+// recentNotes 按最近访问时间平铺返回个人笔记。缓存行可能因外部删除/移动指向旧路径，
+// 所以只保留当前文件树里还在的页面；树是扫盘得来的，以它为准。
+func (s *PersonalService) recentNotes(spaceSlug string, notes []*model.PageNode) []*model.PageNode {
+	const limit = 5
+
+	nodeByPath := make(map[string]*model.PageNode)
+	var collect func(nodes []*model.PageNode)
+	collect = func(nodes []*model.PageNode) {
+		for _, note := range nodes {
+			nodeByPath[note.FilePath] = note
+			collect(note.Children)
+		}
+	}
+	collect(notes)
+
+	pages, err := s.pageService.ListRecent(spaceSlug, 50)
+	if err != nil {
+		return []*model.PageNode{}
+	}
+	recent := make([]*model.PageNode, 0, limit)
+	for _, page := range pages {
+		node, ok := nodeByPath[page.FilePath]
+		if !ok {
+			continue
+		}
+		// 平铺列表不需要子树，浅拷贝一份免得带出整棵后代
+		flat := *node
+		flat.Children = nil
+		recent = append(recent, &flat)
+		if len(recent) == limit {
+			break
+		}
+	}
+	return recent
+}
+
+func (s *PersonalService) CreateTodo(userID int, req *model.CreatePersonalTodoRequest) (*model.CreatePersonalTodoResponse, error) {
 	workspace, err := s.ensureWorkspace(userID)
 	if err != nil {
 		return nil, err
 	}
-	text = normalizeTodoText(text)
+	text := normalizeTodoText(req.Text)
+	if req.Link != nil {
+		normalizedLink, resolvedText, err := s.resolveTodoLink(userID, workspace, req.Link)
+		if err != nil {
+			return nil, err
+		}
+		req.Link = normalizedLink
+		text = resolvedText
+	}
 	if text == "" {
 		return nil, fmt.Errorf("todo text is required")
 	}
-	if err := s.mutateTodos(workspace, func(lines []string) ([]string, error) {
-		return append(lines, "- [ ] "+text), nil
-	}); err != nil {
+
+	s.todoMu.Lock()
+	defer s.todoMu.Unlock()
+	records, err := s.loadTodoRecords(workspace)
+	if err != nil {
 		return nil, err
 	}
-	return s.readTodos(workspace)
+	if req.Link != nil {
+		linkKey := todoLinkKey(req.Link)
+		for i := range records {
+			if todoLinkKey(todoLinkFromXML(records[i].Link)) == linkKey {
+				if req.Today {
+					now := time.Now()
+					records[i].TodayOn = now.Format("2006-01-02")
+					records[i].TodaySetAt = now.Format(time.RFC3339)
+					if err := s.writeTodoRecords(workspace, records); err != nil {
+						return nil, err
+					}
+				}
+				todos := todosFromRecords(records)
+				existing := findTodoByLink(todos, req.Link)
+				return &model.CreatePersonalTodoResponse{Todo: existing, Todos: todos, Created: false}, nil
+			}
+		}
+	}
+
+	now := time.Now()
+	record := personalTodoXML{
+		ID:        uuidutil.NewPageID(),
+		Done:      "0",
+		CreatedAt: now.Format(time.RFC3339),
+		Text:      text,
+		Link:      todoLinkToXML(req.Link),
+	}
+	if req.Today {
+		record.TodayOn = now.Format("2006-01-02")
+		record.TodaySetAt = now.Format(time.RFC3339)
+	}
+	records = append(records, record)
+	if err := s.writeTodoRecords(workspace, records); err != nil {
+		return nil, err
+	}
+	todos := todosFromRecords(records)
+	return &model.CreatePersonalTodoResponse{
+		Todo:    todoFromXML(record, now),
+		Todos:   todos,
+		Created: true,
+	}, nil
 }
 
-func (s *PersonalService) UpdateTodo(userID int, index int, req *model.UpdatePersonalTodoRequest) ([]model.PersonalTodo, error) {
+func (s *PersonalService) UpdateTodo(userID int, todoID string, req *model.UpdatePersonalTodoRequest) ([]model.PersonalTodo, error) {
 	workspace, err := s.ensureWorkspace(userID)
 	if err != nil {
 		return nil, err
@@ -99,58 +220,80 @@ func (s *PersonalService) UpdateTodo(userID int, index int, req *model.UpdatePer
 		}
 		req.Text = &text
 	}
-	if err := s.mutateTodos(workspace, func(lines []string) ([]string, error) {
-		seen := 0
-		for lineIndex, line := range lines {
-			match := personalTodoLinePattern.FindStringSubmatch(line)
-			if match == nil {
-				continue
-			}
-			if seen == index {
-				text := match[4]
-				done := match[2]
-				if req.Text != nil {
-					text = *req.Text
-				}
-				if req.Done != nil {
-					if *req.Done {
-						done = "x"
-					} else {
-						done = " "
-					}
-				}
-				lines[lineIndex] = match[1] + done + match[3] + text
-				return lines, nil
-			}
-			seen++
-		}
-		return nil, fmt.Errorf("todo not found")
-	}); err != nil {
+	s.todoMu.Lock()
+	defer s.todoMu.Unlock()
+	records, err := s.loadTodoRecords(workspace)
+	if err != nil {
 		return nil, err
 	}
-	return s.readTodos(workspace)
+	found := false
+	now := time.Now()
+	for i := range records {
+		if records[i].ID != todoID {
+			continue
+		}
+		found = true
+		if req.Text != nil {
+			records[i].Text = *req.Text
+		}
+		if req.Done != nil {
+			if *req.Done {
+				records[i].Done = "1"
+				if records[i].CompletedAt == "" {
+					records[i].CompletedAt = now.Format(time.RFC3339)
+				}
+			} else {
+				records[i].Done = "0"
+				records[i].CompletedAt = ""
+			}
+		}
+		if req.Today != nil {
+			if *req.Today {
+				records[i].TodayOn = now.Format("2006-01-02")
+				records[i].TodaySetAt = now.Format(time.RFC3339)
+			} else {
+				records[i].TodayOn = ""
+				records[i].TodaySetAt = ""
+			}
+		}
+		break
+	}
+	if !found {
+		return nil, fmt.Errorf("todo not found")
+	}
+	if err := s.writeTodoRecords(workspace, records); err != nil {
+		return nil, err
+	}
+	return todosFromRecords(records), nil
 }
 
-func (s *PersonalService) DeleteTodo(userID int, index int) ([]model.PersonalTodo, error) {
+func (s *PersonalService) DeleteTodo(userID int, todoID string) ([]model.PersonalTodo, error) {
 	workspace, err := s.ensureWorkspace(userID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.mutateTodos(workspace, func(lines []string) ([]string, error) {
-		seen := 0
-		for lineIndex, line := range lines {
-			if personalTodoLinePattern.MatchString(line) {
-				if seen == index {
-					return append(lines[:lineIndex], lines[lineIndex+1:]...), nil
-				}
-				seen++
-			}
-		}
-		return nil, fmt.Errorf("todo not found")
-	}); err != nil {
+	s.todoMu.Lock()
+	defer s.todoMu.Unlock()
+	records, err := s.loadTodoRecords(workspace)
+	if err != nil {
 		return nil, err
 	}
-	return s.readTodos(workspace)
+	next := make([]personalTodoXML, 0, len(records))
+	found := false
+	for _, record := range records {
+		if record.ID == todoID {
+			found = true
+			continue
+		}
+		next = append(next, record)
+	}
+	if !found {
+		return nil, fmt.Errorf("todo not found")
+	}
+	if err := s.writeTodoRecords(workspace, next); err != nil {
+		return nil, err
+	}
+	return todosFromRecords(next), nil
 }
 
 func (s *PersonalService) CreateNote(userID int, title string, parentID *string) (*model.Page, error) {
@@ -255,47 +398,63 @@ func (s *PersonalService) ensureWorkspace(userID int) (*personalWorkspace, error
 }
 
 func (s *PersonalService) readTodos(workspace *personalWorkspace) ([]model.PersonalTodo, error) {
+	records, err := s.loadTodoRecords(workspace)
+	if err != nil {
+		return nil, err
+	}
+	return todosFromRecords(records), nil
+}
+
+func (s *PersonalService) loadTodoRecords(workspace *personalWorkspace) ([]personalTodoXML, error) {
 	todosPath := filepath.Join(workspace.path, "todos.md")
 	raw, err := os.ReadFile(todosPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read personal todos: %w", err)
 	}
 	_, body, _ := frontmatter.Parse(raw)
-	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
-	todos := make([]model.PersonalTodo, 0)
-	for _, line := range lines {
-		match := personalTodoLinePattern.FindStringSubmatch(line)
-		if match == nil {
-			continue
+	start := strings.Index(body, "<personal-todos>")
+	end := strings.Index(body, "</personal-todos>")
+	if start >= 0 && end >= start {
+		block := body[start : end+len("</personal-todos>")]
+		var document personalTodoDocumentXML
+		if err := xml.Unmarshal([]byte(block), &document); err != nil {
+			return nil, fmt.Errorf("failed to parse personal todos XML: %w", err)
 		}
-		todos = append(todos, model.PersonalTodo{
-			Index: len(todos),
-			Text:  match[4],
-			Done:  strings.EqualFold(match[2], "x"),
-		})
+		return document.Todos, nil
 	}
-	return todos, nil
+
+	records := legacyTodoRecords(body)
+	if len(records) > 0 {
+		if err := s.writeTodoRecords(workspace, records); err != nil {
+			return nil, err
+		}
+	}
+	return records, nil
 }
 
-func (s *PersonalService) mutateTodos(workspace *personalWorkspace, mutate func([]string) ([]string, error)) error {
+func (s *PersonalService) writeTodoRecords(workspace *personalWorkspace, records []personalTodoXML) error {
 	todosPath := filepath.Join(workspace.path, "todos.md")
 	raw, err := os.ReadFile(todosPath)
 	if err != nil {
 		return fmt.Errorf("failed to read personal todos: %w", err)
 	}
 	fm, body, _ := frontmatter.Parse(raw)
-	body = strings.TrimSuffix(body, "\n")
-	lines := []string{}
-	if body != "" {
-		lines = strings.Split(body, "\n")
-	}
-	lines, err = mutate(lines)
+	document := personalTodoDocumentXML{Todos: records}
+	xmlBytes, err := xml.MarshalIndent(document, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to encode personal todos XML: %w", err)
 	}
-	nextBody := strings.Join(lines, "\n")
-	if nextBody != "" {
-		nextBody += "\n"
+	start := strings.Index(body, "<personal-todos>")
+	end := strings.Index(body, "</personal-todos>")
+	nextBody := body
+	if start >= 0 && end >= start {
+		nextBody = body[:start] + string(xmlBytes) + body[end+len("</personal-todos>"):]
+	} else {
+		nextBody = strings.TrimRight(body, "\n")
+		if nextBody != "" {
+			nextBody += "\n\n"
+		}
+		nextBody += string(xmlBytes) + "\n"
 	}
 	if err := os.WriteFile(todosPath, frontmatter.Render(fm, nextBody), 0644); err != nil {
 		return fmt.Errorf("failed to write personal todos: %w", err)
@@ -307,6 +466,173 @@ func normalizeTodoText(text string) string {
 	text = strings.ReplaceAll(text, "\r", " ")
 	text = strings.ReplaceAll(text, "\n", " ")
 	return strings.TrimSpace(text)
+}
+
+func legacyTodoRecords(body string) []personalTodoXML {
+	now := time.Now().Format(time.RFC3339)
+	records := make([]personalTodoXML, 0)
+	for _, line := range strings.Split(body, "\n") {
+		match := personalTodoLinePattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		done := "0"
+		if strings.EqualFold(match[2], "x") {
+			done = "1"
+		}
+		records = append(records, personalTodoXML{
+			ID:        uuidutil.NewPageID(),
+			Done:      done,
+			CreatedAt: now,
+			Text:      match[4],
+		})
+	}
+	return records
+}
+
+func todosFromRecords(records []personalTodoXML) []model.PersonalTodo {
+	now := time.Now()
+	todos := make([]model.PersonalTodo, 0, len(records))
+	for _, record := range records {
+		todos = append(todos, todoFromXML(record, now))
+	}
+	sort.SliceStable(todos, func(i, j int) bool {
+		if todos[i].Overdue != todos[j].Overdue {
+			return todos[i].Overdue
+		}
+		if todos[i].IsToday != todos[j].IsToday {
+			return todos[i].IsToday
+		}
+		if todos[i].TodaySetAt != todos[j].TodaySetAt {
+			return todos[i].TodaySetAt < todos[j].TodaySetAt
+		}
+		return todos[i].CreatedAt < todos[j].CreatedAt
+	})
+	return todos
+}
+
+func todoFromXML(record personalTodoXML, now time.Time) model.PersonalTodo {
+	today := now.Format("2006-01-02")
+	return model.PersonalTodo{
+		ID:          record.ID,
+		Text:        record.Text,
+		Done:        record.Done == "1",
+		CreatedAt:   record.CreatedAt,
+		TodayOn:     record.TodayOn,
+		TodaySetAt:  record.TodaySetAt,
+		CompletedAt: record.CompletedAt,
+		IsToday:     record.TodayOn != "" && record.TodayOn == today,
+		Overdue:     record.Done != "1" && record.TodayOn != "" && record.TodayOn < today,
+		Link:        todoLinkFromXML(record.Link),
+	}
+}
+
+func todoLinkFromXML(link *personalTodoLinkXML) *model.PersonalTodoLink {
+	if link == nil {
+		return nil
+	}
+	return &model.PersonalTodoLink{
+		Type:       link.Type,
+		SpaceSlug:  link.SpaceSlug,
+		PageID:     link.PageID,
+		DatabaseID: link.DatabaseID,
+		RowID:      link.RowID,
+	}
+}
+
+func todoLinkToXML(link *model.PersonalTodoLink) *personalTodoLinkXML {
+	if link == nil {
+		return nil
+	}
+	return &personalTodoLinkXML{
+		Type:       link.Type,
+		SpaceSlug:  link.SpaceSlug,
+		PageID:     link.PageID,
+		DatabaseID: link.DatabaseID,
+		RowID:      link.RowID,
+	}
+}
+
+func todoLinkKey(link *model.PersonalTodoLink) string {
+	if link == nil {
+		return ""
+	}
+	return strings.Join([]string{link.Type, link.SpaceSlug, link.PageID, link.DatabaseID, link.RowID}, "\x00")
+}
+
+func findTodoByLink(todos []model.PersonalTodo, link *model.PersonalTodoLink) model.PersonalTodo {
+	key := todoLinkKey(link)
+	for _, todo := range todos {
+		if todoLinkKey(todo.Link) == key {
+			return todo
+		}
+	}
+	return model.PersonalTodo{}
+}
+
+func (s *PersonalService) resolveTodoLink(userID int, workspace *personalWorkspace, link *model.PersonalTodoLink) (*model.PersonalTodoLink, string, error) {
+	normalized := &model.PersonalTodoLink{
+		Type:       strings.TrimSpace(link.Type),
+		SpaceSlug:  strings.TrimSpace(link.SpaceSlug),
+		PageID:     strings.TrimSpace(link.PageID),
+		DatabaseID: strings.TrimSpace(link.DatabaseID),
+		RowID:      strings.TrimSpace(link.RowID),
+	}
+	if normalized.SpaceSlug == "" {
+		return nil, "", fmt.Errorf("todo link space is required")
+	}
+	if model.IsPersonalSpaceSlug(normalized.SpaceSlug) {
+		if normalized.SpaceSlug != workspace.slug {
+			return nil, "", fmt.Errorf("invalid personal todo link")
+		}
+	} else {
+		space, err := s.spaceRepo.GetBySlug(normalized.SpaceSlug)
+		if err != nil {
+			return nil, "", fmt.Errorf("todo link space not found: %w", err)
+		}
+		member, err := s.memberRepo.GetBySpaceAndUser(space.ID, userID)
+		if err != nil || member == nil {
+			return nil, "", fmt.Errorf("todo link access denied")
+		}
+	}
+
+	switch normalized.Type {
+	case "page":
+		if normalized.PageID == "" || normalized.DatabaseID != "" || normalized.RowID != "" {
+			return nil, "", fmt.Errorf("invalid page todo link")
+		}
+		page, err := s.pageService.GetByID(normalized.SpaceSlug, normalized.PageID)
+		if err != nil {
+			return nil, "", fmt.Errorf("todo link page not found: %w", err)
+		}
+		return normalized, page.Title, nil
+	case "database-row":
+		if normalized.DatabaseID == "" || normalized.RowID == "" || normalized.PageID != "" {
+			return nil, "", fmt.Errorf("invalid database todo link")
+		}
+		if s.databaseSvc == nil {
+			return nil, "", fmt.Errorf("database service is unavailable")
+		}
+		detail, err := s.databaseSvc.Get(normalized.SpaceSlug, normalized.DatabaseID)
+		if err != nil {
+			return nil, "", fmt.Errorf("todo link database not found: %w", err)
+		}
+		row, err := s.databaseSvc.GetRow(normalized.SpaceSlug, normalized.DatabaseID, normalized.RowID)
+		if err != nil {
+			return nil, "", fmt.Errorf("todo link row not found: %w", err)
+		}
+		if title := strings.TrimSpace(row.Values["title"]); title != "" {
+			return normalized, title, nil
+		}
+		for _, column := range detail.Columns {
+			if column.Type == "text" && strings.TrimSpace(row.Values[column.ID]) != "" {
+				return normalized, strings.TrimSpace(row.Values[column.ID]), nil
+			}
+		}
+		return normalized, normalized.RowID, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported todo link type")
+	}
 }
 
 func filterReservedPersonalNotes(notes []*model.PageNode, relDir string) []*model.PageNode {

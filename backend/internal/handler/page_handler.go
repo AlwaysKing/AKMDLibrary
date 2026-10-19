@@ -380,3 +380,18 @@ func (h *PageHandler) ListRecent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pages)
 }
+
+// ClearRecent handles DELETE /api/spaces/{slug}/pages/{id}/recent
+func (h *PageHandler) ClearRecent(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	if !h.checkSpaceAccess(w, r, slug) {
+		return
+	}
+
+	if err := h.pageService.ClearRecent(slug, chi.URLParam(r, "id")); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

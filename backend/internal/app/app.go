@@ -116,7 +116,6 @@ func New(cfg Config) (*App, error) {
 	pageService := service.NewPageService(docsDir)
 	pageService.SetGitSyncWorker(gitSyncWorker)
 	spaceService := service.NewSpaceService(spaceRepo, memberRepo, pageService, docsDir)
-	personalService := service.NewPersonalService(userRepo, spaceRepo, memberRepo, pageService, docsDir)
 	spaceService.SetGitSyncWorker(gitSyncWorker)
 	// Inject feature-flag probe so the worker skips spaces with git disabled.
 	// Must run after spaceService is constructed to avoid a circular import.
@@ -140,6 +139,7 @@ func New(cfg Config) (*App, error) {
 	databaseService := service.NewDatabaseService(docsDir)
 	databaseService.SetGitSyncWorker(gitSyncWorker)
 	pageService.SetDatabaseTrashRestorer(databaseService.RestoreTrashedRow)
+	personalService := service.NewPersonalService(userRepo, spaceRepo, memberRepo, pageService, databaseService, docsDir)
 
 	// Sync spaces from filesystem on startup
 	if err := spaceService.SyncFromFS(); err != nil {
@@ -231,8 +231,8 @@ func New(cfg Config) (*App, error) {
 		// Personal workspace (per-user files under docs/.personal-<uuid>/)
 		r.Get("/api/personal", personalHandler.Overview)
 		r.Post("/api/personal/todos", personalHandler.CreateTodo)
-		r.Patch("/api/personal/todos/{index}", personalHandler.UpdateTodo)
-		r.Delete("/api/personal/todos/{index}", personalHandler.DeleteTodo)
+		r.Patch("/api/personal/todos/{id}", personalHandler.UpdateTodo)
+		r.Delete("/api/personal/todos/{id}", personalHandler.DeleteTodo)
 		r.Post("/api/personal/notes", personalHandler.CreateNote)
 		r.Delete("/api/personal/notes/{id}", personalHandler.DeleteNote)
 
@@ -262,6 +262,7 @@ func New(cfg Config) (*App, error) {
 		r.Post("/api/spaces/{slug}/pages/{id}/duplicate", pageHandler.Duplicate)
 		r.Post("/api/spaces/{slug}/pages/{id}/restore", pageHandler.RestoreByPageID)
 		r.Put("/api/spaces/{slug}/pages/{id}/move", pageHandler.Move)
+		r.Delete("/api/spaces/{slug}/pages/{id}/recent", pageHandler.ClearRecent)
 		r.Delete("/api/spaces/{slug}/pages/{id}", pageHandler.Delete)
 
 		// Synced blocks

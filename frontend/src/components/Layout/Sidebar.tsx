@@ -425,12 +425,10 @@ export default function Sidebar({ onToggle }: SidebarProps) {
           )}
           <button
             onClick={() => {
-              // Toggle: if already on trash page, return to space root.
-              const trashPath = `/s/${currentSpace?.slug}/trash`;
-              navigate(location.pathname === trashPath ? `/s/${currentSpace?.slug}` : trashPath);
+              // 回收站聚合当前团队空间与个人空间，不再绑定 /s/{slug} 路由。
+              navigate(location.pathname === '/trash' ? `/${currentSpace ? `s/${currentSpace.slug}` : 'personal'}` : '/trash');
             }}
-            disabled={!currentSpace}
-            className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed ${location.pathname === `/s/${currentSpace?.slug}/trash` ? 'bg-notion-hover' : ''}`}
+            className={`w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left ${location.pathname === '/trash' ? 'bg-notion-hover' : ''}`}
             style={{ paddingLeft: '16px', paddingRight: '8px' }}
           >
             <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>

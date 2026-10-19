@@ -23,6 +23,9 @@ import { removeBlocksEnhanced } from './blockHelpers';
 import { setBlockDragData, isDragHandled, clearBlockDragData, getBlockDragData, syncSubpageOrderToBackend } from './blockDragState';
 import PageIcon from './PageIcon';
 import { parseDatabaseMarkdown } from './database/viewConfig';
+import { personalApi } from '../../api/personal';
+import { usePersonalStore } from '../../stores/personalStore';
+import { getEditorPageContext } from './EditorPageContext';
 
 // ==================== Menu Context ====================
 interface MenuContextValue {
@@ -1867,6 +1870,22 @@ const DuplicateIcon: React.FC = () => (
   </svg>
 );
 
+const TodoIcon: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2.75" y="4.25" width="5" height="5" rx="1" />
+    <path d="m3.5 11.75 1.35 1.35L7.4 10.55" />
+    <path d="M10.5 5h6.25M10.5 10h6.25M10.5 15h6.25" />
+  </svg>
+);
+
+const TodayTodoIcon: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2.75" y="3.75" width="14.5" height="13.5" rx="1.75" />
+    <path d="M6.25 2.25v3M13.75 2.25v3M2.75 7h14.5" />
+    <path d="M10 10v4M8 12h4" />
+  </svg>
+);
+
 // Notion "Delete" icon (trash can)
 const TrashIcon: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
@@ -2380,6 +2399,10 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
 
   const blockId = getDragHandleBlockId();
   const currentBlock = blockId ? findBlockDeep(editor.document, blockId) : null;
+  const pageContext = getEditorPageContext(editor);
+  const linkedPageId = currentBlock?.type === 'pageReference' || currentBlock?.type === 'subpage'
+    ? String(currentBlock.props?.pageId || '')
+    : '';
   const isDatabase = currentBlock?.type === 'database';
   const isTable = currentBlock?.type === 'table';
   const parsedDatabaseLocked = (() => {
@@ -2411,6 +2434,28 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
       showToast('拷贝失败');
     }
     onClose();
+  };
+
+  const handleAddLinkedPageAsTodo = async (today: boolean) => {
+    if (!linkedPageId || !pageContext?.spaceSlug) return;
+    try {
+      const result = await personalApi.createTodo({
+        today,
+        link: {
+          type: 'page',
+          space_slug: pageContext.spaceSlug,
+          page_id: linkedPageId,
+        },
+      });
+      await usePersonalStore.getState().fetchOverview();
+      showToast(result.created
+        ? (today ? '已添加为今日待办' : '已添加为待办')
+        : (today ? '该页面已在待办中，并设为今日' : '该页面已在待办中'));
+    } catch (error: any) {
+      showToast(error?.response?.data || '添加待办失败');
+    } finally {
+      onClose();
+    }
   };
 
   const handleEditDatabaseIcon = () => {
@@ -2587,6 +2632,19 @@ function DragHandleMenuContent({ onClose }: { onClose: () => void }) {
         <span className="drag-handle-menu-item-icon"><DuplicateIcon /></span>
         <span className="drag-handle-menu-item-label">创建副本</span>
       </div>
+
+      {linkedPageId && (
+        <>
+          <div className="drag-handle-menu-item" onClick={() => void handleAddLinkedPageAsTodo(false)}>
+            <span className="drag-handle-menu-item-icon"><TodoIcon /></span>
+            <span className="drag-handle-menu-item-label">添加为待办</span>
+          </div>
+          <div className="drag-handle-menu-item" onClick={() => void handleAddLinkedPageAsTodo(true)}>
+            <span className="drag-handle-menu-item-icon"><TodayTodoIcon /></span>
+            <span className="drag-handle-menu-item-label">添加为今日待办</span>
+          </div>
+        </>
+      )}
 
       <div className="drag-handle-menu-divider" />
 

@@ -178,6 +178,26 @@ func (r *PageRepository) UpdateFilePath(id string, filePath string) error {
 	return err
 }
 
+// DeleteByPathPrefix removes a page row together with every descendant row
+// whose file_path lives under the page's child directory (prefix + "/").
+// Uses substr() instead of LIKE so page names containing % or _ stay exact.
+func (r *PageRepository) DeleteByPathPrefix(prefix string) (int64, error) {
+	query := `
+		DELETE FROM pages
+		WHERE file_path = ? || '.md'
+			OR substr(file_path, 1, length(?) + 1) = ? || '/'
+	`
+	result, err := r.db.Exec(query, prefix, prefix, prefix)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete page subtree: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows, nil
+}
+
 func (r *PageRepository) Delete(id string) error {
 	query := "DELETE FROM pages WHERE id = ?"
 
@@ -222,6 +242,15 @@ func (r *PageRepository) TouchAccess(id string) error {
 		return err
 	}
 	log.Printf("[page-debug] repo.TouchAccess done id=%s elapsed=%s", id, time.Since(start))
+	return nil
+}
+
+// ClearAccess 把 last_accessed_at 置空，让页面从「最近访问」里消失
+func (r *PageRepository) ClearAccess(id string) error {
+	_, err := r.db.Exec("UPDATE pages SET last_accessed_at = NULL WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to clear page access: %w", err)
+	}
 	return nil
 }
 

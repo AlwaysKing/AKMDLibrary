@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronRight, FileText, MoreHorizontal, Plus, Trash2, Edit3, Star, Link, Copy, FolderInput } from 'lucide-react';
+import { ChevronRight, FileText, MoreHorizontal, Plus, Trash2, Edit3, Star, Link, Copy, FolderInput, ListTodo, CalendarPlus } from 'lucide-react';
 import { Page } from '../../api/pages';
+import { personalApi } from '../../api/personal';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { usePageStore } from '../../stores/pageStore';
 import { useSpaceStore } from '../../stores/spaceStore';
 import MoveToDialog from './MoveToDialog';
 import PageIcon from '../Editor/PageIcon';
 import { showToast } from '../Toast';
+import { usePersonalStore } from '../../stores/personalStore';
 
 interface PageTreeItemProps {
   page: Page;
@@ -33,8 +35,10 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
   const iconPickerActive = useRef(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { spaceSlug } = useParams<{ spaceSlug: string }>();
+  const { spaceSlug: routeSpaceSlug } = useParams<{ spaceSlug: string }>();
   const { createPage, deletePage, updateMetadata, refreshPageTree, duplicatePage, movePage } = usePageStore();
+  const currentSpaceSlug = useSpaceStore(state => state.currentSpace?.slug);
+  const spaceSlug = routeSpaceSlug || currentSpaceSlug;
   const refreshStarredAndRecent = useSpaceStore(s => s.refreshStarredAndRecent);
   const hasChildren = page.children && page.children.length > 0;
   const isActive = new RegExp(`/p/${page.id}$`).test(location.pathname);
@@ -229,6 +233,28 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
     }
   };
 
+  const addAsTodo = async (today: boolean) => {
+    if (!spaceSlug) return;
+    try {
+      const result = await personalApi.createTodo({
+        today,
+        link: {
+          type: 'page',
+          space_slug: spaceSlug,
+          page_id: page.id,
+        },
+      });
+      await usePersonalStore.getState().fetchOverview();
+      showToast(result.created
+        ? (today ? '已添加为今日待办' : '已添加为待办')
+        : (today ? '该页面已在待办中，并设为今日' : '该页面已在待办中'));
+    } catch (error: any) {
+      showToast(error?.response?.data || '添加待办失败');
+    } finally {
+      setShowMenu(false);
+    }
+  };
+
   const handleMove = async (targetParentId: string | null) => {
     if (!spaceSlug) return;
     setShowMoveDialog(false);
@@ -366,6 +392,20 @@ export default function PageTreeItem({ page, level, expandedPageIds, onToggleExp
           >
             <FolderInput className="w-4 h-4 text-notion-textSecondary" />
             移动到
+          </button>
+          <button
+            onClick={() => void addAsTodo(false)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-sm text-notion-text hover:bg-notion-hover rounded-md transition-colors"
+          >
+            <ListTodo className="w-4 h-4 text-notion-textSecondary" />
+            添加为待办
+          </button>
+          <button
+            onClick={() => void addAsTodo(true)}
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-sm text-notion-text hover:bg-notion-hover rounded-md transition-colors"
+          >
+            <CalendarPlus className="w-4 h-4 text-notion-textSecondary" />
+            添加为今日待办
           </button>
           <hr className="my-1 mx-1.5 border-notion-border" />
           <button
