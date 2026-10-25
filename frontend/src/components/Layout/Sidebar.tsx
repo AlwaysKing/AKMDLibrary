@@ -1,7 +1,6 @@
 import { Settings, ChevronsLeft, Trash2, ArrowLeft, Users, Database, User, Image, ChevronDown, ChevronRight, Plus, LogOut, GitBranch, Search, FolderOpen, Bot } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import SpaceSelector from '../Sidebar/SpaceSelector';
-import PageTree from '../Sidebar/PageTree';
 import PageTreeItem from '../Sidebar/PageTreeItem';
 import SearchOverlay from '../Search/SearchOverlay';
 import PersonalSpaceCard from '../Sidebar/PersonalSpaceCard';
@@ -36,11 +35,13 @@ export default function Sidebar({ onToggle }: SidebarProps) {
   const adminTab = new URLSearchParams(location.search).get('tab') || (isAdminRole ? 'users' : 'profile');
 
   const { starredPages, recentPages } = useSpaceStore();
-  // 区块折叠 / 最近/最爱区页面展开：从用户偏好派生（按用户、按空间持久化）
+  // 区块折叠 / 文档区页面展开：从用户偏好派生（按用户、按空间持久化）
   const { getCollapsedSections, getQuickAccessExpandedIds, setCollapsedSections, setQuickAccessExpandedIds } = usePreferenceStore();
   const sectionsCollapsed = currentSpace ? getCollapsedSections(currentSpace.slug) : {};
   const sidebarExpandedIds = new Set(currentSpace ? getQuickAccessExpandedIds(currentSpace.slug) : []);
-  const [showAllRecent, setShowAllRecent] = useState(false);
+  const sidebarDocs = Array.from(
+    new Map([...starredPages, ...recentPages].map((page) => [page.id, page])).values(),
+  );
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
@@ -288,65 +289,21 @@ export default function Sidebar({ onToggle }: SidebarProps) {
 
       <PersonalSpaceCard />
 
-      {/* Three sections: 最近 / 最爱 / 文档 */}
+      {/* Compact docs: starred first, then recently visited, de-duplicated. */}
       <div className="flex-1 overflow-y-auto scrollbar-thin px-2 py-1">
-        {/* 最近 */}
-        {currentSpace && (
-          <div className="mb-3">
-            <SectionHeader title="最近" sectionKey="recent" />
-            {!sectionsCollapsed['recent'] && (
-              <div>
-                {recentPages.length === 0 ? (
-                  <div className="text-xs text-notion-textSecondary px-2 py-1.5">暂无最近访问</div>
-                ) : (
-                  <>
-                    {(showAllRecent ? recentPages.slice(0, 20) : recentPages.slice(0, 5)).map(p => (
-                      <PageTreeItem key={p.id} page={p} level={0} expandedPageIds={sidebarExpandedIds} onToggleExpand={handleSidebarToggleExpand} />
-                    ))}
-                    {!showAllRecent && recentPages.length > 5 && (
-                      <button
-                        onClick={() => setShowAllRecent(true)}
-                        className="w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left"
-                        style={{ paddingLeft: '16px', paddingRight: '8px' }}
-                      >
-                        <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
-                          <span className="text-sm font-medium text-notion-textSecondary">…</span>
-                        </span>
-                        <span className="text-sm font-medium text-notion-textSecondary">显示更多</span>
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 最爱 */}
-        {currentSpace && (
-          <div className="mb-3">
-            <SectionHeader title="最爱" sectionKey="starred" />
-            {!sectionsCollapsed['starred'] && (
-              <div>
-                {starredPages.length === 0 ? (
-                  <div className="text-xs text-notion-textSecondary px-2 py-1.5">暂无收藏页面</div>
-                ) : (
-                  starredPages.map(p => (
-                    <PageTreeItem key={p.id} page={p} level={0} expandedPageIds={sidebarExpandedIds} onToggleExpand={handleSidebarToggleExpand} />
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* 文档 */}
         <div>
           <SectionHeader title="文档" sectionKey="docs" onAdd={handleNewRootPage} />
           {!sectionsCollapsed['docs'] && (
-            <div>
-              <PageTree />
-            </div>
+            sidebarDocs.length > 0 ? (
+              <div className={`max-h-[150px] overflow-y-auto overscroll-contain scrollbar-thin ${sidebarDocs.length > 5 ? 'h-[150px]' : ''}`}>
+                {sidebarDocs.map((page) => (
+                  <PageTreeItem key={page.id} page={page} level={0} expandedPageIds={sidebarExpandedIds} onToggleExpand={handleSidebarToggleExpand} />
+                ))}
+              </div>
+            ) : (
+              <div className="px-2 py-1.5 text-xs text-notion-textSecondary">暂无最近或加星文档</div>
+            )
           )}
         </div>
       </div>

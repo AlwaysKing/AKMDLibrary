@@ -80,3 +80,28 @@ func TestTodoOverdueAndToday(t *testing.T) {
 		t.Fatalf("unexpected today flags: %#v", today)
 	}
 }
+
+func TestTodosFromRecordsPreservesRegularTodoOrder(t *testing.T) {
+	records := []personalTodoXML{
+		{
+			ID:        "top",
+			Done:      "0",
+			CreatedAt: "2026-10-18T12:00:00+08:00",
+			Text:      "Top",
+		},
+		{
+			ID:        "bottom",
+			Done:      "0",
+			CreatedAt: "2026-10-18T10:00:00+08:00",
+			Text:      "Bottom",
+		},
+	}
+
+	todos := todosFromRecords(records)
+	if len(todos) != 2 {
+		t.Fatalf("expected 2 todos, got %d", len(todos))
+	}
+	if todos[0].ID != "top" || todos[1].ID != "bottom" {
+		t.Fatalf("regular todo order was not preserved: %#v", todos)
+	}
+}

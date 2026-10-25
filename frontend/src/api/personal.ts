@@ -51,6 +51,7 @@ export const personalApi = {
   createTodo: async (data: {
     text?: string;
     today?: boolean;
+    at_top?: boolean;
     link?: PersonalTodoLink;
   }): Promise<PersonalTodoMutationResponse> => {
     const response = await apiClient.post<PersonalTodoMutationResponse>('/personal/todos', data);

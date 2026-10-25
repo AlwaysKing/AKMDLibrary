@@ -39,6 +39,7 @@ type PersonalOverview struct {
 type CreatePersonalTodoRequest struct {
 	Text  string            `json:"text"`
 	Today bool              `json:"today"`
+	AtTop bool              `json:"at_top,omitempty"`
 	Link  *PersonalTodoLink `json:"link,omitempty"`
 }
 

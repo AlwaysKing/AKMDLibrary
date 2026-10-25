@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CheckSquare, ChevronDown, Files, Link2, Loader2, NotebookPen, Plus, Trash2 } from 'lucide-react';
+import { AlertCircle, Bell, CheckSquare, ChevronDown, Files, Link2, Loader2, NotebookPen, Plus, Trash2 } from 'lucide-react';
 import { PersonalTodoLink } from '../../api/personal';
 import { usePersonalStore } from '../../stores/personalStore';
 import { personalTodoLinkPath } from '../../utils/personalTodoLinks';
@@ -169,61 +169,63 @@ export default function PersonalSpaceCard() {
 
       {expanded && <div className="px-2 pb-2">
         <div className="rounded-md bg-white/55 px-1 py-1">
-          {todos.length > 0 ? (
-            todos.map((todo) => (
-              <div key={todo.id} className="group flex min-h-[28px] items-center gap-2 overflow-hidden rounded-md px-1 hover:bg-white/70">
-                <button
-                  type="button"
-                  role="checkbox"
-                  aria-checked={todo.done}
-                  aria-label={todo.done ? `标记未完成：${todo.text}` : `标记完成：${todo.text}`}
-                  onClick={() => void updateTodo(todo.id, { done: !todo.done })}
-                  className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[3px] border transition-colors ${
-                    todo.done
-                      ? 'border-[#2383e2] bg-[#2383e2] text-white'
-                      : 'border-[#b9b8b4] bg-white hover:border-[#8e8b86]'
-                  }`}
-                >
-                  {todo.done && <span className="text-[10px] leading-none">✓</span>}
-                </button>
-                <span className={`min-w-0 flex-1 truncate text-xs ${todo.done ? 'text-notion-textSecondary line-through' : 'text-notion-text'}`}>
-                  {todo.text}
-                </span>
-                <div className="ml-0.5 flex flex-shrink-0 items-center gap-0.5">
-                  {todo.link && (
+          {pendingTodos.length > 0 ? (
+            <div className="max-h-[84px] overflow-y-auto overscroll-contain scrollbar-thin pr-0.5">
+              {pendingTodos.map((todo) => (
+                <div key={todo.id} className="group flex min-h-[28px] items-center gap-2 overflow-hidden rounded-md px-1 hover:bg-white/70">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={todo.done}
+                    aria-label={`标记完成：${todo.text}`}
+                    onClick={() => void updateTodo(todo.id, { done: true })}
+                    className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[3px] border border-[#b9b8b4] bg-white transition-colors hover:border-[#8e8b86]"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs text-notion-text">
+                    {todo.text}
+                  </span>
+                  {todo.overdue && (
+                    <span className="flex flex-shrink-0 items-center gap-0.5 rounded bg-red-50 px-1 py-0.5 text-[9px] font-semibold text-red-600">
+                      <AlertCircle className="h-2.5 w-2.5" />
+                      逾期
+                    </span>
+                  )}
+                  <div className="ml-0.5 flex flex-shrink-0 items-center gap-0.5">
+                    {todo.link && (
+                      <button
+                        type="button"
+                        onClick={() => openTodoLink(todo.link!)}
+                        className="flex h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover"
+                        aria-label={`打开待办来源：${todo.text}`}
+                      >
+                        <Link2 className="h-3 w-3" />
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => openTodoLink(todo.link!)}
-                      className="flex h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover"
-                      aria-label={`打开待办来源：${todo.text}`}
+                      onClick={() => void updateTodo(todo.id, { today: !todo.is_today })}
+                      className={`h-5 w-5 items-center justify-center rounded transition-all hover:bg-notion-hover ${
+                        todo.is_today
+                          ? 'flex text-[#2383e2]'
+                          : 'hidden text-notion-textSecondary group-hover:flex'
+                      }`}
+                      aria-label={todo.is_today ? `取消今日待办：${todo.text}` : `设为今日待办：${todo.text}`}
+                      title={todo.is_today ? '取消今日待办' : '设为今日待办'}
                     >
-                      <Link2 className="h-3 w-3" />
+                      <Bell className="h-3 w-3" fill={todo.is_today ? 'currentColor' : 'none'} />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void updateTodo(todo.id, { today: !todo.is_today })}
-                    className={`h-5 w-5 items-center justify-center rounded transition-all hover:bg-notion-hover ${
-                      todo.is_today
-                        ? 'flex text-[#2383e2]'
-                        : 'hidden text-notion-textSecondary group-hover:flex'
-                    }`}
-                    aria-label={todo.is_today ? `取消今日待办：${todo.text}` : `设为今日待办：${todo.text}`}
-                    title={todo.is_today ? '取消今日待办' : '设为今日待办'}
-                  >
-                    <Bell className="h-3 w-3" fill={todo.is_today ? 'currentColor' : 'none'} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void deleteTodo(todo.id)}
-                    className="hidden h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover group-hover:flex"
-                    aria-label={`删除待办：${todo.text}`}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteTodo(todo.id)}
+                      className="hidden h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover group-hover:flex"
+                      aria-label={`删除待办：${todo.text}`}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </div>
           ) : (
             <div className="px-1 py-1 text-[11px] text-notion-textSecondary">暂无待办</div>
           )}
@@ -282,15 +284,17 @@ export default function PersonalSpaceCard() {
 
         <div className="rounded-md bg-white/55 px-1 py-1">
           {notes.length > 0 ? (
-            <PersonalNoteTree
-              notes={notes}
-              expandedIds={expandedNoteIds}
-              onToggle={toggleNote}
-              onOpen={(id) => navigate(`/personal/notes/${id}`)}
-              onAddChild={(id) => void handleCreateNote(id)}
-              onDelete={(id) => void deleteNote(id)}
-              onMove={(id, parentId, afterId) => void moveNote(id, parentId, afterId)}
-            />
+            <div className="max-h-[150px] overflow-y-auto overscroll-contain scrollbar-thin pr-0.5">
+              <PersonalNoteTree
+                notes={notes}
+                expandedIds={expandedNoteIds}
+                onToggle={toggleNote}
+                onOpen={(id) => navigate(`/personal/notes/${id}`)}
+                onAddChild={(id) => void handleCreateNote(id)}
+                onDelete={(id) => void deleteNote(id)}
+                onMove={(id, parentId, afterId) => void moveNote(id, parentId, afterId)}
+              />
+            </div>
           ) : (
             <div className="px-1 py-1 text-[11px] text-notion-textSecondary">暂无私人笔记</div>
           )}

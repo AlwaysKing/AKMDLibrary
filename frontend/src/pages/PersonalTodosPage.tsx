@@ -10,13 +10,6 @@ import { useSpaceStore } from '../stores/spaceStore';
 import { personalTodoLinkPath } from '../utils/personalTodoLinks';
 import { personalTrail } from '../utils/personalPages';
 
-interface TodoSection {
-  key: string;
-  label: string;
-  icon: React.ReactNode;
-  items: PersonalTodo[];
-}
-
 export default function PersonalTodosPage() {
   const navigate = useNavigate();
   const { currentSpace } = useSpaceStore();
@@ -30,7 +23,7 @@ export default function PersonalTodosPage() {
   } = usePersonalStore();
   const [todoText, setTodoText] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [addingTodo, setAddingTodo] = useState(false);
+  const [addingTodoPosition, setAddingTodoPosition] = useState<'top' | 'bottom' | null>(null);
   const [query, setQuery] = useState('');
   const [showDone, setShowDone] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
@@ -46,30 +39,14 @@ export default function PersonalTodosPage() {
     !normalizedQuery || todo.text.toLowerCase().includes(normalizedQuery);
   const pendingTodos = todos.filter((todo) => !todo.done && matchesQuery(todo));
   const overdueTodos = pendingTodos.filter((todo) => todo.overdue);
-  const todayTodos = pendingTodos.filter((todo) => todo.is_today && !todo.overdue);
-  // 既不属于今天也没有逾期记录的待办，统一归入「待办事项」；新添加的排在最前面。
+  const todayTodos = pendingTodos.filter((todo) => todo.is_today || todo.overdue);
+  // 既不属于今天也没有逾期记录的待办，统一归入「待办事项」，按后端保存顺序展示。
   const laterTodos = pendingTodos
-    .filter((todo) => !todo.is_today && !todo.overdue)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    .filter((todo) => !todo.is_today && !todo.overdue);
   const doneTodos = todos.filter((todo) => todo.done && matchesQuery(todo));
 
-  const sections: TodoSection[] = [
-    {
-      key: 'overdue',
-      label: '已逾期',
-      icon: <AlertCircle className="h-4 w-4 text-red-500" strokeWidth={1.8} />,
-      items: overdueTodos,
-    },
-    {
-      key: 'today',
-      label: '今日待办',
-      icon: <Sun className="h-4 w-4 text-notion-textSecondary" strokeWidth={1.8} />,
-      items: todayTodos,
-    },
-  ];
-
-  const startAdding = () => {
-    setAddingTodo(true);
+  const startAdding = (position: 'top' | 'bottom') => {
+    setAddingTodoPosition(position);
     window.setTimeout(() => addInputRef.current?.focus(), 0);
   };
 
@@ -78,9 +55,9 @@ export default function PersonalTodosPage() {
     if (!text || submitting) return;
     setSubmitting(true);
     try {
-      await createTodo(text, { today: false });
+      await createTodo(text, { today: false, atTop: addingTodoPosition === 'top' });
       setTodoText('');
-      setAddingTodo(false);
+      setAddingTodoPosition(null);
     } finally {
       setSubmitting(false);
     }
@@ -102,6 +79,38 @@ export default function PersonalTodosPage() {
     if (!text || text === todo.text) return;
     await updateTodo(todo.id, { text });
   };
+
+  const renderAddTodoInput = () => (
+    <div className="flex min-h-9 items-center gap-2 rounded-md px-1">
+      {submitting ? (
+        <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-[#2383e2]" />
+      ) : (
+        <Plus className="h-4 w-4 flex-shrink-0 text-[#2383e2]" />
+      )}
+      <input
+        ref={addInputRef}
+        autoFocus
+        value={todoText}
+        onChange={(event) => setTodoText(event.target.value)}
+        onBlur={() => {
+          if (!todoText.trim()) {
+            setAddingTodoPosition(null);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            void handleCreateTodo();
+          } else if (event.key === 'Escape') {
+            setAddingTodoPosition(null);
+            setTodoText('');
+          }
+        }}
+        placeholder="添加一条待办，回车保存"
+        className="min-w-0 flex-1 select-text border-0 bg-transparent p-0 text-[17px] text-notion-text outline-none placeholder:text-notion-textSecondary"
+      />
+    </div>
+  );
 
   const renderTodo = (todo: PersonalTodo) => (
     <div key={todo.id} className="group flex min-h-9 items-center gap-2 rounded-md px-1 hover:bg-[#f7f7f5]">
@@ -240,19 +249,16 @@ export default function PersonalTodosPage() {
             </div>
           ) : (
             <>
-              {sections.map((section) => {
-                if (section.items.length === 0) return null;
-                return (
-                  <section key={section.key} className="mt-7">
-                    <div className={`flex h-8 items-center gap-1.5 text-sm font-semibold ${section.key === 'overdue' ? 'text-red-500' : 'text-notion-textSecondary'}`}>
-                      {section.icon}
-                      {section.label}
-                      <span className="text-xs font-medium text-notion-textSecondary">{section.items.length}</span>
-                    </div>
-                    {section.items.map(renderTodo)}
-                  </section>
-                );
-              })}
+              {todayTodos.length > 0 && (
+                <section className="mt-7">
+                  <div className="flex h-8 items-center gap-1.5 text-sm font-semibold text-notion-textSecondary">
+                    <Sun className="h-4 w-4 text-notion-textSecondary" strokeWidth={1.8} />
+                    今日待办
+                    <span className="text-xs font-medium text-notion-textSecondary">{todayTodos.length}</span>
+                  </div>
+                  {todayTodos.map(renderTodo)}
+                </section>
+              )}
 
               <section className="mt-7">
                 <div className="group flex h-8 items-center gap-1.5 text-sm font-semibold text-notion-textSecondary">
@@ -261,49 +267,20 @@ export default function PersonalTodosPage() {
                   <span className="text-xs font-medium text-notion-textSecondary">{laterTodos.length}</span>
                   <button
                     type="button"
-                    onClick={startAdding}
+                    onClick={() => startAdding('top')}
                     className="ml-1 flex h-5 w-5 items-center justify-center rounded text-notion-textSecondary opacity-0 transition-opacity hover:bg-notion-hover hover:text-notion-text group-hover:opacity-100"
                     aria-label="添加待办"
                   >
                     <Plus className="h-4 w-4" />
                   </button>
                 </div>
-                {addingTodo && (
-                  <div className="flex min-h-9 items-center gap-2 rounded-md px-1">
-                    {submitting ? (
-                      <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-[#2383e2]" />
-                    ) : (
-                      <Plus className="h-4 w-4 flex-shrink-0 text-[#2383e2]" />
-                    )}
-                    <input
-                      ref={addInputRef}
-                      autoFocus
-                      value={todoText}
-                      onChange={(event) => setTodoText(event.target.value)}
-                      onBlur={() => {
-                        if (!todoText.trim()) {
-                          setAddingTodo(false);
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                          event.preventDefault();
-                          void handleCreateTodo();
-                        } else if (event.key === 'Escape') {
-                          setAddingTodo(false);
-                          setTodoText('');
-                        }
-                      }}
-                      placeholder="添加一条待办，回车保存"
-                      className="min-w-0 flex-1 select-text border-0 bg-transparent p-0 text-[17px] text-notion-text outline-none placeholder:text-notion-textSecondary"
-                    />
-                  </div>
-                )}
+                {addingTodoPosition === 'top' && renderAddTodoInput()}
                 {laterTodos.map(renderTodo)}
-                {!addingTodo && (
+                {addingTodoPosition === 'bottom' && renderAddTodoInput()}
+                {!addingTodoPosition && (
                   <button
                     type="button"
-                    onClick={startAdding}
+                    onClick={() => startAdding('bottom')}
                     className="flex h-9 items-center gap-2 rounded-md px-1 text-sm text-notion-textSecondary transition-colors hover:bg-[#f7f7f5] hover:text-notion-text"
                   >
                     <Plus className="h-4 w-4" />

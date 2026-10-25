@@ -1,0 +1,573 @@
+diff --git a/backend/internal/model/personal.go b/backend/internal/model/personal.go
+index ae7fcef..505e6ec 100644
+--- a/backend/internal/model/personal.go
++++ b/backend/internal/model/personal.go
+@@ -39,6 +39,7 @@ type PersonalOverview struct {
+ type CreatePersonalTodoRequest struct {
+ 	Text  string            `json:"text"`
+ 	Today bool              `json:"today"`
++	AtTop bool              `json:"at_top,omitempty"`
+ 	Link  *PersonalTodoLink `json:"link,omitempty"`
+ }
+ 
+diff --git a/backend/internal/service/personal_service.go b/backend/internal/service/personal_service.go
+index 0c141e6..6257bfc 100644
+--- a/backend/internal/service/personal_service.go
++++ b/backend/internal/service/personal_service.go
+@@ -196,7 +196,11 @@ func (s *PersonalService) CreateTodo(userID int, req *model.CreatePersonalTodoRe
+ 		record.TodayOn = now.Format("2006-01-02")
+ 		record.TodaySetAt = now.Format(time.RFC3339)
+ 	}
+-	records = append(records, record)
++	if req.AtTop {
++		records = append([]personalTodoXML{record}, records...)
++	} else {
++		records = append(records, record)
++	}
+ 	if err := s.writeTodoRecords(workspace, records); err != nil {
+ 		return nil, err
+ 	}
+@@ -506,7 +510,7 @@ func todosFromRecords(records []personalTodoXML) []model.PersonalTodo {
+ 		if todos[i].TodaySetAt != todos[j].TodaySetAt {
+ 			return todos[i].TodaySetAt < todos[j].TodaySetAt
+ 		}
+-		return todos[i].CreatedAt < todos[j].CreatedAt
++		return false
+ 	})
+ 	return todos
+ }
+diff --git a/backend/internal/service/personal_service_test.go b/backend/internal/service/personal_service_test.go
+index e27900d..5c49805 100644
+--- a/backend/internal/service/personal_service_test.go
++++ b/backend/internal/service/personal_service_test.go
+@@ -80,3 +80,28 @@ func TestTodoOverdueAndToday(t *testing.T) {
+ 		t.Fatalf("unexpected today flags: %#v", today)
+ 	}
+ }
++
++func TestTodosFromRecordsPreservesRegularTodoOrder(t *testing.T) {
++	records := []personalTodoXML{
++		{
++			ID:        "top",
++			Done:      "0",
++			CreatedAt: "2026-10-18T12:00:00+08:00",
++			Text:      "Top",
++		},
++		{
++			ID:        "bottom",
++			Done:      "0",
++			CreatedAt: "2026-10-18T10:00:00+08:00",
++			Text:      "Bottom",
++		},
++	}
++
++	todos := todosFromRecords(records)
++	if len(todos) != 2 {
++		t.Fatalf("expected 2 todos, got %d", len(todos))
++	}
++	if todos[0].ID != "top" || todos[1].ID != "bottom" {
++		t.Fatalf("regular todo order was not preserved: %#v", todos)
++	}
++}
+diff --git a/frontend/src/api/personal.ts b/frontend/src/api/personal.ts
+index 6c83be5..3404f00 100644
+--- a/frontend/src/api/personal.ts
++++ b/frontend/src/api/personal.ts
+@@ -51,6 +51,7 @@ export const personalApi = {
+   createTodo: async (data: {
+     text?: string;
+     today?: boolean;
++    at_top?: boolean;
+     link?: PersonalTodoLink;
+   }): Promise<PersonalTodoMutationResponse> => {
+     const response = await apiClient.post<PersonalTodoMutationResponse>('/personal/todos', data);
+diff --git a/frontend/src/components/Layout/Sidebar.tsx b/frontend/src/components/Layout/Sidebar.tsx
+index da0fc2e..1243fb7 100644
+--- a/frontend/src/components/Layout/Sidebar.tsx
++++ b/frontend/src/components/Layout/Sidebar.tsx
+@@ -1,7 +1,6 @@
+ import { Settings, ChevronsLeft, Trash2, ArrowLeft, Users, Database, User, Image, ChevronDown, ChevronRight, Plus, LogOut, GitBranch, Search, FolderOpen, Bot } from 'lucide-react';
+ import { useNavigate, useLocation } from 'react-router-dom';
+ import SpaceSelector from '../Sidebar/SpaceSelector';
+-import PageTree from '../Sidebar/PageTree';
+ import PageTreeItem from '../Sidebar/PageTreeItem';
+ import SearchOverlay from '../Search/SearchOverlay';
+ import PersonalSpaceCard from '../Sidebar/PersonalSpaceCard';
+@@ -36,11 +35,13 @@ export default function Sidebar({ onToggle }: SidebarProps) {
+   const adminTab = new URLSearchParams(location.search).get('tab') || (isAdminRole ? 'users' : 'profile');
+ 
+   const { starredPages, recentPages } = useSpaceStore();
+-  // 区块折叠 / 最近/最爱区页面展开：从用户偏好派生（按用户、按空间持久化）
++  // 区块折叠 / 文档区页面展开：从用户偏好派生（按用户、按空间持久化）
+   const { getCollapsedSections, getQuickAccessExpandedIds, setCollapsedSections, setQuickAccessExpandedIds } = usePreferenceStore();
+   const sectionsCollapsed = currentSpace ? getCollapsedSections(currentSpace.slug) : {};
+   const sidebarExpandedIds = new Set(currentSpace ? getQuickAccessExpandedIds(currentSpace.slug) : []);
+-  const [showAllRecent, setShowAllRecent] = useState(false);
++  const sidebarDocs = Array.from(
++    new Map([...starredPages, ...recentPages].map((page) => [page.id, page])).values(),
++  );
+   const [showUserMenu, setShowUserMenu] = useState(false);
+   const userMenuRef = useRef<HTMLDivElement>(null);
+ 
+@@ -288,65 +289,21 @@ export default function Sidebar({ onToggle }: SidebarProps) {
+ 
+       <PersonalSpaceCard />
+ 
+-      {/* Three sections: 最近 / 最爱 / 文档 */}
++      {/* Compact docs: starred first, then recently visited, de-duplicated. */}
+       <div className="flex-1 overflow-y-auto scrollbar-thin px-2 py-1">
+-        {/* 最近 */}
+-        {currentSpace && (
+-          <div className="mb-3">
+-            <SectionHeader title="最近" sectionKey="recent" />
+-            {!sectionsCollapsed['recent'] && (
+-              <div>
+-                {recentPages.length === 0 ? (
+-                  <div className="text-xs text-notion-textSecondary px-2 py-1.5">暂无最近访问</div>
+-                ) : (
+-                  <>
+-                    {(showAllRecent ? recentPages.slice(0, 20) : recentPages.slice(0, 5)).map(p => (
+-                      <PageTreeItem key={p.id} page={p} level={0} expandedPageIds={sidebarExpandedIds} onToggleExpand={handleSidebarToggleExpand} />
+-                    ))}
+-                    {!showAllRecent && recentPages.length > 5 && (
+-                      <button
+-                        onClick={() => setShowAllRecent(true)}
+-                        className="w-full flex items-center h-[30px] rounded-md hover:bg-notion-hover transition-colors text-left"
+-                        style={{ paddingLeft: '16px', paddingRight: '8px' }}
+-                      >
+-                        <span className="flex items-center justify-center flex-shrink-0 mr-2" style={{ width: '22px', height: '18px' }}>
+-                          <span className="text-sm font-medium text-notion-textSecondary">…</span>
+-                        </span>
+-                        <span className="text-sm font-medium text-notion-textSecondary">显示更多</span>
+-                      </button>
+-                    )}
+-                  </>
+-                )}
+-              </div>
+-            )}
+-          </div>
+-        )}
+-
+-        {/* 最爱 */}
+-        {currentSpace && (
+-          <div className="mb-3">
+-            <SectionHeader title="最爱" sectionKey="starred" />
+-            {!sectionsCollapsed['starred'] && (
+-              <div>
+-                {starredPages.length === 0 ? (
+-                  <div className="text-xs text-notion-textSecondary px-2 py-1.5">暂无收藏页面</div>
+-                ) : (
+-                  starredPages.map(p => (
+-                    <PageTreeItem key={p.id} page={p} level={0} expandedPageIds={sidebarExpandedIds} onToggleExpand={handleSidebarToggleExpand} />
+-                  ))
+-                )}
+-              </div>
+-            )}
+-          </div>
+-        )}
+-
+         {/* 文档 */}
+         <div>
+           <SectionHeader title="文档" sectionKey="docs" onAdd={handleNewRootPage} />
+           {!sectionsCollapsed['docs'] && (
+-            <div>
+-              <PageTree />
+-            </div>
++            sidebarDocs.length > 0 ? (
++              <div className={`max-h-[150px] overflow-y-auto overscroll-contain scrollbar-thin ${sidebarDocs.length > 5 ? 'h-[150px]' : ''}`}>
++                {sidebarDocs.map((page) => (
++                  <PageTreeItem key={page.id} page={page} level={0} expandedPageIds={sidebarExpandedIds} onToggleExpand={handleSidebarToggleExpand} />
++                ))}
++              </div>
++            ) : (
++              <div className="px-2 py-1.5 text-xs text-notion-textSecondary">暂无最近或加星文档</div>
++            )
+           )}
+         </div>
+       </div>
+diff --git a/frontend/src/components/Sidebar/PersonalSpaceCard.tsx b/frontend/src/components/Sidebar/PersonalSpaceCard.tsx
+index a6fd50d..1e16350 100644
+--- a/frontend/src/components/Sidebar/PersonalSpaceCard.tsx
++++ b/frontend/src/components/Sidebar/PersonalSpaceCard.tsx
+@@ -1,6 +1,6 @@
+ import { useEffect, useState } from 'react';
+ import { useNavigate } from 'react-router-dom';
+-import { Bell, CheckSquare, ChevronDown, Files, Link2, Loader2, NotebookPen, Plus, Trash2 } from 'lucide-react';
++import { AlertCircle, Bell, CheckSquare, ChevronDown, Files, Link2, Loader2, NotebookPen, Plus, Trash2 } from 'lucide-react';
+ import { PersonalTodoLink } from '../../api/personal';
+ import { usePersonalStore } from '../../stores/personalStore';
+ import { personalTodoLinkPath } from '../../utils/personalTodoLinks';
+@@ -169,61 +169,63 @@ export default function PersonalSpaceCard() {
+ 
+       {expanded && <div className="px-2 pb-2">
+         <div className="rounded-md bg-white/55 px-1 py-1">
+-          {todos.length > 0 ? (
+-            todos.map((todo) => (
+-              <div key={todo.id} className="group flex min-h-[28px] items-center gap-2 overflow-hidden rounded-md px-1 hover:bg-white/70">
+-                <button
+-                  type="button"
+-                  role="checkbox"
+-                  aria-checked={todo.done}
+-                  aria-label={todo.done ? `标记未完成：${todo.text}` : `标记完成：${todo.text}`}
+-                  onClick={() => void updateTodo(todo.id, { done: !todo.done })}
+-                  className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[3px] border transition-colors ${
+-                    todo.done
+-                      ? 'border-[#2383e2] bg-[#2383e2] text-white'
+-                      : 'border-[#b9b8b4] bg-white hover:border-[#8e8b86]'
+-                  }`}
+-                >
+-                  {todo.done && <span className="text-[10px] leading-none">✓</span>}
+-                </button>
+-                <span className={`min-w-0 flex-1 truncate text-xs ${todo.done ? 'text-notion-textSecondary line-through' : 'text-notion-text'}`}>
+-                  {todo.text}
+-                </span>
+-                <div className="ml-0.5 flex flex-shrink-0 items-center gap-0.5">
+-                  {todo.link && (
++          {pendingTodos.length > 0 ? (
++            <div className="max-h-[84px] overflow-y-auto overscroll-contain scrollbar-thin pr-0.5">
++              {pendingTodos.map((todo) => (
++                <div key={todo.id} className="group flex min-h-[28px] items-center gap-2 overflow-hidden rounded-md px-1 hover:bg-white/70">
++                  <button
++                    type="button"
++                    role="checkbox"
++                    aria-checked={todo.done}
++                    aria-label={`标记完成：${todo.text}`}
++                    onClick={() => void updateTodo(todo.id, { done: true })}
++                    className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[3px] border border-[#b9b8b4] bg-white transition-colors hover:border-[#8e8b86]"
++                  />
++                  <span className="min-w-0 flex-1 truncate text-xs text-notion-text">
++                    {todo.text}
++                  </span>
++                  {todo.overdue && (
++                    <span className="flex flex-shrink-0 items-center gap-0.5 rounded bg-red-50 px-1 py-0.5 text-[9px] font-semibold text-red-600">
++                      <AlertCircle className="h-2.5 w-2.5" />
++                      逾期
++                    </span>
++                  )}
++                  <div className="ml-0.5 flex flex-shrink-0 items-center gap-0.5">
++                    {todo.link && (
++                      <button
++                        type="button"
++                        onClick={() => openTodoLink(todo.link!)}
++                        className="flex h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover"
++                        aria-label={`打开待办来源：${todo.text}`}
++                      >
++                        <Link2 className="h-3 w-3" />
++                      </button>
++                    )}
+                     <button
+                       type="button"
+-                      onClick={() => openTodoLink(todo.link!)}
+-                      className="flex h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover"
+-                      aria-label={`打开待办来源：${todo.text}`}
++                      onClick={() => void updateTodo(todo.id, { today: !todo.is_today })}
++                      className={`h-5 w-5 items-center justify-center rounded transition-all hover:bg-notion-hover ${
++                        todo.is_today
++                          ? 'flex text-[#2383e2]'
++                          : 'hidden text-notion-textSecondary group-hover:flex'
++                      }`}
++                      aria-label={todo.is_today ? `取消今日待办：${todo.text}` : `设为今日待办：${todo.text}`}
++                      title={todo.is_today ? '取消今日待办' : '设为今日待办'}
+                     >
+-                      <Link2 className="h-3 w-3" />
++                      <Bell className="h-3 w-3" fill={todo.is_today ? 'currentColor' : 'none'} />
+                     </button>
+-                  )}
+-                  <button
+-                    type="button"
+-                    onClick={() => void updateTodo(todo.id, { today: !todo.is_today })}
+-                    className={`h-5 w-5 items-center justify-center rounded transition-all hover:bg-notion-hover ${
+-                      todo.is_today
+-                        ? 'flex text-[#2383e2]'
+-                        : 'hidden text-notion-textSecondary group-hover:flex'
+-                    }`}
+-                    aria-label={todo.is_today ? `取消今日待办：${todo.text}` : `设为今日待办：${todo.text}`}
+-                    title={todo.is_today ? '取消今日待办' : '设为今日待办'}
+-                  >
+-                    <Bell className="h-3 w-3" fill={todo.is_today ? 'currentColor' : 'none'} />
+-                  </button>
+-                  <button
+-                    type="button"
+-                    onClick={() => void deleteTodo(todo.id)}
+-                    className="hidden h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover group-hover:flex"
+-                    aria-label={`删除待办：${todo.text}`}
+-                  >
+-                    <Trash2 className="h-3 w-3" />
+-                  </button>
++                    <button
++                      type="button"
++                      onClick={() => void deleteTodo(todo.id)}
++                      className="hidden h-5 w-5 items-center justify-center rounded text-notion-textSecondary hover:bg-notion-hover group-hover:flex"
++                      aria-label={`删除待办：${todo.text}`}
++                    >
++                      <Trash2 className="h-3 w-3" />
++                    </button>
++                  </div>
+                 </div>
+-              </div>
+-            ))
++              ))}
++            </div>
+           ) : (
+             <div className="px-1 py-1 text-[11px] text-notion-textSecondary">暂无待办</div>
+           )}
+@@ -282,15 +284,17 @@ export default function PersonalSpaceCard() {
+ 
+         <div className="rounded-md bg-white/55 px-1 py-1">
+           {notes.length > 0 ? (
+-            <PersonalNoteTree
+-              notes={notes}
+-              expandedIds={expandedNoteIds}
+-              onToggle={toggleNote}
+-              onOpen={(id) => navigate(`/personal/notes/${id}`)}
+-              onAddChild={(id) => void handleCreateNote(id)}
+-              onDelete={(id) => void deleteNote(id)}
+-              onMove={(id, parentId, afterId) => void moveNote(id, parentId, afterId)}
+-            />
++            <div className="max-h-[150px] overflow-y-auto overscroll-contain scrollbar-thin pr-0.5">
++              <PersonalNoteTree
++                notes={notes}
++                expandedIds={expandedNoteIds}
++                onToggle={toggleNote}
++                onOpen={(id) => navigate(`/personal/notes/${id}`)}
++                onAddChild={(id) => void handleCreateNote(id)}
++                onDelete={(id) => void deleteNote(id)}
++                onMove={(id, parentId, afterId) => void moveNote(id, parentId, afterId)}
++              />
++            </div>
+           ) : (
+             <div className="px-1 py-1 text-[11px] text-notion-textSecondary">暂无私人笔记</div>
+           )}
+diff --git a/frontend/src/pages/PersonalTodosPage.tsx b/frontend/src/pages/PersonalTodosPage.tsx
+index 6ce5a47..3847924 100644
+--- a/frontend/src/pages/PersonalTodosPage.tsx
++++ b/frontend/src/pages/PersonalTodosPage.tsx
+@@ -10,13 +10,6 @@ import { useSpaceStore } from '../stores/spaceStore';
+ import { personalTodoLinkPath } from '../utils/personalTodoLinks';
+ import { personalTrail } from '../utils/personalPages';
+ 
+-interface TodoSection {
+-  key: string;
+-  label: string;
+-  icon: React.ReactNode;
+-  items: PersonalTodo[];
+-}
+-
+ export default function PersonalTodosPage() {
+   const navigate = useNavigate();
+   const { currentSpace } = useSpaceStore();
+@@ -30,7 +23,7 @@ export default function PersonalTodosPage() {
+   } = usePersonalStore();
+   const [todoText, setTodoText] = useState('');
+   const [submitting, setSubmitting] = useState(false);
+-  const [addingTodo, setAddingTodo] = useState(false);
++  const [addingTodoPosition, setAddingTodoPosition] = useState<'top' | 'bottom' | null>(null);
+   const [query, setQuery] = useState('');
+   const [showDone, setShowDone] = useState(false);
+   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+@@ -46,30 +39,14 @@ export default function PersonalTodosPage() {
+     !normalizedQuery || todo.text.toLowerCase().includes(normalizedQuery);
+   const pendingTodos = todos.filter((todo) => !todo.done && matchesQuery(todo));
+   const overdueTodos = pendingTodos.filter((todo) => todo.overdue);
+-  const todayTodos = pendingTodos.filter((todo) => todo.is_today && !todo.overdue);
+-  // 既不属于今天也没有逾期记录的待办，统一归入「待办事项」；新添加的排在最前面。
++  const todayTodos = pendingTodos.filter((todo) => todo.is_today || todo.overdue);
++  // 既不属于今天也没有逾期记录的待办，统一归入「待办事项」，按后端保存顺序展示。
+   const laterTodos = pendingTodos
+-    .filter((todo) => !todo.is_today && !todo.overdue)
+-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
++    .filter((todo) => !todo.is_today && !todo.overdue);
+   const doneTodos = todos.filter((todo) => todo.done && matchesQuery(todo));
+ 
+-  const sections: TodoSection[] = [
+-    {
+-      key: 'overdue',
+-      label: '已逾期',
+-      icon: <AlertCircle className="h-4 w-4 text-red-500" strokeWidth={1.8} />,
+-      items: overdueTodos,
+-    },
+-    {
+-      key: 'today',
+-      label: '今日待办',
+-      icon: <Sun className="h-4 w-4 text-notion-textSecondary" strokeWidth={1.8} />,
+-      items: todayTodos,
+-    },
+-  ];
+-
+-  const startAdding = () => {
+-    setAddingTodo(true);
++  const startAdding = (position: 'top' | 'bottom') => {
++    setAddingTodoPosition(position);
+     window.setTimeout(() => addInputRef.current?.focus(), 0);
+   };
+ 
+@@ -78,9 +55,9 @@ export default function PersonalTodosPage() {
+     if (!text || submitting) return;
+     setSubmitting(true);
+     try {
+-      await createTodo(text, { today: false });
++      await createTodo(text, { today: false, atTop: addingTodoPosition === 'top' });
+       setTodoText('');
+-      setAddingTodo(false);
++      setAddingTodoPosition(null);
+     } finally {
+       setSubmitting(false);
+     }
+@@ -103,6 +80,38 @@ export default function PersonalTodosPage() {
+     await updateTodo(todo.id, { text });
+   };
+ 
++  const renderAddTodoInput = () => (
++    <div className="flex min-h-9 items-center gap-2 rounded-md px-1">
++      {submitting ? (
++        <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-[#2383e2]" />
++      ) : (
++        <Plus className="h-4 w-4 flex-shrink-0 text-[#2383e2]" />
++      )}
++      <input
++        ref={addInputRef}
++        autoFocus
++        value={todoText}
++        onChange={(event) => setTodoText(event.target.value)}
++        onBlur={() => {
++          if (!todoText.trim()) {
++            setAddingTodoPosition(null);
++          }
++        }}
++        onKeyDown={(event) => {
++          if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
++            event.preventDefault();
++            void handleCreateTodo();
++          } else if (event.key === 'Escape') {
++            setAddingTodoPosition(null);
++            setTodoText('');
++          }
++        }}
++        placeholder="添加一条待办，回车保存"
++        className="min-w-0 flex-1 select-text border-0 bg-transparent p-0 text-[17px] text-notion-text outline-none placeholder:text-notion-textSecondary"
++      />
++    </div>
++  );
++
+   const renderTodo = (todo: PersonalTodo) => (
+     <div key={todo.id} className="group flex min-h-9 items-center gap-2 rounded-md px-1 hover:bg-[#f7f7f5]">
+       <button
+@@ -240,19 +249,16 @@ export default function PersonalTodosPage() {
+             </div>
+           ) : (
+             <>
+-              {sections.map((section) => {
+-                if (section.items.length === 0) return null;
+-                return (
+-                  <section key={section.key} className="mt-7">
+-                    <div className={`flex h-8 items-center gap-1.5 text-sm font-semibold ${section.key === 'overdue' ? 'text-red-500' : 'text-notion-textSecondary'}`}>
+-                      {section.icon}
+-                      {section.label}
+-                      <span className="text-xs font-medium text-notion-textSecondary">{section.items.length}</span>
+-                    </div>
+-                    {section.items.map(renderTodo)}
+-                  </section>
+-                );
+-              })}
++              {todayTodos.length > 0 && (
++                <section className="mt-7">
++                  <div className="flex h-8 items-center gap-1.5 text-sm font-semibold text-notion-textSecondary">
++                    <Sun className="h-4 w-4 text-notion-textSecondary" strokeWidth={1.8} />
++                    今日待办
++                    <span className="text-xs font-medium text-notion-textSecondary">{todayTodos.length}</span>
++                  </div>
++                  {todayTodos.map(renderTodo)}
++                </section>
++              )}
+ 
+               <section className="mt-7">
+                 <div className="group flex h-8 items-center gap-1.5 text-sm font-semibold text-notion-textSecondary">
+@@ -261,49 +267,20 @@ export default function PersonalTodosPage() {
+                   <span className="text-xs font-medium text-notion-textSecondary">{laterTodos.length}</span>
+                   <button
+                     type="button"
+-                    onClick={startAdding}
++                    onClick={() => startAdding('top')}
+                     className="ml-1 flex h-5 w-5 items-center justify-center rounded text-notion-textSecondary opacity-0 transition-opacity hover:bg-notion-hover hover:text-notion-text group-hover:opacity-100"
+                     aria-label="添加待办"
+                   >
+                     <Plus className="h-4 w-4" />
+                   </button>
+                 </div>
+-                {addingTodo && (
+-                  <div className="flex min-h-9 items-center gap-2 rounded-md px-1">
+-                    {submitting ? (
+-                      <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-[#2383e2]" />
+-                    ) : (
+-                      <Plus className="h-4 w-4 flex-shrink-0 text-[#2383e2]" />
+-                    )}
+-                    <input
+-                      ref={addInputRef}
+-                      autoFocus
+-                      value={todoText}
+-                      onChange={(event) => setTodoText(event.target.value)}
+-                      onBlur={() => {
+-                        if (!todoText.trim()) {
+-                          setAddingTodo(false);
+-                        }
+-                      }}
+-                      onKeyDown={(event) => {
+-                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+-                          event.preventDefault();
+-                          void handleCreateTodo();
+-                        } else if (event.key === 'Escape') {
+-                          setAddingTodo(false);
+-                          setTodoText('');
+-                        }
+-                      }}
+-                      placeholder="添加一条待办，回车保存"
+-                      className="min-w-0 flex-1 select-text border-0 bg-transparent p-0 text-[17px] text-notion-text outline-none placeholder:text-notion-textSecondary"
+-                    />
+-                  </div>
+-                )}
++                {addingTodoPosition === 'top' && renderAddTodoInput()}
+                 {laterTodos.map(renderTodo)}
+-                {!addingTodo && (
++                {addingTodoPosition === 'bottom' && renderAddTodoInput()}
++                {!addingTodoPosition && (
+                   <button
+                     type="button"
+-                    onClick={startAdding}
++                    onClick={() => startAdding('bottom')}
+                     className="flex h-9 items-center gap-2 rounded-md px-1 text-sm text-notion-textSecondary transition-colors hover:bg-[#f7f7f5] hover:text-notion-text"
+                   >
+                     <Plus className="h-4 w-4" />
+diff --git a/frontend/src/stores/personalStore.ts b/frontend/src/stores/personalStore.ts
+index 7ae3c9d..e39370b 100644
+--- a/frontend/src/stores/personalStore.ts
++++ b/frontend/src/stores/personalStore.ts
+@@ -19,7 +19,7 @@ interface PersonalState {
+   isLoading: boolean;
+   error: string | null;
+   fetchOverview: () => Promise<PersonalOverview | null>;
+-  createTodo: (text: string, options?: { today?: boolean; link?: PersonalTodoLink }) => Promise<boolean>;
++  createTodo: (text: string, options?: { today?: boolean; atTop?: boolean; link?: PersonalTodoLink }) => Promise<boolean>;
+   updateTodo: (id: string, data: { text?: string; done?: boolean; today?: boolean }) => Promise<void>;
+   deleteTodo: (id: string) => Promise<void>;
+   createNote: (title: string, parentId?: string) => Promise<Page>;
+@@ -61,6 +61,7 @@ export const usePersonalStore = create<PersonalState>((set, get) => ({
+       const result = await personalApi.createTodo({
+         text,
+         today: options?.today,
++        at_top: options?.atTop,
+         link: options?.link,
+       });
+       set({ todos: result.todos, error: null });
+diff --git a/frontend/src/stores/spaceStore.ts b/frontend/src/stores/spaceStore.ts
+index 8778f8e..48f7cfb 100644
+--- a/frontend/src/stores/spaceStore.ts
++++ b/frontend/src/stores/spaceStore.ts
+@@ -82,7 +82,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
+ 
+   fetchRecent: async (spaceSlug) => {
+     try {
+-      const pages = await pagesApi.listRecent(spaceSlug);
++      const pages = await pagesApi.listRecent(spaceSlug, 50);
+       set({ recentPages: pages || [] });
+     } catch (error: any) {
+       console.error('Failed to fetch recent pages:', error);

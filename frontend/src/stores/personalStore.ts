@@ -19,7 +19,7 @@ interface PersonalState {
   isLoading: boolean;
   error: string | null;
   fetchOverview: () => Promise<PersonalOverview | null>;
-  createTodo: (text: string, options?: { today?: boolean; link?: PersonalTodoLink }) => Promise<boolean>;
+  createTodo: (text: string, options?: { today?: boolean; atTop?: boolean; link?: PersonalTodoLink }) => Promise<boolean>;
   updateTodo: (id: string, data: { text?: string; done?: boolean; today?: boolean }) => Promise<void>;
   deleteTodo: (id: string) => Promise<void>;
   createNote: (title: string, parentId?: string) => Promise<Page>;
@@ -61,6 +61,7 @@ export const usePersonalStore = create<PersonalState>((set, get) => ({
       const result = await personalApi.createTodo({
         text,
         today: options?.today,
+        at_top: options?.atTop,
         link: options?.link,
       });
       set({ todos: result.todos, error: null });

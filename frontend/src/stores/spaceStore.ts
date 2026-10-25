@@ -82,7 +82,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
 
   fetchRecent: async (spaceSlug) => {
     try {
-      const pages = await pagesApi.listRecent(spaceSlug);
+      const pages = await pagesApi.listRecent(spaceSlug, 50);
       set({ recentPages: pages || [] });
     } catch (error: any) {
       console.error('Failed to fetch recent pages:', error);

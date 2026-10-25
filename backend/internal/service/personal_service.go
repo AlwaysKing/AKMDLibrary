@@ -196,7 +196,11 @@ func (s *PersonalService) CreateTodo(userID int, req *model.CreatePersonalTodoRe
 		record.TodayOn = now.Format("2006-01-02")
 		record.TodaySetAt = now.Format(time.RFC3339)
 	}
-	records = append(records, record)
+	if req.AtTop {
+		records = append([]personalTodoXML{record}, records...)
+	} else {
+		records = append(records, record)
+	}
 	if err := s.writeTodoRecords(workspace, records); err != nil {
 		return nil, err
 	}
@@ -506,7 +510,7 @@ func todosFromRecords(records []personalTodoXML) []model.PersonalTodo {
 		if todos[i].TodaySetAt != todos[j].TodaySetAt {
 			return todos[i].TodaySetAt < todos[j].TodaySetAt
 		}
-		return todos[i].CreatedAt < todos[j].CreatedAt
+		return false
 	})
 	return todos
 }
