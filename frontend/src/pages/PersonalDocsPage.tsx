@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, FileText, Loader2, NotebookPen, Search } from 'lucide-react';
+import { ChevronDown, Clock, FileText, Loader2, NotebookPen, Search } from 'lucide-react';
 import Breadcrumb from '../components/Editor/Breadcrumb';
 import PersonalNoteTree from '../components/Sidebar/PersonalNoteTree';
 import { usePersonalStore } from '../stores/personalStore';
@@ -8,14 +8,18 @@ import { useSpaceStore } from '../stores/spaceStore';
 import { flattenPersonalNotes } from '../utils/personalNotes';
 import { personalTrail } from '../utils/personalPages';
 
-// 个人空间里最近编辑过的笔记没有单独接口，先用概览返回的树拍平后按最近列出的顺序展示。
-const RECENT_LIMIT = 8;
+const RECENT_COLLAPSED_STORAGE_KEY = 'personal-docs-recent-collapsed';
+
+function readRecentCollapsedState() {
+  return localStorage.getItem(RECENT_COLLAPSED_STORAGE_KEY) === '1';
+}
 
 export default function PersonalDocsPage() {
   const navigate = useNavigate();
   const { currentSpace } = useSpaceStore();
   const {
     notes,
+    recent,
     isLoading,
     fetchOverview,
     createNote,
@@ -24,6 +28,7 @@ export default function PersonalDocsPage() {
   } = usePersonalStore();
   const [query, setQuery] = useState('');
   const [creating, setCreating] = useState(false);
+  const [recentCollapsed, setRecentCollapsed] = useState(readRecentCollapsedState);
   const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -35,14 +40,19 @@ export default function PersonalDocsPage() {
   const visibleNotes = normalizedQuery
     ? flatNotes.filter(({ note }) => (note.title || '未命名笔记').toLowerCase().includes(normalizedQuery))
     : flatNotes;
-  const recentNotes = flatNotes.slice(0, RECENT_LIMIT);
-
   const toggleNote = (id: string) => {
     setExpandedNoteIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
+    });
+  };
+
+  const toggleRecent = () => {
+    setRecentCollapsed((collapsed) => {
+      localStorage.setItem(RECENT_COLLAPSED_STORAGE_KEY, collapsed ? '0' : '1');
+      return !collapsed;
     });
   };
 
@@ -147,33 +157,48 @@ export default function PersonalDocsPage() {
             </section>
           ) : (
             <>
-              {/* 笔记不多时「最近」和「全部文档」是同一份内容，不重复展示。 */}
-              {flatNotes.length > RECENT_LIMIT && (
+              {recent.length > 0 && (
                 <section className="mt-7">
                   <div className="flex h-7 items-center gap-1.5 text-xs font-semibold text-notion-text">
-                    <Clock className="h-4 w-4 text-notion-textSecondary" strokeWidth={1.8} />
-                    最近
-                    <span className="text-[11px] font-medium text-notion-textSecondary">{recentNotes.length}</span>
-                  </div>
-                  {recentNotes.map(({ note }) => (
                     <button
                       type="button"
-                      key={note.id}
-                      onClick={() => navigate(`/personal/notes/${note.id}`)}
-                      className="flex h-[34px] w-full items-center gap-2 rounded-md px-1 text-left transition-colors hover:bg-notion-hover"
+                      onClick={toggleRecent}
+                      className="flex items-center gap-1.5 rounded transition-colors hover:text-notion-textSecondary"
+                      aria-expanded={!recentCollapsed}
+                      aria-label={recentCollapsed ? '展开最近文档' : '折叠最近文档'}
                     >
-                      {note.icon ? (
-                        note.icon.startsWith('/') || note.icon.startsWith('http') ? (
-                          <img src={note.icon} alt="" className="h-4 w-4 flex-shrink-0 object-contain" />
-                        ) : (
-                          <span className="w-4 flex-shrink-0 text-center text-sm leading-none">{note.icon}</span>
-                        )
-                      ) : (
-                        <FileText className="h-4 w-4 flex-shrink-0 text-notion-textSecondary" strokeWidth={1.7} />
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-sm text-notion-text">{note.title || '未命名笔记'}</span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 text-notion-textSecondary transition-transform ${recentCollapsed ? '-rotate-90' : ''}`}
+                        strokeWidth={1.8}
+                      />
+                      <Clock className="h-4 w-4 text-notion-textSecondary" strokeWidth={1.8} />
+                      最近
+                      <span className="text-[11px] font-medium text-notion-textSecondary">{recent.length}</span>
                     </button>
-                  ))}
+                  </div>
+                  {!recentCollapsed && (
+                    <div className="max-h-[170px] overflow-y-auto overscroll-contain scrollbar-thin pr-0.5">
+                      {recent.map((note) => (
+                        <button
+                          type="button"
+                          key={note.id}
+                          onClick={() => navigate(`/personal/notes/${note.id}`)}
+                          className="flex h-[34px] w-full items-center gap-2 rounded-md px-1 text-left transition-colors hover:bg-notion-hover"
+                        >
+                          {note.icon ? (
+                            note.icon.startsWith('/') || note.icon.startsWith('http') ? (
+                              <img src={note.icon} alt="" className="h-4 w-4 flex-shrink-0 object-contain" />
+                            ) : (
+                              <span className="w-4 flex-shrink-0 text-center text-sm leading-none">{note.icon}</span>
+                            )
+                          ) : (
+                            <FileText className="h-4 w-4 flex-shrink-0 text-notion-textSecondary" strokeWidth={1.7} />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-sm text-notion-text">{note.title || '未命名笔记'}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </section>
               )}
 

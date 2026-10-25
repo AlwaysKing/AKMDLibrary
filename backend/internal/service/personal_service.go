@@ -108,7 +108,7 @@ func (s *PersonalService) Overview(userID int) (*model.PersonalOverview, error) 
 // recentNotes 按最近访问时间平铺返回个人笔记。缓存行可能因外部删除/移动指向旧路径，
 // 所以只保留当前文件树里还在的页面；树是扫盘得来的，以它为准。
 func (s *PersonalService) recentNotes(spaceSlug string, notes []*model.PageNode) []*model.PageNode {
-	const limit = 5
+	const limit = 20
 
 	nodeByPath := make(map[string]*model.PageNode)
 	var collect func(nodes []*model.PageNode)

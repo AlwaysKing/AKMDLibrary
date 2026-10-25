@@ -7585,6 +7585,30 @@ export function PageEditor({ initialContent, pageIdentity, pageContext, onSyncSt
       // When drag menu is open, keep side menu visible regardless of mouse position
       if (isDragMenuOpen()) return;
 
+      // Keep the currently visible menu while the pointer crosses the small
+      // gap between a block and its side-menu buttons. Without this, short
+      // blocks can hide and then re-resolve to a neighboring block.
+      if (document.body.classList.contains('side-menu-visible')) {
+        const activeMenu = Array.from(
+          document.querySelectorAll('[data-floating-ui-focusable] > .bn-side-menu')
+        ).find((menu) => {
+          const blockType = menu.getAttribute('data-block-type');
+          return blockType !== 'syncedBlockSource' && blockType !== 'syncedBlockMirror';
+        }) as HTMLElement | null;
+        const menuRect = activeMenu?.getBoundingClientRect();
+        if (
+          menuRect &&
+          menuRect.width > 0 &&
+          menuRect.height > 0 &&
+          e.clientX >= menuRect.left - 8 &&
+          e.clientX <= menuRect.right + 20 &&
+          e.clientY >= menuRect.top - 8 &&
+          e.clientY <= menuRect.bottom + 8
+        ) {
+          return;
+        }
+      }
+
       const pointedSyncSourceOuter = (() => {
         const elements = document.elementsFromPoint(e.clientX, e.clientY);
         for (const element of elements) {

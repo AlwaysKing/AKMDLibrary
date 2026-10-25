@@ -54,6 +54,7 @@ export default function PersonalHomePage() {
   }, [fetchOverview]);
 
   const scheduledTodos = todos.filter((todo) => todo.is_today || todo.overdue);
+  const recentPreview = recent.slice(0, 5);
 
   const handleCreateNote = async (title = '未命名笔记') => {
     if (submitting) return;
@@ -186,7 +187,7 @@ export default function PersonalHomePage() {
               <div className="flex h-7 items-center gap-1.5 text-xs font-semibold text-notion-text">
                 <FileClock className="h-4 w-4 text-notion-textSecondary" />
                 最近笔记
-                <span className="text-[11px] font-medium text-notion-textSecondary">{recent.length}</span>
+                <span className="text-[11px] font-medium text-notion-textSecondary">{recentPreview.length}</span>
                 <button
                   type="button"
                   onClick={() => navigate('/personal/docs')}
@@ -196,13 +197,13 @@ export default function PersonalHomePage() {
                 </button>
               </div>
 
-              {isLoading && recent.length === 0 ? (
+              {isLoading && recentPreview.length === 0 ? (
                 <div className="flex items-center gap-2 py-5 text-xs text-notion-textSecondary">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   正在加载…
                 </div>
-              ) : recent.length > 0 ? (
-                recent.map((note) => (
+              ) : recentPreview.length > 0 ? (
+                recentPreview.map((note) => (
                   <div
                     key={note.id}
                     className="group flex h-[34px] w-full items-center gap-2 rounded-md px-1 transition-colors hover:bg-notion-hover"

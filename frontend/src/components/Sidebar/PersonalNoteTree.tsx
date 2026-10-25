@@ -135,7 +135,7 @@ function NoteTreeRows({
             onDragEnd={onDragEnd}
             onClick={() => onOpen(note.id)}
             className={`group flex w-full cursor-grab items-center overflow-hidden transition-colors active:cursor-grabbing ${
-              isPage ? 'h-[34px]' : 'h-[30px]'
+              isPage ? 'h-9' : 'h-[30px]'
             } ${rowDropPosition === 'on' ? '' : isPage ? 'hover:bg-notion-hover rounded-md' : 'hover:bg-white/70 rounded-md'}`}
             style={{ paddingLeft: `${Math.min(depth, 4) * 16 + 8}px`, paddingRight: '4px' }}
           >
@@ -166,7 +166,7 @@ function NoteTreeRows({
               )}
               <ChevronRight className={`hidden h-3 w-3 text-[#ada9a3] group-hover:block transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
             </button>
-            <span className={`min-w-0 flex-1 cursor-pointer truncate text-notion-text ${isPage ? 'text-sm' : 'text-xs font-medium'}`}>
+            <span className={`min-w-0 flex-1 cursor-pointer truncate text-notion-text ${isPage ? 'text-[17px]' : 'text-xs font-medium'}`}>
               {note.title || '未命名笔记'}
             </span>
             <button

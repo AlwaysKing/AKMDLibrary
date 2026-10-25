@@ -4,10 +4,10 @@
  *
  * Changes:
  * 1. J() (posAtCoords wrapper): Skip column_list/column blocks, search 50px to the right
- * 2. Tt() (updateStateFromMousePos helper): If result is inside a column block-group with
- *    column-list-inner grandparent, search from block left edge instead of right edge
- * 3. onMouseMove: Keep side menu visible when mouse moves into column gap area
- *    (editor space between columns that isn't inside a .bn-block-outer)
+ * 2. Tt() (updateStateFromMousePos helper): Resolve the deepest direct content
+ *    row at the pointer Y instead of probing from the editor's left edge
+ * 3. onMouseMove: Keep the current block target while moving through the
+ *    left-side gap between a block and its side menu
  * 4. updateStateFromMousePos: Don't switch side menu target to column_list/column blocks
  *    when mouse is still within the previously hovered block's expanded range
  */
@@ -53,96 +53,144 @@ if (code.includes(J_ORIGINAL)) {
   patchCount++;
   console.log('  ✓ Patch 1: J() - skip column_list/column in posAtCoords');
 } else if (!code.includes("type === 'column_list' || type === 'column'")) {
-  console.log('  ⚠ Patch 1: J() pattern not found');
+  if (code.includes('[data-node-type=columnList]')) {
+    patchCount++;
+    console.log('  ✓ Patch 1: column_list skip already provided by BlockNote');
+  } else {
+    console.log('  ⚠ Patch 1: J() pattern not found');
+  }
+} else {
+  patchCount++;
+  console.log('  ✓ Patch 1: column_list skip already patched');
 }
 
-// --- Patch 2: Tt() - Handle column blocks ---
-const TT_ORIGINAL = `function Tt(e, t) {
+// --- Patch 2: Tt() - Resolve block from the direct content row at pointer Y ---
+const TT_ROW_ORIGINAL = `function Tt(e, t) {
 \tif (!t.dom.firstChild) return;
 \tlet n = t.dom.firstChild.getBoundingClientRect(), r = J(t, {
 \t\tleft: Math.min(Math.max(n.left + 10, e.x), n.right - 10),
 \t\ttop: e.y
 \t});
-\tif (r) {
-\t\tlet br = r.node.getBoundingClientRect();
-\t\treturn J(t, {
-\t\t\tleft: br.right - 10,
-\t\t\ttop: e.y
-\t\t}, !1);
-\t}
+\tif (r) return J(t, {
+\t\tleft: r.node.getBoundingClientRect().right - 10,
+\t\ttop: e.y
+\t}, !1);
 }`;
-const TT_PATCHED = `function Tt(e, t) {
+const TT_ROW_PATCHED = `function Tt(e, t) {
 \tif (!t.dom.firstChild) return;
+\tlet rows = [];
+\tfor (let outer of t.dom.querySelectorAll('.bn-block-outer')) {
+\t\tlet block = outer.querySelector(':scope > .bn-block');
+\t\tlet content = block?.querySelector(':scope > .bn-block-content') || block?.querySelector(':scope > .react-renderer > .bn-block-content');
+\t\tlet rect = content?.getBoundingClientRect();
+\t\tlet type = content?.getAttribute('data-content-type');
+\t\tif (!block || !rect || rect.width <= 0 || rect.height <= 0 || type === 'column_list' || type === 'column') continue;
+\t\tlet verticalDistance = e.y < rect.top ? rect.top - e.y : e.y > rect.bottom ? e.y - rect.bottom : 0;
+\t\tlet depth = 0, parent = outer;
+\t\twhile ((parent = parent.parentElement) && t.dom.contains(parent)) if (parent.classList.contains('bn-block-outer')) depth++;
+\t\trows.push({
+\t\t\tblock,
+\t\t\tdepth,
+\t\t\tverticalDistance,
+\t\t\thorizontalDistance: Math.abs(e.x - (rect.left + rect.width / 2))
+\t\t});
+\t}
+\tlet candidates = rows.filter((row) => row.verticalDistance === 0);
+\tif (!candidates.length) candidates = rows.filter((row) => row.verticalDistance <= 12);
+\tif (candidates.length) {
+\t\tcandidates.sort((a, b) => b.depth - a.depth || a.verticalDistance - b.verticalDistance || a.horizontalDistance - b.horizontalDistance);
+\t\tlet block = candidates[0].block;
+\t\treturn {
+\t\t\tnode: block,
+\t\t\tid: block.getAttribute('data-id')
+\t\t};
+\t}
 \tlet n = t.dom.firstChild.getBoundingClientRect(), r = J(t, {
 \t\tleft: Math.min(Math.max(n.left + 10, e.x), n.right - 10),
 \t\ttop: e.y
 \t});
-\tif (r) {
-\t\tlet br = r.node.getBoundingClientRect();
-\t\tlet ct = r.node.querySelector('[data-content-type]');
-\t\tlet type = ct ? ct.getAttribute('data-content-type') : '';
-\t\tlet isInColumn = r.node.closest('.bn-block-group');
-\t\tif (isInColumn) {
-\t\t\tlet parentBlock = isInColumn.closest('.bn-block');
-\t\t\tlet parentOuter = parentBlock ? parentBlock.closest('.bn-block-outer') : null;
-\t\t\tlet grandParentGroup = parentOuter ? parentOuter.parentElement : null;
-\t\t\tlet grandParentBlock = grandParentGroup ? grandParentGroup.closest('.bn-block') : null;
-\t\t\tif (grandParentBlock && grandParentBlock.querySelector('.column-list-inner')) {
-\t\t\t\treturn J(t, { left: br.left + 10, top: e.y }, !1);
-\t\t\t}
+\tif (r) return J(t, {
+\t\tleft: r.node.getBoundingClientRect().right - 10,
+\t\ttop: e.y
+\t}, !1);
+}`;
+
+if (code.includes(TT_ROW_PATCHED)) {
+  patchCount++;
+  console.log('  ✓ Patch 2: Tt() - row hit-testing already applied');
+} else if (code.includes(TT_ROW_ORIGINAL)) {
+  code = code.replace(TT_ROW_ORIGINAL, TT_ROW_PATCHED);
+  patchCount++;
+  console.log('  ✓ Patch 2: Tt() - resolve deepest content row at pointer Y');
+} else {
+  console.log('  ⚠ Patch 2: Tt() row pattern not found');
+}
+
+// --- Patch 3: Preserve hovered block across the side-menu bridge ---
+// Both mouse movement and document updates after insertion must use the same
+// hit area; otherwise a newly inserted short block can steal the handler.
+const BRIDGE_HELPER_ANCHOR = 'var Et = class {';
+const BRIDGE_HELPER_BODY = `function _isSideMenuBridgePoint(e, t) {
+\tif (!e?.isConnected || !t) return !1;
+\tlet _sideMenuBridgeContent = e.querySelector(':scope > .bn-block-content') || e.querySelector(':scope > .react-renderer > .bn-block-content');
+\tlet n = (_sideMenuBridgeContent || e).getBoundingClientRect();
+\treturn t.x >= n.left - 64 && t.x <= n.left + 12 && t.y >= n.top - 12 && t.y <= n.bottom + 12;
+}
+`;
+const BRIDGE_HELPER = `${BRIDGE_HELPER_BODY}var Et = class {`;
+const OLD_BRIDGE_HELPER = `function _isSideMenuBridgePoint(e, t) {
+\tif (!e?.isConnected || !t) return !1;
+\tlet n = e.getBoundingClientRect();
+\treturn t.x >= n.left - 64 && t.x <= n.left + 12 && t.y >= n.top - 12 && t.y <= n.bottom + 12;
+}
+`;
+const BRIDGE_GUARD = '\t\tif (this.state?.show && _isSideMenuBridgePoint(this.hoveredBlock, this.mousePos)) return;\n';
+const OLD_MOUSEMOVE_BRIDGE = `\t\tif (this.state?.show && this.hoveredBlock) {
+\t\t\tlet _hb = this.hoveredBlock.getBoundingClientRect();
+\t\t\tif (e.clientX >= _hb.left - 64 && e.clientX <= _hb.left + 12 && e.clientY >= _hb.top - 12 && e.clientY <= _hb.bottom + 12) return;
 \t\t}
-\t\treturn J(t, {
-\t\t\tleft: br.right - 10,
-\t\t\ttop: e.y
-\t\t}, !1);
-\t}
-}`;
+\t\tthis.updateStateFromMousePos();`;
+const MOUSEMOVE_BRIDGE = `${BRIDGE_GUARD}\t\tthis.updateStateFromMousePos();`;
+const UPDATE_STATE_START = `\tupdateStateFromMousePos = () => {
+\t\tif (this.menuFrozen || !this.mousePos) return;`;
+const UPDATE_STATE_WITH_BRIDGE = `${UPDATE_STATE_START}
+${BRIDGE_GUARD}`;
 
-if (code.includes(TT_ORIGINAL)) {
-  code = code.replace(TT_ORIGINAL, TT_PATCHED);
-  patchCount++;
-  console.log('  ✓ Patch 2: Tt() - handle column blocks in updateState');
-} else if (!code.includes('isInColumn')) {
-  console.log('  ⚠ Patch 2: Tt() pattern not found');
+let bridgeReady = code.includes('_sideMenuBridgeContent');
+if (!bridgeReady && code.includes(OLD_BRIDGE_HELPER)) {
+  code = code.replace(OLD_BRIDGE_HELPER, BRIDGE_HELPER_BODY);
+  bridgeReady = true;
+} else if (!bridgeReady && code.includes(BRIDGE_HELPER_ANCHOR)) {
+  code = code.replace(BRIDGE_HELPER_ANCHOR, BRIDGE_HELPER);
+  bridgeReady = true;
 }
 
-// --- Patch 3: onMouseMove - Keep menu in column gap ---
-const MOUSEMOVE_ORIGINAL = `\tonMouseMove = (e) => {
-\t\tif (this.menuFrozen) return;
-\t\tif (e && e.target instanceof Element) {
-\t\t\tif (e.target.closest('[data-floating-ui-focusable]:has(> .bn-side-menu)]') || e.target.closest('.bn-side-menu')) {
-\t\t\t\treturn;
-\t\t\t}
-\t\t\tif (!this.editor.isWithinEditor(e.target) && this.state?.show && this.state.referencePos) {
-\t\t\t\tlet _ref = this.state.referencePos;
-\t\t\t\tlet _rb = _ref.right; if (this.hoveredBlock) { let _br = this.hoveredBlock.getBoundingClientRect(); if (_br.width > 0) _rb = Math.max(_rb, _br.right + 50); } if (e.clientX < _rb && e.clientY >= _ref.top - 10 && e.clientY <= _ref.bottom + 10) return;
-\t\t\t}
-\t\t}`;
+code = code.replace('var Et = class {var Et = class {', 'var Et = class {');
 
-const MOUSEMOVE_PATCHED = `\tonMouseMove = (e) => {
-\t\tif (this.menuFrozen) return;
-\t\tif (e && e.target instanceof Element) {
-\t\t\tif (e.target.closest('[data-floating-ui-focusable]:has(> .bn-side-menu)]') || e.target.closest('.bn-side-menu')) {
-\t\t\t\treturn;
-\t\t\t}
-\t\t\tif (!this.editor.isWithinEditor(e.target) && this.state?.show && this.state.referencePos) {
-\t\t\t\tlet _ref = this.state.referencePos;
-\t\t\t\tlet _rb = _ref.right; if (this.hoveredBlock) { let _br = this.hoveredBlock.getBoundingClientRect(); if (_br.width > 0) _rb = Math.max(_rb, _br.right + 50); } if (e.clientX < _rb && e.clientY >= _ref.top - 10 && e.clientY <= _ref.bottom + 10) return;
-\t\t\t}
-\t\t\tif (this.state?.show && this.state.referencePos && this.editor.isWithinEditor(e.target) && !e.target.closest('.bn-block-outer')) {
-\t\t\t\tlet _ref = this.state.referencePos;
-\t\t\t\tlet _rb = _ref.right; if (this.hoveredBlock) { let _br = this.hoveredBlock.getBoundingClientRect(); if (_br.width > 0) _rb = Math.max(_rb, _br.right + 50); }
-\t\t\t\tlet _lb = _ref.left; if (this.hoveredBlock) { let _bl = this.hoveredBlock.getBoundingClientRect(); if (_bl.width > 0) _lb = Math.min(_lb, _bl.left - 50); }
-\t\t\t\tif (e.clientX > _lb && e.clientX < _rb && e.clientY >= _ref.top - 10 && e.clientY <= _ref.bottom + 10) return;
-\t\t\t}
-\t\t}`;
+let mouseMoveReady = false;
+if (code.includes(OLD_MOUSEMOVE_BRIDGE)) {
+  code = code.replace(OLD_MOUSEMOVE_BRIDGE, MOUSEMOVE_BRIDGE);
+  mouseMoveReady = true;
+} else if (code.includes(MOUSEMOVE_BRIDGE)) {
+  mouseMoveReady = true;
+} else if (code.includes('\t\tthis.updateStateFromMousePos();\n\t}')) {
+  code = code.replace('\t\tthis.updateStateFromMousePos();\n\t}', MOUSEMOVE_BRIDGE + '\n\t}');
+  mouseMoveReady = true;
+}
 
-if (code.includes(MOUSEMOVE_ORIGINAL)) {
-  code = code.replace(MOUSEMOVE_ORIGINAL, MOUSEMOVE_PATCHED);
+let updateStateReady = false;
+if (code.includes(UPDATE_STATE_WITH_BRIDGE)) {
+  updateStateReady = true;
+} else if (code.includes(UPDATE_STATE_START)) {
+  code = code.replace(UPDATE_STATE_START, UPDATE_STATE_WITH_BRIDGE);
+  updateStateReady = true;
+}
+
+if (bridgeReady && mouseMoveReady && updateStateReady) {
   patchCount++;
-  console.log('  ✓ Patch 3: onMouseMove - keep menu in column gap');
-} else if (!code.includes("!e.target.closest('.bn-block-outer')")) {
-  console.log('  ⚠ Patch 3: onMouseMove pattern not found');
+  console.log('  ✓ Patch 3: preserve target across side-menu bridge');
+} else {
+  console.log('  ⚠ Patch 3: side-menu bridge pattern not found');
 }
 
 // --- Patch 4: updateStateFromMousePos - Don't switch to column blocks ---
@@ -171,8 +219,11 @@ if (code.includes(UPDATE_ORIGINAL)) {
   console.log('  ✓ Patch 4: updateStateFromMousePos - skip column blocks in range');
 } else if (!code.includes("_type === 'column_list' || _type === 'column'")) {
   console.log('  ⚠ Patch 4: updateStateFromMousePos pattern not found');
+} else {
+  patchCount++;
+  console.log('  ✓ Patch 4: column block guard already applied');
 }
 
 // Write back
 fs.writeFileSync(filePath, code, 'utf8');
-console.log(`✓ BlockNote patches applied: ${patchCount}/4 succeeded`);
+console.log(`✓ BlockNote patches ready: ${patchCount}/4`);
